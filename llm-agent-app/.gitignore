@@ -1,0 +1,28 @@
+# --- Gradle (backend) ---
+backend/.gradle/
+backend/.kotlin/
+backend/build/
+backend/out/
+**/build/
+
+# --- Node (frontend) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets: никогда не коммитим ключи/URL GPUStack ---
+.env
+.env.*
+!.env.example
+*.local
+**/application-local.yml
+**/application-gpustack.yml

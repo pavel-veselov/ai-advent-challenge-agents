@@ -1,0 +1,27 @@
+﻿spring:
+  application:
+    name: llm-agent
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+llm:
+  provider: ${LLM_PROVIDER:mock}            # mock | gpustack
+  base-url: ${LLM_BASE_URL:}                # например https://<GPUStack-URL> (без /v1)
+  api-key: ${LLM_API_KEY:}                  # Bearer-ключ GPUStack (из настроек opencode)
+  model: ${LLM_MODEL:default-coding}
+  temperature: ${LLM_TEMPERATURE:0.7}
+  top-p: ${LLM_TOP_P:1.0}                   # nucleus sampling
+  top-k: ${LLM_TOP_K:}                      # пусто = не задано (параметр не уходит в API)
+  max-tokens: ${LLM_MAX_TOKENS:}            # пусто = без лимита выходных токенов
+  timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
+
+agent:
+  max-tool-call-iterations: ${AGENT_MAX_ITERATIONS:8}
+
+logging:
+  level:
+    root: INFO
