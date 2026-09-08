@@ -10,7 +10,9 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import reactor.core.publisher.Flux
+import java.nio.file.Path
 import java.time.Duration
 
 /** LLM со скриптом ответов: каждая итерация берёт следующий элемент. */
@@ -27,7 +29,11 @@ private class ScriptedLlmClient(private val script: List<List<LlmEvent>>) : LlmC
 
 class AgentLoopTest {
 
-    private val sessionStore = SessionStore()
+    @TempDir
+    lateinit var tmpDir: Path
+
+    // SQLite-хранилище на временном файле — агент теперь пишет историю в БД
+    private val sessionStore: SessionStore by lazy { SqliteTestSupport.store(tmpDir.resolve("agent-loop.db")) }
     private val om = ObjectMapper()
     private val tools = ToolRegistry(listOf(CalculatorTool(), GetCurrentDateTimeTool()))
 

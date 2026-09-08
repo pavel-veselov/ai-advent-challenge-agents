@@ -6,16 +6,32 @@ import type { ChatMessage } from '../types';
 interface ChatPanelProps {
   messages: ChatMessage[];
   isRunning: boolean;
+  /** true, пока бэк-сервис остановлен — блокируем чат и служебные кнопки, показываем баннер. */
+  backendStopped: boolean;
+  /** true, пока бэк-сервис запускается — блокируем чат и служебные кнопки. */
+  backendStarting: boolean;
   error: string | null;
   sessionId: string;
   onSend: (text: string) => void;
   onStop: () => void;
-  onReset: () => void;
+  onDeleteSession: () => void;
 }
 
-export default function ChatPanel({ messages, isRunning, error, sessionId, onSend, onStop, onReset }: ChatPanelProps) {
+export default function ChatPanel({
+  messages,
+  isRunning,
+  backendStopped,
+  backendStarting,
+  error,
+  sessionId,
+  onSend,
+  onStop,
+  onDeleteSession,
+}: ChatPanelProps) {
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+
+  const serviceDown = backendStopped || backendStarting;
 
   useEffect(() => {
     const el = listRef.current;
@@ -23,7 +39,7 @@ export default function ChatPanel({ messages, isRunning, error, sessionId, onSen
   }, [messages, isRunning]);
 
   const submit = () => {
-    if (!input.trim() || isRunning) return;
+    if (!input.trim() || isRunning || serviceDown) return;
     onSend(input);
     setInput('');
   };
@@ -36,14 +52,24 @@ export default function ChatPanel({ messages, isRunning, error, sessionId, onSen
         <button
           type="button"
           className="btn-reset"
-          title="Сбросить сессию: очистить чат и граф workflow"
-          onClick={onReset}
+          title="Удалить сессию на бэкенде: очистить чат и лог шагов, начать новую сессию"
+          onClick={onDeleteSession}
+          disabled={isRunning || serviceDown}
         >
-          ⟲ Сброс
+          Удалить сессию
         </button>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+
+      {backendStopped && (
+        <div className="service-banner service-banner-down">
+          Сервис недоступен. Нажмите «Старт сервиса», чтобы запустить.
+        </div>
+      )}
+      {backendStarting && (
+        <div className="service-banner service-banner-starting">Сервис запускается…</div>
+      )}
 
       <div className="chat-list" ref={listRef}>
         {messages.map((m) => (
@@ -73,8 +99,15 @@ export default function ChatPanel({ messages, isRunning, error, sessionId, onSen
         <textarea
           className="chat-input"
           rows={1}
-          placeholder="Напишите сообщение… (Enter — отправить)"
+          placeholder={
+            backendStopped
+              ? 'Бэк-сервис остановлен…'
+              : backendStarting
+                ? 'Бэк-сервис запускается…'
+                : 'Напишите сообщение… (Enter — отправить)'
+          }
           value={input}
+          disabled={serviceDown}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -84,9 +117,16 @@ export default function ChatPanel({ messages, isRunning, error, sessionId, onSen
           }}
         />
         {isRunning ? (
-          <button type="button" className="btn-stop" onClick={onStop}>⏹ Стоп</button>
+          <button type="button" className="btn-stop" onClick={onStop} disabled={serviceDown}>
+            ⏹ Стоп
+          </button>
         ) : (
-          <button type="button" className="btn-send" onClick={submit} disabled={!input.trim()}>
+          <button
+            type="button"
+            className="btn-send"
+            onClick={submit}
+            disabled={!input.trim() || serviceDown}
+          >
             ➤
           </button>
         )}

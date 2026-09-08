@@ -9,13 +9,22 @@ export default function App() {
       <ChatPanel
         messages={session.messages}
         isRunning={session.isRunning}
+        backendStopped={session.backendStopped}
+        backendStarting={session.backendStarting}
         error={session.error}
         sessionId={session.sessionId}
         onSend={session.sendMessage}
         onStop={session.stopAgent}
-        onReset={session.resetSession}
+        onDeleteSession={session.deleteSession}
       />
-      <StepsLog steps={session.steps} runSettings={session.runSettings} />
+      <StepsLog
+        steps={session.steps}
+        runSettings={session.runSettings}
+        backendStopped={session.backendStopped}
+        backendStarting={session.backendStarting}
+        onStop={session.stopService}
+        onStart={session.startService}
+      />
     </div>
   );
 }

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchHistory, fetchLlmSettings, streamChat } from '../api';
+import {
+  deleteSession as deleteSessionApi,
+  fetchHistory,
+  fetchLlmSettings,
+  startBackend as startBackendApi,
+  stopBackend as stopBackendApi,
+  streamChat,
+} from '../api';
 import type { AgentEvent, ChatMessage, RunSettings, StepLogEntry } from '../types';
 
 const SESSION_KEY = 'llm-agent-session-id';
@@ -35,11 +42,19 @@ export interface AgentSession {
   /** Настройки LLM последнего запуска (сверху лога шагов). */
   runSettings: RunSettings | null;
   isRunning: boolean;
+  /** true, пока бэк-сервис остановлен: чат и служебные кнопки заблокированы, показан баннер. */
+  backendStopped: boolean;
+  /** true, пока бэк-сервис запускается (опрос /api/llm-settings в фоне). */
+  backendStarting: boolean;
   error: string | null;
   sendMessage: (text: string) => void;
   stopAgent: () => void;
-  /** Сброс сессии: новый sessionId, очистка чата и лога шагов. */
-  resetSession: () => void;
+  /** Удаление сессии: DELETE на бэкенде, новый sessionId, очистка чата и лога шагов. */
+  deleteSession: () => void;
+  /** Остановка бэк-сервиса по команде супервизора (POST /system-ctrl/stop). */
+  stopService: () => void;
+  /** Запуск бэк-сервиса с ожиданием готовности (опрос /api/llm-settings). */
+  startService: () => void;
 }
 
 export function useAgentSession(): AgentSession {
@@ -48,12 +63,29 @@ export function useAgentSession(): AgentSession {
   const [steps, setSteps] = useState<StepLogEntry[]>([]);
   const [runSettings, setRunSettings] = useState<RunSettings | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [backendStopped, setBackendStopped] = useState(false);
+  const [backendStarting, setBackendStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string>('');
   /** id -> запись лога; порядок вставки = хронология. */
   const stepsRef = useRef<Map<string, StepLogEntry>>(new Map());
+  /** Флаг отмены ожидания запуска при размонтировании компонента. */
+  const startAbortedRef = useRef(false);
+
+  /** Добавляет служебное событие жизненного цикла UI в лог шагов (kind = system). */
+  const pushSystemEvent = useCallback((title: string) => {
+    const id = `system-${newId()}`;
+    stepsRef.current.set(id, {
+      id,
+      time: fmtTime(new Date().toISOString()),
+      kind: 'system',
+      title,
+      status: 'success',
+    });
+    setSteps(Array.from(stepsRef.current.values()));
+  }, []);
 
   /** Создаёт или обновляет запись лога шагов и синкает состояние в React. */
   const touchStep = (stepId: string, ts: string, patch: Partial<StepLogEntry>) => {
@@ -265,26 +297,112 @@ export function useAgentSession(): AgentSession {
     abortRef.current?.abort();
   }, []);
 
-  /** Полный сброс: новый sessionId, пустой чат и пустой лог шагов. */
-  const resetSession = useCallback(() => {
-    abortRef.current?.abort();
-    const fresh = newId();
-    try {
-      localStorage.setItem(SESSION_KEY, fresh);
-    } catch {
-      /* localStorage недоступен — просто меняем id в памяти */
-    }
-    stepsRef.current.clear();
-    assistantIdRef.current = '';
-    setSteps([]);
-    setRunSettings(null);
-    setMessages([]);
-    setError(null);
-    setIsRunning(false);
-    setSessionId(fresh);
-  }, []);
+  /** Удаление сессии: стираем историю на бэкенде и начинаем новую сессию. */
+  const deleteSession = useCallback(() => {
+    if (isRunning || backendStopped || backendStarting) return;
+    void (async () => {
+      abortRef.current?.abort();
+      try {
+        await deleteSessionApi(sessionId);
+      } catch {
+        /* сессии могло не быть на бэкенде или сеть недоступна — всё равно начинаем новую */
+      }
+      const fresh = newId();
+      try {
+        localStorage.setItem(SESSION_KEY, fresh);
+      } catch {
+        /* localStorage недоступен — просто меняем id в памяти */
+      }
+      stepsRef.current.clear();
+      assistantIdRef.current = '';
+      setRunSettings(null);
+      setMessages([]);
+      setError(null);
+      setIsRunning(false);
+      setSessionId(fresh);
+      pushSystemEvent('Сессия удалена, начата новая сессия');
+    })();
+  }, [sessionId, isRunning, backendStopped, backendStarting, pushSystemEvent]);
 
-  // восстановление истории и настроек при монтировании
+  /**
+   * Остановка бэк-сервиса: POST /system-ctrl/stop по команде супервизору.
+   * Бэкенд может умереть до ответа — ошибку сети не считаем провалом.
+   */
+  const stopService = useCallback(() => {
+    if (backendStopped || backendStarting) return;
+    void (async () => {
+      abortRef.current?.abort(); // останавливаем активный стрим — бэкенд сейчас погаснет
+      pushSystemEvent('Остановка бэк-сервиса…');
+      try {
+        await stopBackendApi();
+      } catch {
+        /* бэкенд может быть уже мёртв — считаем остановленным, дальше опрос готовности */
+        pushSystemEvent('Не удалось связаться с сервисом');
+      }
+      setBackendStopped(true);
+      pushSystemEvent('Бэк-сервис остановлен');
+    })();
+  }, [backendStopped, backendStarting, pushSystemEvent]);
+
+  /**
+   * Запуск бэк-сервиса: POST /system-ctrl/start + ожидание готовности
+   * опросом /api/llm-settings каждую секунду (максимум 60 попыток).
+   */
+  const startService = useCallback(() => {
+    if (!backendStopped) return;
+    startAbortedRef.current = false;
+    setBackendStarting(true);
+    pushSystemEvent('Запуск бэк-сервиса…');
+    void (async () => {
+      try {
+        await startBackendApi();
+      } catch {
+        /* сервис может быть мёртв — готовность проверяем опросом ниже */
+      }
+      // Готовность: раз в секунду пробуем GET /api/llm-settings, максимум 60 попыток (~60 с)
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (startAbortedRef.current) return;
+        try {
+          await fetchLlmSettings();
+          if (startAbortedRef.current) return;
+          pushSystemEvent('Бэк-сервис доступен');
+          setBackendStopped(false);
+          setBackendStarting(false);
+          // Страница могла быть открыта при неработающем сервисе — тогда история
+          // при монтировании не загрузилась. Догружаем её после восстановления.
+          try {
+            const h = await fetchHistory(sessionId);
+            setMessages((prev) => {
+              if (prev.length > 0) return prev;
+              return h.messages.map((m) => ({
+                id: newId(),
+                role: m.role,
+                content: m.content,
+                streaming: false,
+              }));
+            });
+            pushSystemEvent(
+              h.messages.length > 0
+                ? `История диалога загружена (${h.messages.length} сообщений)`
+                : 'История диалога пуста',
+            );
+          } catch {
+            /* история недоступна — оставляем чат как есть */
+          }
+          return;
+        } catch {
+          /* сервис ещё поднимается — ждём секунду и пробуем снова */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (startAbortedRef.current) return;
+      // За 60 с сервис не поднялся — снимаем блокировку запуска, баннер остаётся
+      pushSystemEvent('Бэк-сервис не запустился — попробуйте ещё раз');
+      setBackendStarting(false);
+    })();
+  }, [backendStopped, pushSystemEvent, sessionId]);
+
+  // восстановление истории и настроек при монтировании (и при смене sessionId)
   useEffect(() => {
     let cancelled = false;
     fetchHistory(sessionId)
@@ -298,6 +416,11 @@ export function useAgentSession(): AgentSession {
             streaming: false,
           })),
         );
+        pushSystemEvent(
+          h.messages.length > 0
+            ? `История диалога загружена (${h.messages.length} сообщений)`
+            : 'История диалога пуста',
+        );
       })
       .catch(() => {
         /* история недоступна — стартуем пустыми */
@@ -305,16 +428,36 @@ export function useAgentSession(): AgentSession {
     // Настройки LLM показываем сразу при открытии окна, до первого запроса
     fetchLlmSettings()
       .then((s) => {
-        if (!cancelled) setRunSettings(s);
+        if (cancelled) return;
+        setRunSettings(s);
+        pushSystemEvent('Бэк-сервис доступен, настройки загружены');
       })
       .catch(() => {
-        /* настройки недоступны — блок появится после первого agent_started */
+        if (cancelled) return;
+        // сервис недоступен — блокируем чат и показываем баннер с предложением запуска
+        setBackendStopped(true);
+        pushSystemEvent('Бэк-сервис недоступен — нажмите «Старт сервиса»');
       });
     return () => {
       cancelled = true;
       abortRef.current?.abort();
+      startAbortedRef.current = true;
     };
-  }, [sessionId]);
+  }, [sessionId, pushSystemEvent]);
 
-  return { sessionId, messages, steps, runSettings, isRunning, error, sendMessage, stopAgent, resetSession };
+  return {
+    sessionId,
+    messages,
+    steps,
+    runSettings,
+    isRunning,
+    backendStopped,
+    backendStarting,
+    error,
+    sendMessage,
+    stopAgent,
+    deleteSession,
+    stopService,
+    startService,
+  };
 }

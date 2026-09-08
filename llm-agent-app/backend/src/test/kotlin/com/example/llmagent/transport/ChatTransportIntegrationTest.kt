@@ -1,5 +1,6 @@
 package com.example.llmagent.transport
 
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -7,10 +8,23 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.MediaType
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.reactive.server.WebTestClient
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ChatTransportIntegrationTest {
+
+    // Отдельный временный SQLite-файл, чтобы тесты не писали в рабочую БД ./data
+    companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun properties(registry: DynamicPropertyRegistry) {
+            registry.add("spring.datasource.url") {
+                "jdbc:sqlite:${File.createTempFile("llm-agent-it-", ".db").absolutePath.replace('\\', '/')}"
+            }
+        }
+    }
 
     @Autowired
     lateinit var client: WebTestClient

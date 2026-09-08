@@ -1,18 +1,42 @@
 package com.example.llmagent.agent
 
+import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.RowMapper
 import org.springframework.stereotype.Component
-import java.util.concurrent.ConcurrentHashMap
 
 data class ChatMessage(val role: String, val content: String)
 
-/** История диалогов в памяти по sessionId (без БД). */
+/**
+ * История диалогов в SQLite (таблица chat_messages) через JdbcTemplate.
+ * Данные переживают перезапуск backend: файл БД по умолчанию ./data/llm-agent.db
+ * (переопределяется переменной окружения SQLITE_DB_PATH). Схема создаётся
+ * автоматически из schema.sql при старте приложения.
+ */
 @Component
-class SessionStore {
-    private val sessions = ConcurrentHashMap<String, MutableList<ChatMessage>>()
+class SessionStore(private val jdbcTemplate: JdbcTemplate) {
 
-    fun append(sessionId: String, role: String, content: String) {
-        sessions.computeIfAbsent(sessionId) { mutableListOf() }.add(ChatMessage(role, content))
+    private val rowMapper = RowMapper<ChatMessage> { rs, _ ->
+        ChatMessage(rs.getString("role"), rs.getString("content"))
     }
 
-    fun get(sessionId: String): List<ChatMessage> = sessions[sessionId]?.toList() ?: emptyList()
+    /** Добавляет сообщение в историю сессии (порядок чтения — порядок вставки по id). */
+    fun append(sessionId: String, role: String, content: String) {
+        jdbcTemplate.update(
+            "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)",
+            sessionId, role, content,
+        )
+    }
+
+    /** Возвращает историю сессии в порядке вставки (ORDER BY id). */
+    fun get(sessionId: String): List<ChatMessage> =
+        jdbcTemplate.query(
+            "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id",
+            rowMapper,
+            sessionId,
+        )
+
+    /** Удаляет всю историю сессии. */
+    fun delete(sessionId: String) {
+        jdbcTemplate.update("DELETE FROM chat_messages WHERE session_id = ?", sessionId)
+    }
 }

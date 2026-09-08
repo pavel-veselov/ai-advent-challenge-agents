@@ -1,6 +1,12 @@
 ﻿spring:
   application:
     name: llm-agent
+  datasource:
+    url: jdbc:sqlite:${SQLITE_DB_PATH:./data/llm-agent.db}
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always          # выполняем schema.sql при каждом старте (CREATE TABLE IF NOT EXISTS)
   jackson:
     serialization:
       write-dates-as-timestamps: false

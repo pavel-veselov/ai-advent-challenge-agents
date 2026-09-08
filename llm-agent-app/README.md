@@ -9,8 +9,9 @@ Web-приложение «LLM-агент»: пользователь пишет
 
 ```
 llm-agent-app/
-├─ backend/   Kotlin + Spring Boot 3 (WebFlux), WebClient к LLM, SSE-транспорт
-└─ frontend/  React 18 + TypeScript + Vite, @xyflow/react (граф), тёмный UI
+├─ backend/    Kotlin + Spring Boot 3 (WebFlux), WebClient к LLM, SSE-транспорт, история в SQLite (JdbcTemplate)
+├─ scripts/    скрипты запуска (run-backend.ps1 — супервизор backend на Windows)
+└─ frontend/   React 18 + TypeScript + Vite, @xyflow/react (граф), тёмный UI
 ```
 
 Контракт событий (типы `agent_started`, `llm_request_started`, `llm_token`, `llm_response_finished`,
@@ -30,6 +31,58 @@ gradlew.bat bootRun          # Windows
 ```
 
 По умолчанию используется `LLM_PROVIDER=mock` — детерминированный фейковый LLM без ключа.
+История диалогов хранится в SQLite-файле (`./data/llm-agent.db` по умолчанию, см. ниже) и
+переживает перезапуск backend.
+
+### Персистентность (SQLite)
+
+- Хранилище истории — локальный SQLite-файл; таблица `chat_messages` создаётся автоматически
+  при старте из `backend/src/main/resources/schema.sql` (`spring.sql.init.mode=always`).
+- Путь к файлу БД: `spring.datasource.url = jdbc:sqlite:${SQLITE_DB_PATH:./data/llm-agent.db}`.
+- Каталог `data/` игнорируется git (см. `llm-agent-app/.gitignore`).
+- Настройка соединения по умолчанию НЕ требуется: драйвер `org.sqlite.JDBC` подключается
+  автоматически.
+
+### Супервизор запуска (Windows)
+
+Скрипт `scripts/run-backend.ps1` держит backend «живым»: собирается готовый jar,
+скрипт запускает его в `while ($true)` и после любого завершения JVM ждёт 1 секунду
+и перезапускает.
+
+Остановка/запуск backend — через контрольный сервер супервизора на `127.0.0.1:8081`
+(встроен в скрипт, отдельный in-process runspace; управление стоп-флагом
+`%TEMP%\opencode\llm-agent.stop`):
+
+| Метод | Путь | Ответ | Действие |
+|-------|------|-------|----------|
+| `POST` | `127.0.0.1:8081/stop` | `{"stopped": true}` | создаёт стоп-флаг и убивает процесс java; перезапуск блокируется |
+| `POST` | `127.0.0.1:8081/start` | `{"starting": true}` | снимает стоп-флаг; супервизор поднимает backend заново |
+| `GET` | `127.0.0.1:8081/status` | `{"stopped": bool, "java": bool}` | состояние флага и процесса java |
+
+- Сервер слушает только `127.0.0.1`; любой другой путь/метод → `404`. Все ответы — `Connection: close`.
+- Свежий запуск супервизора снимает стоп-флаг — сервис должен работать.
+- В dev-режиме фронтенд обращается к супервизору через Vite-прокси **`/system-ctrl`**
+  (`/system-ctrl/stop` → `127.0.0.1:8081/stop`, префикс срезается), а не через порт backend.
+
+```powershell
+# параметры: -JavaHome (путь к JDK 21), -JarPath (путь к собранному jar)
+powershell -ExecutionPolicy Bypass -File llm-agent-app\scripts\run-backend.ps1
+
+# пример с явными параметрами
+powershell -ExecutionPolicy Bypass -File scripts\run-backend.ps1 `
+  -JavaHome "C:\Users\60128627\.jdks\corretto-21.0.9" `
+  -JarPath "$env:TEMP\llm-agent-build\llm-agent-backend\libs\llm-agent-backend-0.0.1-SNAPSHOT.jar"
+```
+
+Перед запуском соберите jar:
+
+```powershell
+cd llm-agent-app\backend
+cmd /c "set JAVA_HOME=C:\Users\60128627\.jdks\corretto-21.0.9&& gradlew.bat bootJar --console=plain"
+```
+
+Скрипт не хранит и не выводит секреты — LLM-настройки берутся из окружения и наследуются
+JVM-процессом.
 
 ### Переменные окружения
 
@@ -43,6 +96,7 @@ gradlew.bat bootRun          # Windows
 | `LLM_TIMEOUT_SECONDS` | `60` | Таймаут запроса к LLM |
 | `AGENT_MAX_ITERATIONS` | `8` | Лимит итераций tool-calling цикла |
 | `SERVER_PORT` | `8080` | Порт сервера |
+| `SQLITE_DB_PATH` | `./data/llm-agent.db` | Путь к файлу SQLite-БД с историей диалогов |
 
 ### Реальный GPUStack
 
@@ -92,17 +146,27 @@ curl -N -X POST http://localhost:8080/api/chat \
 `llm_response_finished` (tool_calls) → `tool_call_started` (calculator) → `tool_call_finished`
 (результат) → `llm_request_started` (итерация 2) → `llm_response_finished` (stop) → `agent_finished`.
 
-История диалога: `GET /api/sessions/{sessionId}/history` (хранится в памяти по `sessionId`).
+История диалога: `GET /api/sessions/{sessionId}/history` (хранится в SQLite, переживает перезапуск backend).
+Удаление истории: `DELETE /api/sessions/{sessionId}` → `{"deleted": true}`.
+
+Управление сервисом — через супервизор (см. раздел «Супервизор запуска»): `POST 127.0.0.1:8081/stop`
+останавливает backend и блокирует перезапуск, `POST 127.0.0.1:8081/start` запускает его снова
+(в dev-режиме доступно через Vite-прокси `/system-ctrl`).
 
 ## Тесты
 
 ```bash
 cd backend
-./gradlew test     # unit-тесты агентского слоя, GPUStack-клиента (MockWebServer), транспорта (WebTestClient)
+./gradlew test     # unit-тесты агентского слоя и SQLite-хранилища, GPUStack-клиента (MockWebServer), транспорта (WebTestClient)
 ```
 
+Тесты интеграции (WebTestClient) работают на отдельном временном SQLite-файле и не трогают рабочую
+БД `./data`. `SqliteSessionStoreTest` проверяет переживание данных «перезапуска» хранилища на том же
+файле БД.
+
 Кнопка Stop в UI отменяет генерацию (AbortController + отмена SSE). При разрыве SSE клиент
-автоматически переподключается один раз. БД и auth отсутствуют намеренно.
+автоматически переподключается один раз. Auth отсутствует намеренно; единственное хранилище — локальный
+SQLite-файл с историей диалогов.
 
 ---
 Ключи и URL GPUStack в код не зашиваются — только через переменные окружения.

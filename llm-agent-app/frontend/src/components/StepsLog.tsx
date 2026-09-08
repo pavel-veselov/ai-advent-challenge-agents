@@ -4,6 +4,22 @@ import type { RunSettings, StepLogEntry } from '../types';
 interface StepsLogProps {
   steps: StepLogEntry[];
   runSettings: RunSettings | null;
+  /** true, пока бэк-сервис остановлен — кнопка «Стоп сервиса» заблокирована. */
+  backendStopped: boolean;
+  /** true, пока бэк-сервис запускается — обе кнопки заблокированы. */
+  backendStarting: boolean;
+  onStop: () => void;
+  onStart: () => void;
+}
+
+/** Служебная строка жизненного цикла (kind = system): приглушённая, без статусов и раскрытия. */
+function SystemRow({ step }: { step: StepLogEntry }) {
+  return (
+    <div className="step-system">
+      <span className="step-time">{step.time}</span>
+      <span className="step-system-text">{step.title}</span>
+    </div>
+  );
 }
 
 function StepRow({ step }: { step: StepLogEntry }) {
@@ -112,7 +128,7 @@ function settingsItems(s: RunSettings): SettingsItem[] {
   ];
 }
 
-export default function StepsLog({ steps, runSettings }: StepsLogProps) {
+export default function StepsLog({ steps, runSettings, backendStopped, backendStarting, onStop, onStart }: StepsLogProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   // Автопрокрутка к последнему шагу
@@ -128,6 +144,24 @@ export default function StepsLog({ steps, runSettings }: StepsLogProps) {
         <span className="debug-badge" title="Лог — только для отладки: на работу агента не влияет">
           debug
         </span>
+        <button
+          type="button"
+          className="btn-stop"
+          title="Остановить бэк-сервис: POST /system-ctrl/stop"
+          onClick={onStop}
+          disabled={!(!backendStopped && !backendStarting)}
+        >
+          Стоп сервиса
+        </button>
+        <button
+          type="button"
+          className="btn-start"
+          title="Запустить бэк-сервис: POST /system-ctrl/start, готовность проверяется опросом /api/llm-settings"
+          onClick={onStart}
+          disabled={!(backendStopped && !backendStarting)}
+        >
+          Старт сервиса
+        </button>
       </header>
       {runSettings ? (
         <div className="llm-settings" title="Применённые настройки LLM (GET /api/llm-settings при открытии, agent_started на каждом запуске)">
@@ -143,7 +177,7 @@ export default function StepsLog({ steps, runSettings }: StepsLogProps) {
         {steps.length === 0 ? (
           <div className="steps-empty">Шагов пока нет — отправьте сообщение в чат.</div>
         ) : (
-          steps.map((s) => <StepRow key={s.id} step={s} />)
+          steps.map((s) => (s.kind === 'system' ? <SystemRow key={s.id} step={s} /> : <StepRow key={s.id} step={s} />))
         )}
       </div>
     </section>

@@ -5,6 +5,9 @@ backend/build/
 backend/out/
 **/build/
 
+# SQLite БД backend (по умолчанию ./data относительно каталога запуска) и её каталог
+data/
+
 # --- Node (frontend) ---
 frontend/node_modules/
 frontend/dist/

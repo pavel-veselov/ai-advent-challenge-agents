@@ -304,6 +304,25 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* Полоса статуса бэк-сервиса внутри панели чата, над списком сообщений — видна без скролла */
+.service-banner {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.service-banner-down {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+.service-banner-starting {
+  background: color-mix(in srgb, var(--amber) 16%, transparent);
+  color: var(--amber);
+}
+
 /* ---------- Лог шагов ---------- */
 .steps-panel {
   background: var(--panel);
@@ -509,6 +528,23 @@ button:disabled {
   color: var(--text-dim);
 }
 
+/* Служебное событие жизненного цикла (kind = system): приглушённая строка без карточки */
+.step-system {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.step-system-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Служебное ---------- */
 .debug-badge {
   background: color-mix(in srgb, var(--amber) 18%, transparent);
@@ -536,5 +572,52 @@ button:disabled {
 .btn-reset:hover {
   border-color: var(--red);
   color: var(--red);
+}
+
+/* Кнопки «Стоп сервиса» / «Старт сервиса» в шапке лога шагов — те же пилюли, что были у рестарта */
+.steps-header .btn-stop {
+  margin-left: auto;
+}
+
+.steps-header .btn-start {
+  margin-left: 4px;
+}
+
+/* Не затирать глобальную кнопку .btn-stop (⏹ Стоп) из чата — стилизуем только в шапке шагов */
+.steps-header .btn-stop,
+.steps-header .btn-start {
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #fff;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+/* Стоп: тёмный красный фон — белый текст читается контрастно */
+.steps-header .btn-stop {
+  background: #8f2b2b;
+}
+
+/* Старт: тёмный зелёный фон — белый текст читается контрастно */
+.steps-header .btn-start {
+  background: #1f6f34;
+}
+
+.steps-header .btn-stop:hover:not(:disabled) {
+  filter: brightness(1.18);
+}
+
+.steps-header .btn-start:hover:not(:disabled) {
+  filter: brightness(1.18);
+}
+
+.steps-header .btn-stop:disabled,
+.steps-header .btn-start:disabled {
+  /* Никакого wait-курсора: действие не выполняется, пока кнопку не кликнули */
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 

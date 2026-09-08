@@ -76,6 +76,17 @@ export interface HistoryResponse {
   messages: HistoryMessage[];
 }
 
+/** Ответ DELETE /api/sessions/{sessionId}. */
+export interface DeleteResponse {
+  deleted: boolean;
+}
+
+/** Ответ супервизорного контроля: POST /system-ctrl/stop и /system-ctrl/start. */
+export interface ControlResponse {
+  stopped?: boolean;
+  starting?: boolean;
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */
@@ -84,7 +95,8 @@ export interface StepLogEntry {
   id: string;
   /** Время события в формате HH:MM:SS. */
   time: string;
-  kind: 'user' | 'llm' | 'tool' | 'answer' | 'error';
+  /** kind — тип записи; system — служебные события жизненного цикла UI (не от SSE). */
+  kind: 'user' | 'llm' | 'tool' | 'answer' | 'error' | 'system';
   title: string;
   status: 'running' | 'success' | 'error';
   iteration?: number;
