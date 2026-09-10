@@ -14,12 +14,17 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 class AppConfig {
 
-    /** Выбор транспорта к LLM по LLM_PROVIDER (mock — по умолчанию, для локального запуска без ключа). */
+    /**
+     * Выбор транспорта к LLM по LLM_PROVIDER (mock — по умолчанию, для локального запуска без ключа).
+     * provider/baseUrl/apiKey — статические (из env на старте); per-request параметры
+     * (model, temperature, top_p, top_k, max_tokens, timeout) клиент берёт из динамических
+     * настроек [LlmSettings] на каждый запрос.
+     */
     @Bean
-    fun llmClient(props: LlmProperties, om: ObjectMapper): LlmClient =
+    fun llmClient(props: LlmProperties, om: ObjectMapper, settings: LlmSettings): LlmClient =
         when (props.provider.lowercase()) {
             "mock" -> MockLlmClient()
-            "gpustack" -> GpuStackLlmClient(props, om)
+            "gpustack" -> GpuStackLlmClient(props, om, settings)
             else -> throw IllegalArgumentException(
                 "Неизвестный LLM_PROVIDER='${props.provider}' (ожидается mock|gpustack)"
             )
@@ -31,7 +36,8 @@ class AppConfig {
         toolRegistry: ToolRegistry,
         sessionStore: SessionStore,
         agentProperties: AgentProperties,
+        settings: LlmSettings,
         settingsProvider: LlmSettingsProvider,
         om: ObjectMapper,
-    ): Agent = AgentImpl(llmClient, toolRegistry, sessionStore, agentProperties, settingsProvider, om)
+    ): Agent = AgentImpl(llmClient, toolRegistry, sessionStore, agentProperties, settingsProvider, settings, om)
 }

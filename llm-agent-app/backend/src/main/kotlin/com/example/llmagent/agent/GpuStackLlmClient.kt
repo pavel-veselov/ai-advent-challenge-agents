@@ -1,6 +1,7 @@
 package com.example.llmagent.agent
 
 import com.example.llmagent.config.LlmProperties
+import com.example.llmagent.config.LlmSettings
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.http.HttpHeaders
@@ -13,10 +14,13 @@ import java.time.Duration
 /**
  * Клиент к GPUStack (OpenAI-совместимый /v1/chat/completions) со стримингом токенов.
  * Ключ передаётся только как Bearer-заголовок из LlmProperties (env), не логируется.
+ * Параметры запроса (model, temperature, top_p, top_k, max_tokens, timeout) читаются
+ * из [LlmSettings] на каждый запрос — динамические изменения применяются без рестарта.
  */
 class GpuStackLlmClient(
     private val props: LlmProperties,
     private val om: ObjectMapper,
+    private val settings: LlmSettings = LlmSettings.from(props),
 ) : LlmClient {
 
     private val baseUrl = normalizeBaseUrl(props.baseUrl)
@@ -28,15 +32,21 @@ class GpuStackLlmClient(
 
     override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> {
         val body = om.createObjectNode()
-            .put("model", props.model)
-            .put("temperature", props.temperature)
-            .put("top_p", props.topP)
+            .put("model", settings.model())
+            .put("temperature", settings.temperature())
+            .put("top_p", settings.topP())
             .put("stream", true)
             .put("tool_choice", "auto")
         // top_k и max_tokens отправляем только если заданы (>0): не все OpenAI-совместимые
         // бэкенды принимают top_k, а max_tokens=0 бессмыслен.
-        props.topK?.takeIf { it > 0 }?.let { body.put("top_k", it) }
-        props.maxTokens?.takeIf { it > 0 }?.let { body.put("max_tokens", it) }
+        settings.topK()?.takeIf { it > 0 }?.let { body.put("top_k", it) }
+        settings.maxTokens()?.takeIf { it > 0 }?.let { body.put("max_tokens", it) }
+        // Выключаем «рассуждение» модели (thinking): vLLM понимает chat_template_kwargs.enable_thinking=false
+        // (проверено для qwen3.8-27b / deepseek-v4-flash). Для glm* thinking форсирован — kwarg НЕ уходит,
+        // иначе текст рассуждений протекает в content. Включено — ничего не шлём (thinking включён по умолчанию).
+        if (!settings.reasoningEnabled() && !settings.model().startsWith("glm", ignoreCase = true)) {
+            body.putObject("chat_template_kwargs").put("enable_thinking", false)
+        }
         body.putObject("stream_options").put("include_usage", true)
         val msgArr = body.putArray("messages")
         messages.forEach { msgArr.add(messageNode(it)) }
@@ -51,8 +61,16 @@ class GpuStackLlmClient(
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(body)
                 .retrieve()
+                .onStatus({ it.is4xxClientError || it.is5xxServerError }) { response ->
+                    // 4xx/5xx — ошибка API (неверный ключ/модель/тело, сервер недоступен и т.п.):
+                    // вычитываем тело и превращаем в LlmApiException с HTTP-статусом и сообщением,
+                    // чтобы error-событие содержало и статус, и текст от апстрима.
+                    response.bodyToMono(String::class.java)
+                        .defaultIfEmpty("")
+                        .map { body -> LlmApiException(response.statusCode().value(), extractErrorMessage(body)) }
+                }
                 .bodyToFlux(String::class.java)
-                .timeout(Duration.ofSeconds(props.timeoutSeconds))
+                .timeout(Duration.ofSeconds(settings.timeoutSeconds()))
                 .flatMapIterable { raw -> parseChunks(raw) }
                 .concatMap { node -> processChunk(node, acc) }
                 .concatWith(Flux.defer { Flux.fromIterable(emitPending(acc)) })
@@ -178,4 +196,32 @@ class GpuStackLlmClient(
         if (b.isNotEmpty() && !b.endsWith("/v1")) b = "$b/v1"
         return b
     }
+
+    /**
+     * Достаёт человекочитаемое сообщение из тела ошибки: предпочитает {error:{message}},
+     * иначе — сырое тело (обрезанное), чтобы в error-событии было, что показать пользователю.
+     */
+    private fun extractErrorMessage(body: String): String {
+        if (body.isBlank()) return "пустое тело ответа"
+        return try {
+            val node = om.readTree(body)
+            node.path("error").path("message")
+                .takeIf { it.isTextual && it.asText().isNotBlank() }
+                ?.asText()
+                ?: body.take(MAX_ERROR_BODY)
+        } catch (e: Exception) {
+            body.take(MAX_ERROR_BODY)
+        }
+    }
+
+    private companion object {
+        /** Ограничиваем размер тела ошибки, попадающего в событие/логи. */
+        const val MAX_ERROR_BODY = 500
+    }
 }
+
+/**
+ * Ошибка LLM API с HTTP-статусом (к примеру 4xx) — перехватывается в AgentImpl
+ * и превращается в понятное error-событие («Ошибка LLM API (HTTP <status>): <message>»).
+ */
+class LlmApiException(val status: Int, message: String) : RuntimeException(message)

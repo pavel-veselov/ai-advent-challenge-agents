@@ -21,9 +21,17 @@ data class LlmProperties(
     val topP: Double = 1.0,
     /** Top-k sampling; null/<=0 — параметр не отправляется (не все бэкенды его принимают). */
     val topK: Int? = null,
-    /** Лимит выходных токенов (max_tokens); null/<=0 — параметр не отправляется. */
-    val maxTokens: Int? = null,
+    /** Лимит выходных токенов (max_tokens) — по умолчанию 10000; null/<=0 — параметр не отправляется. */
+    val maxTokens: Int? = 10000,
+    /** Включено ли «рассуждение» модели (thinking). false — в API уходит chat_template_kwargs.enable_thinking=false (не для glm*). */
+    val reasoningEnabled: Boolean = true,
     val timeoutSeconds: Long = 60,
+    /** Лимит контекста модели в токенах — для пресечения переполнения до отправки запроса. */
+    val contextLimit: Int = 126608,
+    /** Условная цена за 1M входных токенов, USD (для расчёта стоимости ответа). */
+    val priceInputPer1M: Double = 0.1,
+    /** Условная цена за 1M выходных токенов, USD (для расчёта стоимости ответа). */
+    val priceOutputPer1M: Double = 0.1,
 )
 
 @ConfigurationProperties(prefix = "agent")

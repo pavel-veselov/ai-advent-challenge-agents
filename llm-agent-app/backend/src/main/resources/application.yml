@@ -13,6 +13,11 @@
 
 server:
   port: ${SERVER_PORT:8080}
+  error:
+    # Причины 400/404 кладём в JSON-поле message (ResponseStatusException / LlmSettingsValidationException):
+    # фронтенд показывает их пользователю (например «Модель отключена в каталоге», «Неизвестная модель»).
+    # По умолчанию в WebFlux сообщения скрыты (never).
+    include-message: always
 
 llm:
   provider: ${LLM_PROVIDER:mock}            # mock | gpustack
@@ -22,8 +27,11 @@ llm:
   temperature: ${LLM_TEMPERATURE:0.7}
   top-p: ${LLM_TOP_P:1.0}                   # nucleus sampling
   top-k: ${LLM_TOP_K:}                      # пусто = не задано (параметр не уходит в API)
-  max-tokens: ${LLM_MAX_TOKENS:}            # пусто = без лимита выходных токенов
+  max-tokens: ${LLM_MAX_TOKENS:10000}       # дефолтный лимит выходных токенов (10000)
   timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
+  context-limit: ${LLM_CONTEXT_LIMIT:126608}          # лимит контекста модели в токенах
+  price-input-per-1m: ${LLM_PRICE_INPUT_PER_1M:0.1}   # условная цена в USD за 1M входных токенов
+  price-output-per-1m: ${LLM_PRICE_OUTPUT_PER_1M:0.1} # условная цена в USD за 1M выходных токенов
 
 agent:
   max-tool-call-iterations: ${AGENT_MAX_ITERATIONS:8}

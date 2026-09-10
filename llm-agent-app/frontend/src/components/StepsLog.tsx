@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RunSettings, StepLogEntry } from '../types';
+import type { StepLogEntry } from '../types';
 
 interface StepsLogProps {
   steps: StepLogEntry[];
-  runSettings: RunSettings | null;
   /** true, пока бэк-сервис остановлен — кнопка «Стоп сервиса» заблокирована. */
   backendStopped: boolean;
   /** true, пока бэк-сервис запускается — обе кнопки заблокированы. */
@@ -49,7 +48,7 @@ function StepRow({ step }: { step: StepLogEntry }) {
         <div className="step-body">
           {promptText ? (
             <div className="step-block">
-              <div className="step-block-title">Промпт в LLM</div>
+              <div className="step-block-title">Контекст запроса в LLM</div>
               <pre className="step-pre">{promptText}</pre>
             </div>
           ) : null}
@@ -77,58 +76,13 @@ function StepRow({ step }: { step: StepLogEntry }) {
   );
 }
 
-interface SettingsItem {
-  label: string;
-  value: string;
-  hint: string;
-}
-
-function settingsItems(s: RunSettings): SettingsItem[] {
-  return [
-    {
-      label: 'провайдер',
-      value: s.provider,
-      hint: 'Сервис, к которому агент обращается за генерацией: mock — локальная заглушка без сети, gpustack — реальный OpenAI-совместимый API.',
-    },
-    {
-      label: 'модель',
-      value: s.model,
-      hint: 'Конкретная LLM, которая генерирует ответ (задаётся переменной окружения LLM_MODEL).',
-    },
-    {
-      label: 'temperature',
-      value: String(s.temperature),
-      hint: 'Насколько смело модель отклоняется от самого вероятного слова: 0 — всегда самый вероятный токен, значения выше — ответы разнообразнее и креативнее.',
-    },
-    {
-      label: 'top_p',
-      value: String(s.topP),
-      hint: 'Nucleus sampling: модель выбирает из наиболее вероятных токенов, пока их суммарная вероятность не достигнет top_p; 1 — без отсечения.',
-    },
-    {
-      label: 'top_k',
-      value: s.topK == null ? '—' : String(s.topK),
-      hint: 'Модель выбирает только из K самых вероятных токенов на каждом шаге; «—» — не задано, параметр не уходит в API.',
-    },
-    {
-      label: 'лимит токенов',
-      value: s.maxTokens == null ? '—' : String(s.maxTokens),
-      hint: 'Максимум токенов на один ответ (max_tokens) — защита от бесконечной генерации; «—» — без лимита.',
-    },
-    {
-      label: 'инструменты',
-      value: s.tools.join(', '),
-      hint: 'Функции, которые модель может вызывать сама по ходу ответа (например, калькулятор); их список уходит в API.',
-    },
-    {
-      label: 'макс. итераций',
-      value: String(s.maxToolCallIterations),
-      hint: 'Предел цикла «LLM → инструменты → LLM» на один запрос — защита от зацикливания.',
-    },
-  ];
-}
-
-export default function StepsLog({ steps, runSettings, backendStopped, backendStarting, onStop, onStart }: StepsLogProps) {
+export default function StepsLog({
+  steps,
+  backendStopped,
+  backendStarting,
+  onStop,
+  onStart,
+}: StepsLogProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   // Автопрокрутка к последнему шагу
@@ -163,16 +117,6 @@ export default function StepsLog({ steps, runSettings, backendStopped, backendSt
           Старт сервиса
         </button>
       </header>
-      {runSettings ? (
-        <div className="llm-settings" title="Применённые настройки LLM (GET /api/llm-settings при открытии, agent_started на каждом запуске)">
-          <span className="llm-settings-title">Настройки LLM</span>
-          {settingsItems(runSettings).map((it) => (
-            <span className="llm-settings-item" key={it.label} title={it.hint}>
-              {it.label}: <b>{it.value}</b>
-            </span>
-          ))}
-        </div>
-      ) : null}
       <div className="steps-list" ref={listRef}>
         {steps.length === 0 ? (
           <div className="steps-empty">Шагов пока нет — отправьте сообщение в чат.</div>

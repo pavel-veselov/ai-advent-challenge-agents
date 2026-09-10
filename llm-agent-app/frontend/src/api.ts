@@ -1,10 +1,12 @@
-import type {
+﻿import type {
   AgentEvent,
   ChatRequest,
   ControlResponse,
   DeleteResponse,
   HistoryResponse,
   RunSettings,
+  SessionsResponse,
+  StatsResponse,
 } from './types';
 
 function parseEventData(line: string): AgentEvent | null {
@@ -17,30 +19,59 @@ function parseEventData(line: string): AgentEvent | null {
   }
 }
 
-/** Загрузка истории диалога для восстановления после перезагрузки. */
+/** Р—Р°РіСЂСѓР·РєР° РёСЃС‚РѕСЂРёРё РґРёР°Р»РѕРіР° РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РїРѕСЃР»Рµ РїРµСЂРµР·Р°РіСЂСѓР·РєРё. */
 export async function fetchHistory(sessionId: string): Promise<HistoryResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/history`);
   if (!res.ok) throw new Error(`history http ${res.status}`);
   return (await res.json()) as HistoryResponse;
 }
 
-/** Применённые настройки LLM — забираем при открытии страницы, до первого запроса. */
+/** РџСЂРёРјРµРЅС‘РЅРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё LLM вЂ” Р·Р°Р±РёСЂР°РµРј РїСЂРё РѕС‚РєСЂС‹С‚РёРё СЃС‚СЂР°РЅРёС†С‹, РґРѕ РїРµСЂРІРѕРіРѕ Р·Р°РїСЂРѕСЃР°. */
 export async function fetchLlmSettings(): Promise<RunSettings> {
   const res = await fetch('/api/llm-settings');
   if (!res.ok) throw new Error(`llm-settings http ${res.status}`);
   return (await res.json()) as RunSettings;
 }
 
-/** Удаление сессии на бэкенде (история стирается в БД). */
+/**
+ * РћР±РЅРѕРІР»РµРЅРёРµ РЅР°СЃС‚СЂРѕРµРє LLM: PUT /api/llm-settings (РёР·РјРµРЅСЏРµРјС‹ РІСЃРµ РїРѕР»СЏ, РєСЂРѕРјРµ РїСЂРѕРІР°Р№РґРµСЂР°).
+ * Р’РѕР·РІСЂР°С‰Р°РµС‚ РїРѕР»РЅС‹Р№ РЅР°Р±РѕСЂ РїСЂРёРјРµРЅС‘РЅРЅС‹С… РЅР°СЃС‚СЂРѕРµРє; РїСЂРё РѕС€РёР±РєРµ Р±СЂРѕСЃР°РµС‚ (UI РІРѕР·РІСЂР°С‰Р°РµС‚ РїСЂРµР¶РЅРёРµ Р·РЅР°С‡РµРЅРёСЏ).
+ */
+export async function updateLlmSettings(patch: Partial<RunSettings>): Promise<RunSettings> {
+  const res = await fetch('/api/llm-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`llm-settings PUT http ${res.status}`);
+  return (await res.json()) as RunSettings;
+}
+
+/** РЈРґР°Р»РµРЅРёРµ СЃРµСЃСЃРёРё РЅР° Р±СЌРєРµРЅРґРµ (РёСЃС‚РѕСЂРёСЏ СЃС‚РёСЂР°РµС‚СЃСЏ РІ Р‘Р”). */
 export async function deleteSession(sessionId: string): Promise<DeleteResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete-session http ${res.status}`);
   return (await res.json()) as DeleteResponse;
 }
 
+/** РљР°С‚Р°Р»РѕРі РІСЃРµС… СЃРµСЃСЃРёР№ СЃ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅС‹РјРё РјРµС‚СЂРёРєР°РјРё (GET /api/sessions). */
+export async function fetchSessions(): Promise<SessionsResponse> {
+  const res = await fetch('/api/sessions');
+  if (!res.ok) throw new Error(`sessions http ${res.status}`);
+  return (await res.json()) as SessionsResponse;
+}
+
+/** Р“Р»РѕР±Р°Р»СЊРЅР°СЏ СЃС‚Р°С‚РёСЃС‚РёРєР° РїРѕ РІСЃРµРј СЃРµСЃСЃРёСЏРј (GET /api/stats). */
+export async function fetchGlobalStats(): Promise<StatsResponse> {
+  const res = await fetch('/api/stats');
+  if (!res.ok) throw new Error(`stats http ${res.status}`);
+  return (await res.json()) as StatsResponse;
+}
+
+
 /**
- * Остановка бэк-сервиса: супервизорный контроль на 8081. Бэкенд может умереть
- * до ответа — ошибку сети игнорируем (готовность далее проверяется опросом).
+ * РћСЃС‚Р°РЅРѕРІРєР° Р±СЌРє-СЃРµСЂРІРёСЃР°: СЃСѓРїРµСЂРІРёР·РѕСЂРЅС‹Р№ РєРѕРЅС‚СЂРѕР»СЊ РЅР° 8081. Р‘СЌРєРµРЅРґ РјРѕР¶РµС‚ СѓРјРµСЂРµС‚СЊ
+ * РґРѕ РѕС‚РІРµС‚Р° вЂ” РѕС€РёР±РєСѓ СЃРµС‚Рё РёРіРЅРѕСЂРёСЂСѓРµРј (РіРѕС‚РѕРІРЅРѕСЃС‚СЊ РґР°Р»РµРµ РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ РѕРїСЂРѕСЃРѕРј).
  */
 export async function stopBackend(): Promise<ControlResponse> {
   const res = await fetch('/system-ctrl/stop', { method: 'POST' });
@@ -49,8 +80,8 @@ export async function stopBackend(): Promise<ControlResponse> {
 }
 
 /**
- * Запуск бэк-сервиса: команда супервизору, возвращается сразу. Готовность
- * сервиса проверяется отдельно опросом GET /api/llm-settings.
+ * Р—Р°РїСѓСЃРє Р±СЌРє-СЃРµСЂРІРёСЃР°: РєРѕРјР°РЅРґР° СЃСѓРїРµСЂРІРёР·РѕСЂСѓ, РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ СЃСЂР°Р·Сѓ. Р“РѕС‚РѕРІРЅРѕСЃС‚СЊ
+ * СЃРµСЂРІРёСЃР° РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ РѕС‚РґРµР»СЊРЅРѕ РѕРїСЂРѕСЃРѕРј GET /api/llm-settings.
  */
 export async function startBackend(): Promise<ControlResponse> {
   const res = await fetch('/system-ctrl/start', { method: 'POST' });
@@ -59,8 +90,8 @@ export async function startBackend(): Promise<ControlResponse> {
 }
 
 /**
- * POST /api/chat со стримингом SSE через fetch + ReadableStream.
- * Каждый разобранный `data:`-блок передаётся в onEvent.
+ * POST /api/chat СЃРѕ СЃС‚СЂРёРјРёРЅРіРѕРј SSE С‡РµСЂРµР· fetch + ReadableStream.
+ * РљР°Р¶РґС‹Р№ СЂР°Р·РѕР±СЂР°РЅРЅС‹Р№ `data:`-Р±Р»РѕРє РїРµСЂРµРґР°С‘С‚СЃСЏ РІ onEvent.
  */
 export async function streamChat(
   sessionId: string,

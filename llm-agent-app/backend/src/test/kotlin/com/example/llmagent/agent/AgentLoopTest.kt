@@ -2,12 +2,14 @@ package com.example.llmagent.agent
 
 import com.example.llmagent.config.AgentProperties
 import com.example.llmagent.config.LlmProperties
+import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.LlmSettingsProvider
 import com.example.llmagent.agent.tools.CalculatorTool
 import com.example.llmagent.agent.tools.GetCurrentDateTimeTool
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -37,10 +39,10 @@ class AgentLoopTest {
     private val om = ObjectMapper()
     private val tools = ToolRegistry(listOf(CalculatorTool(), GetCurrentDateTimeTool()))
 
-    private fun agent(llm: LlmClient, maxIterations: Int = 8): AgentImpl {
+    private fun agent(llm: LlmClient, maxIterations: Int = 8, llmProps: LlmProperties = LlmProperties()): AgentImpl {
         val agentProps = AgentProperties(maxIterations)
-        val settingsProvider = LlmSettingsProvider(LlmProperties(), agentProps, tools)
-        return AgentImpl(llm, tools, sessionStore, agentProps, settingsProvider, om)
+        val settingsProvider = LlmSettingsProvider(LlmSettings.from(llmProps), agentProps, tools)
+        return AgentImpl(llm, tools, sessionStore, agentProps, settingsProvider, LlmSettings.from(llmProps), om)
     }
 
     @Test
@@ -188,5 +190,48 @@ class AgentLoopTest {
         assertEquals("success", toolFinished.status)
         // результат — парсящееся ISO-время
         assertFalse(toolFinished.result.isBlank())
+    }
+
+    @Test
+    fun llmApi4xxErrorProducesClearErrorEvent() {
+        val broken = object : LlmClient {
+            override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+                Flux.error(LlmApiException(401, "invalid api key"))
+        }
+
+        val events = agent(broken).run("s-api-err", "тест").collectList().block(Duration.ofSeconds(10))!!
+
+        val errors = events.filterIsInstance<ErrorEvent>()
+        assertTrue(errors.isNotEmpty(), "ожидалось error-событие при 4xx от LLM API")
+        assertTrue(errors.first().message.contains("Ошибка LLM API (HTTP 401)"), "сообщение: ${errors.first().message}")
+        assertTrue(errors.first().message.contains("invalid api key"))
+        assertTrue(events.none { it is AgentFinished })
+    }
+
+    @Test
+    fun assistantMessagePersistedWithUsageTokensInsteadOfEstimate() {
+        // usage приходит только в финальном чанке; assistant-сообщение хранит ТОЧНЫЕ токены из usage
+        val llm = ScriptedLlmClient(
+            listOf(
+                listOf(LlmEvent.ContentDelta("4"), LlmEvent.Finished("stop", LlmUsage(inputTokens = 21, outputTokens = 7))),
+            )
+        )
+        val events = agent(llm).run("s-tokens", "сколько будет 2+2?").collectList().block(Duration.ofSeconds(10))!!
+
+        val finished = events.filterIsInstance<LlmResponseFinished>().single()
+        assertEquals("stop", finished.finishReason)
+        assertNull(finished.estimatedRequestTokens, "локальная оценка токенов удалена — поле должно быть null")
+        // costUsd = (21*0.1 + 7*0.1)/1_000_000 = 0.0000028 — по тарифам LlmProperties по умолчанию
+        assertEquals((21 * 0.1 + 7 * 0.1) / 1_000_000.0, finished.costUsd!!, 1e-9)
+
+        val requestStarted = events.filterIsInstance<LlmRequestStarted>().single()
+        assertEquals(0, requestStarted.estimatedRequestTokens, "локальная оценка удалена — поле 0")
+
+        val assistant = sessionStore.get("s-tokens").first { it.role == "assistant" }
+        assertEquals(21, assistant.promptTokens)
+        assertEquals(7, assistant.completionTokens)
+
+        val user = sessionStore.get("s-tokens").first { it.role == "user" }
+        assertNull(user.promptTokens, "user-сообщение больше не получает локальную оценку токенов")
     }
 }

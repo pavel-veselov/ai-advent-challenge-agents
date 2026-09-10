@@ -2,6 +2,7 @@ package com.example.llmagent.transport
 
 import com.example.llmagent.agent.Agent
 import com.example.llmagent.agent.AgentEvent
+import com.example.llmagent.agent.ErrorEvent
 import com.example.llmagent.agent.SessionStore
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -40,6 +41,13 @@ class ChatController(
         val sequence = AtomicInteger(0)
         return agent.run(req.sessionId, req.message)
             .map { ev -> sse(ev, runId, sequence.getAndIncrement()) }
+            // Страховка «поток не закрывается молча»: если из агента вылетела ошибка, минуя
+            // обработчики (например сбой хранилища до входа в цикл), превращаем её в обычное
+            // error-событие контракта, чтобы фронтенд не увидел голую сетевую ошибку «Failed to fetch».
+            .onErrorResume { err ->
+                log.error("chat run={} session={} failed: {}", runId, req.sessionId, err.message)
+                Flux.just(sse(ErrorEvent(0, "Ошибка сервера: ${err.message}"), runId, sequence.getAndIncrement()))
+            }
     }
 
     private fun sse(ev: AgentEvent, runId: String, seq: Int): ServerSentEvent<String> {

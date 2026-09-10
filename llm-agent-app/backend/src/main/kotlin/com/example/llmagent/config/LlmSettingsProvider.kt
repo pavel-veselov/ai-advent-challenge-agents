@@ -8,24 +8,21 @@ import org.springframework.stereotype.Component
  * - для события `agent_started` (AgentImpl);
  * - для `GET /api/llm-settings` (показ настроек в UI сразу при открытии страницы).
  *
+ * LLM-часть (model/temperature/.../contextLimit) приходит из [LlmSettings] — динамически
+ * изменяемой ([DynamicLlmSettings], управляется через PUT /api/llm-settings); поверх неё
+ * добавляются статические настройки агентского слоя (`maxToolCallIterations`) и список
+ * зарегистрированных инструментов.
+ *
  * apiKey и baseUrl наружу не отдаём.
  */
 @Component
 class LlmSettingsProvider(
-    private val llm: LlmProperties,
+    private val settings: LlmSettings,
     private val agent: AgentProperties,
     private val toolRegistry: ToolRegistry,
 ) {
 
-    fun settings(): Map<String, Any?> = mapOf(
-        "provider" to llm.provider,
-        "model" to llm.model,
-        "temperature" to llm.temperature,
-        "topP" to llm.topP,
-        // 0/не задано нормализуем в null — «параметр не применяется»
-        "topK" to llm.topK?.takeIf { it > 0 },
-        "maxTokens" to llm.maxTokens?.takeIf { it > 0 },
-        "timeoutSeconds" to llm.timeoutSeconds,
+    fun settings(): Map<String, Any?> = settings.settings() + mapOf(
         "maxToolCallIterations" to agent.maxToolCallIterations,
         "tools" to toolRegistry.names().sorted(),
     )

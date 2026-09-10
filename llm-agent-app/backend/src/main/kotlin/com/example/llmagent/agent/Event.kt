@@ -19,10 +19,19 @@ data class AgentStarted(
     override val payload = mapOf("userMessage" to userMessage, "settings" to settings)
 }
 
-data class LlmRequestStarted(val iteration: Int, val prompt: List<Map<String, String>>) : AgentEvent {
+data class LlmRequestStarted(
+    val iteration: Int,
+    val prompt: List<Map<String, String>>,
+    /** Оценки токенов больше нет (локальный подсчёт удалён); поле 0 — сохранено для схемы. */
+    val estimatedRequestTokens: Int = 0,
+) : AgentEvent {
     override val type = "llm_request_started"
     override val stepId = "llm-$iteration"
-    override val payload = mapOf("iteration" to iteration, "prompt" to prompt)
+    override val payload = mapOf(
+        "iteration" to iteration,
+        "prompt" to prompt,
+        "estimatedRequestTokens" to estimatedRequestTokens,
+    )
 }
 
 data class LlmToken(val iteration: Int, val delta: String) : AgentEvent {
@@ -35,11 +44,17 @@ data class LlmResponseFinished(
     val iteration: Int,
     val finishReason: String,
     val usage: LlmUsage? = null,
+    /** Локальная оценка токенов удалена; поле всегда null — сохранено для схемы. */
+    val estimatedRequestTokens: Int? = null,
+    /** Условная стоимость запроса+ответа в USD; null, если usage от провайдера не пришёл. */
+    val costUsd: Double? = null,
 ) : AgentEvent {
     override val type = "llm_response_finished"
     override val stepId = "llm-$iteration"
     override val payload: Map<String, Any?> = buildMap {
         put("finishReason", finishReason)
+        put("estimatedRequestTokens", estimatedRequestTokens)
+        if (costUsd != null) put("costUsd", costUsd)
         if (usage != null) put("usage", mapOf("inputTokens" to usage.inputTokens, "outputTokens" to usage.outputTokens))
     }
 }
