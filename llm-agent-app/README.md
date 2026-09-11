@@ -30,7 +30,8 @@ cd backend
 gradlew.bat bootRun          # Windows
 ```
 
-По умолчанию используется `LLM_PROVIDER=mock` — детерминированный фейковый LLM без ключа.
+Транспорт к LLM — только реальная интеграция GPUStack (`LLM_PROVIDER=gpustack`); запуск требует
+`LLM_BASE_URL` и `LLM_API_KEY` (без них backend не стартует — fail-fast на этапе конфигурации).
 История диалогов хранится в SQLite-файле (`./data/llm-agent.db` по умолчанию, см. ниже) и
 переживает перезапуск backend.
 
@@ -88,7 +89,7 @@ JVM-процессом.
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `LLM_PROVIDER` | `mock` | `mock` или `gpustack` |
+| `LLM_PROVIDER` | `gpustack` | Провайдер фиксирован: `gpustack` (mock удалён) |
 | `LLM_BASE_URL` | — | Адрес GPUStack-сервера (БЕЗ `/v1`) |
 | `LLM_API_KEY` | — | Ключ GPUStack (Bearer) |
 | `LLM_MODEL` | `default-coding` | Идентификатор модели GPUStack (без префикса провайдера) |
@@ -115,16 +116,6 @@ LLM_PROVIDER=gpustack LLM_BASE_URL=<GPUStack-URL> LLM_API_KEY=<ваш ключ> 
 
 Клиент обращается к `{LLM_BASE_URL}/v1/chat/completions` (OpenAI-совместимая схема, `stream: true`).
 
-### Mock-режим (сценарии)
-
-`MockLlmClient` отвечает детерминированно:
-
-- если в сообщении есть арифметическое выражение (например «сколько будет 2+2?») — вызывает
-  инструмент `calculator`;
-- если есть слова «дата/время/time/date» — вызывает `get_current_datetime`;
-- если в истории последнее сообщение от инструмента — отвечает «Результат: …»;
-- иначе отвечает эхом исходного сообщения.
-
 ## Frontend
 
 ```bash
@@ -142,7 +133,7 @@ curl -N -X POST http://localhost:8080/api/chat \
   -d '{"sessionId":"demo","message":"сколько будет 2+2?"}'
 ```
 
-Ожидаемая SSE-последовательность (mock): `agent_started` → `llm_request_started` (итерация 1) →
+Ожидаемая SSE-последовательность (пример с вызовом инструмента): `agent_started` → `llm_request_started` (итерация 1) →
 `llm_response_finished` (tool_calls) → `tool_call_started` (calculator) → `tool_call_finished`
 (результат) → `llm_request_started` (итерация 2) → `llm_response_finished` (stop) → `agent_finished`.
 

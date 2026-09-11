@@ -1,5 +1,6 @@
 package com.example.llmagent.agent
 
+import com.example.llmagent.config.LlmSettings
 import com.fasterxml.jackson.databind.ObjectMapper
 import reactor.core.publisher.Flux
 
@@ -15,7 +16,11 @@ class MockLlmClient(
     private val planner: MockPlanner? = null,
 ) : LlmClient {
 
-    override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+    ): Flux<LlmEvent> =
         Flux.defer {
             val plan = planner?.plan(messages, tools) ?: defaultPlan(messages)
             val events: List<LlmEvent> = when (plan) {

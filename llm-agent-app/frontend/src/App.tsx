@@ -7,7 +7,12 @@ import { useAgentSession } from './hooks/useAgentSession';
 
 export default function App() {
   const session = useAgentSession();
-  const tabDisabled = session.isRunning || session.backendStopped || session.backendStarting;
+  // Вкладки блокируем только при неработающем/запускающемся бэкенде: переключение и
+  // создание сессий разрешены всегда, даже пока какая-то сессия стримит.
+  const tabDisabled = session.backendStopped || session.backendStarting;
+  // Настройки LLM: блокируем при неработающем бэкенде ИЛИ пока активная сессия «думает»
+  // (менять настройки посреди выполнения собственного запуска сомнительно).
+  const llmSettingsDisabled = tabDisabled || session.isRunning;
   return (
     <div className="app-shell">
       <TabBar
@@ -20,22 +25,40 @@ export default function App() {
         onNew={session.newSession}
       />
       <div className="app-main">
-        <ChatPanel
-          messages={session.messages}
-          isRunning={session.isRunning}
-          backendStopped={session.backendStopped}
-          backendStarting={session.backendStarting}
-          error={session.error}
-          sessionId={session.sessionId}
-          onSend={session.sendMessage}
-          onStop={session.stopAgent}
-          onDeleteSession={session.deleteSession}
-        />
+        {session.tabs.length === 0 ? (
+          <div className="app-empty">
+            <p className="app-empty-title">Сессий пока нет</p>
+            <p className="app-empty-hint">
+              Создайте сессию — после этого станет доступен чат, а настройки LLM можно
+              менять сразу, до первого сообщения.
+            </p>
+            <button
+              type="button"
+              className="app-empty-btn"
+              onClick={session.newSession}
+              disabled={tabDisabled}
+            >
+              Создать сессию
+            </button>
+          </div>
+        ) : (
+          <ChatPanel
+            messages={session.messages}
+            isRunning={session.isRunning}
+            backendStopped={session.backendStopped}
+            backendStarting={session.backendStarting}
+            error={session.error}
+            sessionId={session.sessionId}
+            onSend={session.sendMessage}
+            onStop={session.stopAgent}
+            onDeleteSession={session.deleteSession}
+          />
+        )}
         <div className="steps-column">
           <LlmSettings
             settings={session.runSettings}
-            disabled={tabDisabled}
-            onUpdate={session.updateLlmSettings}
+            sessionId={session.sessionId}
+            disabled={llmSettingsDisabled}
           />
           <StepsLog
             steps={session.steps}

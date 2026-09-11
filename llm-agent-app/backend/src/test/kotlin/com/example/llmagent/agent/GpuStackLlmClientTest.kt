@@ -84,7 +84,11 @@ class GpuStackLlmClientTest {
                 """.trimIndent())
         )
 
-        client("my-api-key").streamChat(emptyList(), emptyList()).collectList().block(Duration.ofSeconds(10))
+        // основной путь агента всегда регистрирует инструменты — tools должен уходить в тело
+        val tools = listOf(
+            ToolDefinition("calculator", "Арифметика", ObjectMapper().createObjectNode())
+        )
+        client("my-api-key").streamChat(emptyList(), tools).collectList().block(Duration.ofSeconds(10))
 
         val recorded = server.takeRequest()
         assertEquals("/v1/chat/completions", recorded.path)
@@ -96,6 +100,19 @@ class GpuStackLlmClientTest {
         assertEquals("auto", body["tool_choice"].asText())
         assertTrue(body["messages"].isArray)
         assertTrue(body["tools"].isArray)
+        assertEquals("calculator", body["tools"][0]["function"]["name"].asText())
+    }
+
+    @Test
+    fun `omits tools and tool_choice entirely when tool list is empty`() {
+        enqueueOk()
+        // вызов резюмирования истории идёт без инструментов — ни tools, ни tool_choice не уходят
+        // (gpustack отвечает 400 и на пустой tools, и на tool_choice без tools)
+        client().streamChat(emptyList(), emptyList()).collectList().block(Duration.ofSeconds(10))
+
+        val body = ObjectMapper().readTree(server.takeRequest().body.readUtf8())
+        assertTrue(!body.has("tools"), "пустой tools не должен отправляться")
+        assertTrue(!body.has("tool_choice"), "tool_choice без tools не должен отправляться")
     }
 
     private fun baseProps(model: String, reasoningEnabled: Boolean = true) = LlmProperties(

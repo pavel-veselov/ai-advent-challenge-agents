@@ -13,6 +13,7 @@ import {
 import type {
   AgentEvent,
   ChatMessage,
+  HistoryMessage,
   RunSettings,
   StatsResponse,
   StepLogEntry,
@@ -47,6 +48,34 @@ function describeStreamError(err: unknown): string {
 interface TabsStateData {
   ids: string[];
   activeId: string | null;
+}
+
+/**
+ * Буфер состояния выполнения одной сессии. Каждая сессия ведёт собственные сообщения,
+ * итоги токенов и свой AbortController: параллельные запуски разных сессий не мешают
+ * друг другу. Активная вкладка показывает состояние только своей сессии, остальные
+ * пишутся в буфер и «всплывают» в живой вид при переключении.
+ */
+interface SessionRunState {
+  messages: ChatMessage[];
+  tokenTotals: TokenTotals;
+  lastPromptTokens: number | null;
+  isRunning: boolean;
+  /** id ассистентского сообщения текущего стрима сессии (для приклейки токенов). */
+  assistantId: string;
+  controller: AbortController | null;
+}
+
+/** Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming). */
+function historyToMessages(msgs: HistoryMessage[]): ChatMessage[] {
+  return msgs.map((m) => ({
+    id: newId(),
+    role: m.role,
+    content: m.content,
+    streaming: false,
+    promptTokens: m.promptTokens ?? null,
+    completionTokens: m.completionTokens ?? null,
+  }));
 }
 
 /**
@@ -180,10 +209,14 @@ export function useAgentSession(): AgentSession {
   /** Глобальная статистика по всем сессиям (GET /api/stats); null — ещё не загружена. */
   const [globalStats, setGlobalStats] = useState<StatsResponse | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
-  const assistantIdRef = useRef<string>('');
-  /** id сессии, которой принадлежит текущий стрим (уходящая сессия в cleanup). */
-  const runSidRef = useRef<string | null>(null);
+  /** sessionId -> буфер состояния выполнения (сообщения/итоги/стрим каждой сессии). */
+  const runStateRef = useRef<Map<string, SessionRunState>>(new Map());
+  /** id сессий с незавершённым стримом (guard сверки вкладок и «живой» буфер истории). */
+  const runningSidsRef = useRef<Set<string>>(new Set());
+  /** Число выполняющихся стримов: при падении в 0 триггерим сверку вкладок с бэкендом. */
+  const [runningCount, setRunningCount] = useState(0);
+  /** Актуальный activeId для колбэков фоновых стримов (замыкания не должны читать устаревший). */
+  const activeIdRef = useRef<string | null>(activeId);
   /** id -> запись лога; порядок вставки = хронология. */
   const stepsRef = useRef<Map<string, StepLogEntry>>(new Map());
   /**
@@ -207,6 +240,61 @@ export function useAgentSession(): AgentSession {
    */
   const localOnlyRef = useRef<Set<string>>(new Set());
 
+  /** Буфер состояния выполнения сессии (создаёт запись при первом обращении). */
+  const getRunState = (sid: string): SessionRunState => {
+    let st = runStateRef.current.get(sid);
+    if (!st) {
+      st = {
+        messages: [],
+        tokenTotals: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+        lastPromptTokens: null,
+        isRunning: false,
+        assistantId: '',
+        controller: null,
+      };
+      runStateRef.current.set(sid, st);
+    }
+    return st;
+  };
+
+  /**
+   * Обновляет сообщения сессии sid. Если сессия активна — результат сразу рисуется
+   * в живой вид; если запуск фоновый — остаётся в буфере до переключения вкладки.
+   */
+  const updateSessionMessages = (
+    sid: string,
+    updater: (prev: ChatMessage[], st: SessionRunState) => ChatMessage[],
+  ) => {
+    const st = runStateRef.current.get(sid);
+    if (!st) return;
+    st.messages = updater(st.messages, st);
+    if (sid === activeIdRef.current) setMessages(st.messages);
+  };
+
+  /** Меняет лог шагов сессии: активной — сразу в живой вид, фоновой — в её кэш шагов. */
+  const mutateSessionSteps = (sid: string, mutate: (map: Map<string, StepLogEntry>) => void) => {
+    if (sid === activeIdRef.current) {
+      mutate(stepsRef.current);
+      setSteps(Array.from(stepsRef.current.values()));
+    } else {
+      const prev = stepsCacheRef.current.get(sid);
+      const map = new Map(prev ? prev.map((e) => [e.id, e]) : []);
+      mutate(map);
+      stepsCacheRef.current.set(sid, Array.from(map.values()));
+    }
+  };
+
+  /** Снимает флаг выполнения со стрима сессии и обновляет счётчик активных стримов. */
+  const finalizeRun = useCallback((sid: string) => {
+    const st = runStateRef.current.get(sid);
+    if (st) {
+      st.isRunning = false;
+      st.controller = null;
+      if (sid === activeIdRef.current) setIsRunning(false);
+    }
+    if (runningSidsRef.current.delete(sid)) setRunningCount((c) => c - 1);
+  }, []);
+
   /** Добавляет служебное событие жизненного цикла UI в лог шагов (kind = system). */
   const pushSystemEvent = useCallback((title: string) => {
     const id = `system-${newId()}`;
@@ -220,30 +308,31 @@ export function useAgentSession(): AgentSession {
     setSteps(Array.from(stepsRef.current.values()));
   }, []);
 
-  /** Создаёт или обновляет запись лога шагов и синкает состояние в React. */
-  const touchStep = (stepId: string, ts: string, patch: Partial<StepLogEntry>) => {
+  /** Создаёт или обновляет запись лога шагов сессии sid и синкает состояние в React. */
+  const touchStep = (sid: string, stepId: string, ts: string, patch: Partial<StepLogEntry>) => {
     const id = stepId;
-    const existing = stepsRef.current.get(id);
-    if (!existing) {
-      stepsRef.current.set(id, {
-        id,
-        time: fmtTime(ts),
-        kind: patch.kind ?? 'llm',
-        title: patch.title ?? id,
-        status: patch.status ?? 'running',
-        iteration: patch.iteration,
-        toolName: patch.toolName,
-        prompt: patch.prompt,
-        args: patch.args,
-        result: patch.result,
-        detail: patch.detail,
-        explanation: patch.explanation,
-        content: patch.content,
-      });
-    } else {
-      stepsRef.current.set(id, { ...existing, ...patch });
-    }
-    setSteps(Array.from(stepsRef.current.values()));
+    mutateSessionSteps(sid, (map) => {
+      const existing = map.get(id);
+      if (!existing) {
+        map.set(id, {
+          id,
+          time: fmtTime(ts),
+          kind: patch.kind ?? 'llm',
+          title: patch.title ?? id,
+          status: patch.status ?? 'running',
+          iteration: patch.iteration,
+          toolName: patch.toolName,
+          prompt: patch.prompt,
+          args: patch.args,
+          result: patch.result,
+          detail: patch.detail,
+          explanation: patch.explanation,
+          content: patch.content,
+        });
+      } else {
+        map.set(id, { ...existing, ...patch });
+      }
+    });
   };
 
   /**
@@ -297,7 +386,7 @@ export function useAgentSession(): AgentSession {
     setMessages([]);
     setTokenTotals({ promptTokens: 0, completionTokens: 0, costUsd: 0 });
     setLastPromptTokens(null);
-    assistantIdRef.current = '';
+    setIsRunning(false);
     setError(null);
   };
 
@@ -310,7 +399,9 @@ export function useAgentSession(): AgentSession {
    * Заодно обновляет заголовки вкладок из первого сообщения сессий.
    */
   const syncSessions = useCallback(() => {
-    if (isRunning) return;
+    // Пока выполняется хоть один стрим (любой вкладки) — чистка вкладок пропускается:
+    // незавершённую сессию каталог мог ещё не подтвердить.
+    if (runningCount > 0) return;
     fetchSessions()
       .then((res) => {
         const known = new Set(res.sessions.map((s) => s.sessionId));
@@ -358,6 +449,14 @@ export function useAgentSession(): AgentSession {
         syncedOnceRef.current = true;
         if (ids.length === tabs.length && nextActive === activeId) return;
         if (nextActive !== null && nextActive !== activeId) {
+          // Показываем буфер активируемой сессии (сообщения/итоги/флаг выполнения);
+          // историю при необходимости догрузит эффект sessionId.
+          const t = getRunState(nextActive);
+          setMessages(t.messages);
+          setTokenTotals(t.tokenTotals);
+          setLastPromptTokens(t.lastPromptTokens);
+          setIsRunning(t.isRunning);
+          activeIdRef.current = nextActive;
           const cached = stepsCacheRef.current.get(nextActive);
           if (cached) {
             stepsRef.current = new Map(cached.map((e) => [e.id, e]));
@@ -377,16 +476,16 @@ export function useAgentSession(): AgentSession {
         /* каталог недоступен — вкладки оставляем как есть */
         syncedOnceRef.current = true;
       });
-  }, [tabs, activeId, isRunning]);
+  }, [tabs, activeId, runningCount]);
 
-  /** Применяем одно событие CONTRACT-а к логу шагов. */
-  const handleEvent = useCallback((e: AgentEvent) => {
+  /** Применяем одно событие CONTRACT-а к логу шагов и итогам токенов сессии sid. */
+  const handleEvent = useCallback((e: AgentEvent, sid: string) => {
     const key = `${e.runId}:${e.stepId}`;
     switch (e.type) {
       case 'agent_started': {
         setRunSettings(e.payload.settings);
         runSettingsRef.current = e.payload.settings;
-        touchStep(`${e.runId}:user`, e.timestamp, {
+        touchStep(sid, `${e.runId}:user`, e.timestamp, {
           kind: 'user',
           title: 'Запрос пользователя',
           status: 'success',
@@ -398,7 +497,7 @@ export function useAgentSession(): AgentSession {
       }
       case 'llm_request_started': {
         const it = e.payload.iteration;
-        touchStep(key, e.timestamp, {
+        touchStep(sid, key, e.timestamp, {
           kind: 'llm',
           title: `LLM (итерация ${it})`,
           iteration: it,
@@ -416,7 +515,7 @@ export function useAgentSession(): AgentSession {
         const ok = e.payload.finishReason === 'stop' || e.payload.finishReason === 'tool_calls';
         const u = e.payload.usage;
         const tokens = u ? ` · токены: вход ${u.inputTokens} · выход ${u.outputTokens}` : '';
-        touchStep(key, e.timestamp, {
+        touchStep(sid, key, e.timestamp, {
           status: ok ? 'success' : 'error',
           detail: `finish_reason: ${e.payload.finishReason}${tokens}`,
           // Данные о токенах храним структурно (строку detail выше оставляем для читаемости).
@@ -435,19 +534,26 @@ export function useAgentSession(): AgentSession {
                   ? 'Ответ обрезан: достигнут лимит токенов на один ответ модели.'
                   : 'LLM вернула ошибку вместо ответа — цикл прерван.',
         });
-        // Накопительные итоги диалога: суммируем usage и стоимость каждого ответа LLM.
-        setTokenTotals((prev) => accumulateTotals(prev, u, e.payload.costUsd));
-        // Текущий размер контекста = входные токены последнего реального запроса в LLM
-        // (те же значения бэкенд пишет в prompt_tokens последнего assistant-сообщения истории).
-        const inputTokens = u?.inputTokens;
-        if (inputTokens != null) setLastPromptTokens(inputTokens);
+        // Накопительные итоги диалога сессии: суммируем usage и стоимость каждого ответа LLM.
+        const st = runStateRef.current.get(sid);
+        if (st) {
+          st.tokenTotals = accumulateTotals(st.tokenTotals, u, e.payload.costUsd);
+          // Текущий размер контекста = входные токены последнего реального запроса в LLM
+          // (те же значения бэкенд пишет в prompt_tokens последнего assistant-сообщения истории).
+          const inputTokens = u?.inputTokens;
+          if (inputTokens != null) st.lastPromptTokens = inputTokens;
+          if (sid === activeIdRef.current) {
+            setTokenTotals(st.tokenTotals);
+            setLastPromptTokens(st.lastPromptTokens);
+          }
+        }
         refreshGlobalStats();
         syncSessions();
         return;
       }
       case 'tool_call_started': {
         const tool = /^tool-(.+)-\d+$/.exec(e.stepId);
-        touchStep(key, e.timestamp, {
+        touchStep(sid, key, e.timestamp, {
           kind: 'tool',
           title: `Инструмент: ${tool ? tool[1] : e.stepId}`,
           toolName: tool ? tool[1] : undefined,
@@ -459,7 +565,7 @@ export function useAgentSession(): AgentSession {
         return;
       }
       case 'tool_call_finished': {
-        touchStep(key, e.timestamp, {
+        touchStep(sid, key, e.timestamp, {
           result: e.payload.result,
           status: e.payload.status === 'success' ? 'success' : 'error',
           explanation:
@@ -470,7 +576,7 @@ export function useAgentSession(): AgentSession {
         return;
       }
       case 'agent_finished': {
-        touchStep(key, e.timestamp, {
+        touchStep(sid, key, e.timestamp, {
           kind: 'answer',
           title: 'Ответ',
           status: 'success',
@@ -481,8 +587,33 @@ export function useAgentSession(): AgentSession {
         syncSessions();
         return;
       }
+      case 'context_summary_started': {
+        // Сжатие контекста: шаг показывает и сам запрос к LLM — какие сообщения уходят
+        // в резюмирование (раскройте «Контекст запроса в LLM»).
+        touchStep(sid, key, e.timestamp, {
+          kind: 'llm',
+          title: `Сжатие контекста: сворачиваю ${e.payload.foldCount} сообщений…`,
+          status: 'running',
+          prompt: e.payload.prompt,
+          explanation:
+            'Старые сообщения диалога сворачиваются в краткое summary: LLM получает прежнее резюме (если было), сами сообщения и в конце простой запрос «Сожми историю нашего диалога.» (с пометкой, что это служебное сообщение и запоминать его не нужно). Раскройте «Контекст запроса в LLM», чтобы увидеть точный промпт.',
+        });
+        return;
+      }
+      case 'context_summary_finished': {
+        touchStep(sid, key, e.timestamp, {
+          kind: 'llm',
+          title: `Сжатие контекста выполнено: ${e.payload.foldCount} сообщений → summary (LLM: вход ${e.payload.promptTokens} · выход ${e.payload.completionTokens} токенов)`,
+          status: 'success',
+          // Ответ LLM на запрос резюмирования — это и есть новое summary сессии.
+          result: e.payload.summary,
+          explanation:
+            'История свернута в summary («Результат» — дословный ответ LLM): следующий запрос к LLM уйдёт со сжатым контекстом вместо полных сообщений.',
+        });
+        return;
+      }
       case 'error': {
-        touchStep(`${e.runId}:error`, e.timestamp, {
+        touchStep(sid, `${e.runId}:error`, e.timestamp, {
           kind: 'error',
           title: 'Ошибка',
           status: 'error',
@@ -496,34 +627,40 @@ export function useAgentSession(): AgentSession {
     }
   }, [refreshGlobalStats, syncSessions]);
 
-  const finalizeAssistant = (finalText?: string, removeIfEmpty = false) => {
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === assistantIdRef.current);
-      if (idx === -1) return prev;
-      const target = prev[idx];
-      const content = finalText !== undefined ? finalText : target.content;
-      if (removeIfEmpty && content.trim() === '') {
-        return prev.filter((_, i) => i !== idx);
-      }
-      const next = [...prev];
+  const finalizeAssistant = (sid: string, finalText?: string, removeIfEmpty = false) => {
+    const st = runStateRef.current.get(sid);
+    if (!st) return;
+    const idx = st.messages.findIndex((m) => m.id === st.assistantId);
+    if (idx === -1) return;
+    const target = st.messages[idx];
+    const content = finalText !== undefined ? finalText : target.content;
+    if (removeIfEmpty && content.trim() === '') {
+      st.messages = st.messages.filter((_, i) => i !== idx);
+    } else {
+      const next = [...st.messages];
       next[idx] = { ...target, content, streaming: false };
-      return next;
-    });
+      st.messages = next;
+    }
+    if (sid === activeIdRef.current) setMessages(st.messages);
   };
 
   const run = useCallback(
     async (sid: string, text: string, isRetry: boolean) => {
+      // Каждая сессия владеет собственным стримом: параллельные запуски разных вкладок
+      // живут в своих AbortController'ах и буферах, независимо от активной вкладки.
+      const st = getRunState(sid);
       const controller = new AbortController();
-      abortRef.current = controller;
-      runSidRef.current = sid;
+      st.controller = controller;
+      runningSidsRef.current.add(sid);
+      setRunningCount((c) => c + 1);
       let receivedAny = false;
       try {
         await streamChat(sid, text, controller.signal, (e) => {
           receivedAny = true;
-          handleEvent(e);
+          handleEvent(e, sid);
           if (e.type === 'llm_token') {
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === assistantIdRef.current);
+            updateSessionMessages(sid, (prev, state) => {
+              const idx = prev.findIndex((m) => m.id === state.assistantId);
               if (idx === -1) return prev;
               const next = [...prev];
               next[idx] = { ...next[idx], content: next[idx].content + e.payload.delta, streaming: true };
@@ -535,8 +672,8 @@ export function useAgentSession(): AgentSession {
             // (tool_calls) — бэкенд сохраняет в сообщение usage последнего вызова, значения
             // совпадают с тем, что потом вернёт история.
             const u = e.payload.usage;
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === assistantIdRef.current);
+            updateSessionMessages(sid, (prev, state) => {
+              const idx = prev.findIndex((m) => m.id === state.assistantId);
               if (idx === -1) return prev;
               const next = [...prev];
               next[idx] = {
@@ -546,16 +683,32 @@ export function useAgentSession(): AgentSession {
               };
               return next;
             });
+          } else if (e.type === 'context_summary_finished') {
+            // Информация о сжатии — заметкой в самом чате, перед стримящимся ответом
+            // ассистента. Тот же текст, что бэкенд сохраняет в историю (role "system"),
+            // поэтому после перезагрузки заметка выглядит так же.
+            const p = e.payload;
+            const notice =
+              `Сжатие контекста: ${p.foldCount} старых сообщений свернуто в резюме. ` +
+              `Контекст: ${p.contextTokensBefore} → ${p.contextTokensAfter} токенов.`;
+            updateSessionMessages(sid, (prev, state) => {
+              const idx = prev.findIndex((m) => m.id === state.assistantId);
+              const noticeMsg: ChatMessage = { id: newId(), role: 'system', content: notice };
+              if (idx === -1) return [...prev, noticeMsg];
+              const next = [...prev];
+              next.splice(idx, 0, noticeMsg);
+              return next;
+            });
           } else if (e.type === 'agent_finished') {
-            setIsRunning(false);
-            finalizeAssistant(e.payload.finalText);
+            finalizeRun(sid);
+            finalizeAssistant(sid, e.payload.finalText);
           } else if (e.type === 'error') {
-            setIsRunning(false);
+            finalizeRun(sid);
             // Ошибка агента/LLM (в т.ч. «Ошибка LLM (finishReason=…)»): строка ошибки крепится
             // под пузырём ассистента запуска, а не в верхний баннер. Пустой пузырь не убираем —
             // строка ошибки должна остаться видимой. Верхний баннер — только для ошибок соединения.
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === assistantIdRef.current);
+            updateSessionMessages(sid, (prev, state) => {
+              const idx = prev.findIndex((m) => m.id === state.assistantId);
               if (idx === -1) return prev;
               const next = [...prev];
               next[idx] = { ...next[idx], streaming: false, error: e.payload.message };
@@ -565,12 +718,12 @@ export function useAgentSession(): AgentSession {
         });
         if (!controller.signal.aborted) {
           // поток закрылся штатно после agent_finished/error
-          setIsRunning(false);
+          finalizeRun(sid);
         }
       } catch (err) {
         if (controller.signal.aborted) {
-          finalizeAssistant(undefined, true);
-          setIsRunning(false);
+          finalizeAssistant(sid, undefined, true);
+          finalizeRun(sid);
           return;
         }
         // Разрыв SSE: если ни одного события не получили — авто-переподключение (1 попытка)
@@ -586,8 +739,8 @@ export function useAgentSession(): AgentSession {
         // Сетевой обрыв (TypeError «Failed to fetch») показываем как «Нет связи с сервером»,
         // а не сырым текстом браузера; ошибки с понятным текстом — дословно.
         setError(describeStreamError(err));
-        finalizeAssistant(undefined, true);
-        setIsRunning(false);
+        finalizeAssistant(sid, undefined, true);
+        finalizeRun(sid);
       }
     },
     [handleEvent],
@@ -608,22 +761,34 @@ export function useAgentSession(): AgentSession {
         });
         // Заголовок вкладки — первое сообщение пользователя.
         setTitles((prev) => ({ ...prev, [sid]: trimmed }));
+        activeIdRef.current = sid;
       }
       setError(null);
-      setMessages((prev) => [
-        ...prev,
+      // Сообщение и заглушка ассистента кладутся в буфер СВОЕЙ сессии; если она активна —
+      // сразу отражаются в живом виде.
+      const st = getRunState(sid);
+      const assistantId = newId();
+      st.assistantId = assistantId;
+      st.messages = [
+        ...st.messages,
         { id: newId(), role: 'user', content: trimmed },
-        { id: (assistantIdRef.current = newId()), role: 'assistant', content: '', streaming: true },
-      ]);
-      setIsRunning(true);
+        { id: assistantId, role: 'assistant', content: '', streaming: true },
+      ];
+      st.isRunning = true;
+      if (sid === activeIdRef.current) {
+        setMessages(st.messages);
+        setIsRunning(true);
+      }
       void run(sid, trimmed, false);
     },
     [isRunning, sessionId, run],
   );
 
+  /** Останавливает стрим Активной сессии (только её — чужие запуски не трогаем). */
   const stopAgent = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    if (sessionId == null) return;
+    runStateRef.current.get(sessionId)?.controller?.abort();
+  }, [sessionId]);
 
   /** Восстанавливает лог шагов сессии из кэша (или очищает, если кэша нет). */
   const restoreSteps = (id: string) => {
@@ -637,35 +802,40 @@ export function useAgentSession(): AgentSession {
     }
   };
 
-  /** Переключение на другую вкладку: сохраняет steps активной, восстанавливает target. */
+  /**
+   * Переключение на другую вкладку: сохраняет steps активной, восстанавливает target.
+   * Разрешено всегда (пока бэкенд работает) — переключение не гасит чужие стримы:
+   * фоновые запуски продолжают писать в свои буферы и «всплывут» при возврате.
+   */
   const switchSession = useCallback(
     (id: string) => {
-      if (isRunning || backendStopped || backendStarting) return;
+      if (backendStopped || backendStarting) return;
       if (id === activeId) return;
       if (activeId != null) {
         stepsCacheRef.current.set(activeId, Array.from(stepsRef.current.values()));
       }
-      // Итоги токенов и сообщения пер-сессионны: чужие данные предыдущей вкладки не
-      // должны мелькать (и тем более «протекать» при сбое загрузки истории). Реальные
-      // значения догружает эффект sessionId из истории новой вкладки; для локально
-      // созданной записи на бэкенде ещё нет — остаётся пустое состояние.
-      setMessages([]);
-      setTokenTotals({ promptTokens: 0, completionTokens: 0, costUsd: 0 });
-      setLastPromptTokens(null);
-      assistantIdRef.current = '';
+      // Буфер сессии — источник истины её сообщений/итогов токенов: отдаём его в живой вид.
+      // Для вкладки без буфера (никогда не открывалась) стартуем пусто — историю догрузит
+      // эффект sessionId; локально созданной записи на бэкенде ещё нет — пустое состояние.
+      const st = getRunState(id);
+      setMessages(st.messages);
+      setTokenTotals(st.tokenTotals);
+      setLastPromptTokens(st.lastPromptTokens);
+      setIsRunning(st.isRunning);
       restoreSteps(id);
+      activeIdRef.current = id;
       setTabsState((prev) => {
         const ids = prev.ids.includes(id) ? prev.ids : [...prev.ids, id];
         persistTabs(ids, id);
         return { ids, activeId: id };
       });
     },
-    [activeId, isRunning, backendStopped, backendStarting],
+    [activeId, backendStopped, backendStarting],
   );
 
-  /** Новая сессия: добавляет вкладку справа и переключает на неё. */
+  /** Новая сессия: добавляет вкладку справа и переключает на неё (в любой момент, даже при чужих запусках). */
   const newSession = useCallback(() => {
-    if (isRunning || backendStopped || backendStarting) return;
+    if (backendStopped || backendStarting) return;
     const fresh = newId();
     if (activeId != null) {
       stepsCacheRef.current.set(activeId, Array.from(stepsRef.current.values()));
@@ -675,27 +845,32 @@ export function useAgentSession(): AgentSession {
     localOnlyRef.current.add(fresh);
     // Итоги токенов пер-сессионны: новая сессия стартует с нуля, а не с суммы предыдущей.
     resetSessionView();
+    activeIdRef.current = fresh;
     setTabsState((prev) => {
       const ids = [...prev.ids, fresh];
       persistTabs(ids, fresh);
       return { ids, activeId: fresh };
     });
     pushSystemEvent('Начата новая сессия');
-  }, [activeId, isRunning, backendStopped, backendStarting, pushSystemEvent]);
+  }, [activeId, backendStopped, backendStarting, pushSystemEvent]);
 
   /**
    * Закрытие вкладки сессии: DELETE на бэкенде, убрать из вкладок. Если закрыли
    * активную — активировать соседа слева; если вкладок не осталось — пустое состояние.
-   * Заблокировано при isRunning || backendStopped || backendStarting.
+   * Разрешено всегда (пока бэкенд работает): стрим закрываемой сессии прерывается,
+   * запуски других сессий продолжают идти параллельно.
    */
   const closeSession = useCallback(
     (id: string) => {
-      if (isRunning || backendStopped || backendStarting) return;
+      if (backendStopped || backendStarting) return;
       void (async () => {
         const wasActive = id === activeId;
-        if (wasActive) {
-          abortRef.current?.abort();
-        }
+        // Стрим закрываемой сессии глушим независимо от того, активна она или нет;
+        // остальные буферы и стримы не трогаем.
+        const closing = runStateRef.current.get(id);
+        closing?.controller?.abort();
+        runStateRef.current.delete(id);
+        if (runningSidsRef.current.delete(id)) setRunningCount((c) => c - 1);
         try {
           await deleteSessionApi(id);
         } catch {
@@ -718,18 +893,20 @@ export function useAgentSession(): AgentSession {
         }
         if (nextActive !== null && nextActive !== activeId) {
           // Удалённая сессия не должна оставлять свои сообщения/итоги токенов на экране:
-          // сосед догружается эффектом sessionId из своей собственной истории.
-          setMessages([]);
-          setTokenTotals({ promptTokens: 0, completionTokens: 0, costUsd: 0 });
-          setLastPromptTokens(null);
-          assistantIdRef.current = '';
+          // сосед показывает свой буфер (в т.ч. флаг выполнения, если сосед «думает»);
+          // историю при необходимости догрузит эффект sessionId.
+          const t = getRunState(nextActive);
+          setMessages(t.messages);
+          setTokenTotals(t.tokenTotals);
+          setLastPromptTokens(t.lastPromptTokens);
+          setIsRunning(t.isRunning);
           restoreSteps(nextActive);
         }
         if (nextActive === null) {
           resetSessionView();
         }
         setError(null);
-        setIsRunning(false);
+        activeIdRef.current = nextActive;
         setTabsState({ ids, activeId: nextActive });
         persistTabs(ids, nextActive);
         refreshGlobalStats();
@@ -737,7 +914,7 @@ export function useAgentSession(): AgentSession {
         pushSystemEvent(wasActive ? 'Сессия удалена' : 'Сессия закрыта');
       })();
     },
-    [tabs, activeId, isRunning, backendStopped, backendStarting, refreshGlobalStats, syncSessions, pushSystemEvent],
+    [tabs, activeId, backendStopped, backendStarting, refreshGlobalStats, syncSessions, pushSystemEvent],
   );
 
   /** Удаление активной сессии (кнопка в ChatPanel) — синоним closeSession(activeId). */
@@ -753,7 +930,8 @@ export function useAgentSession(): AgentSession {
   const stopService = useCallback(() => {
     if (backendStopped || backendStarting) return;
     void (async () => {
-      abortRef.current?.abort(); // останавливаем активный стрим — бэкенд сейчас погаснет
+      // Бэкенд сейчас погаснет — прерываем ВСЕ активные стримы всех вкладок.
+      for (const s of runStateRef.current.values()) s.controller?.abort();
       pushSystemEvent('Остановка бэк-сервиса…');
       try {
         await stopBackendApi();
@@ -795,35 +973,32 @@ export function useAgentSession(): AgentSession {
           setRunSettings(s);
           runSettingsRef.current = s;
           // Страница могла быть открыта при неработающем сервисе — тогда история
-          // при монтировании не загрузилась. Догружаем её после восстановления.
+          // при монтировании не загрузилась. Догружаем её после восстановления,
+          // но только если буфер сессии ещё пуст (активный стрим не затираем).
           if (sessionId != null) {
             try {
               const h = await fetchHistory(sessionId);
-              setMessages((prev) => {
-                if (prev.length > 0) return prev;
-                return h.messages.map((m) => ({
-                  id: newId(),
-                  role: m.role,
-                  content: m.content,
-                  streaming: false,
-                  promptTokens: m.promptTokens ?? null,
-                  completionTokens: m.completionTokens ?? null,
-                }));
-              });
-              // Догруженные итоги токенов: перезаписываем (не суммируем); нет totals — нули.
-              setTokenTotals(
-                h.totals
+              const st = getRunState(sessionId);
+              if (st.messages.length === 0) {
+                st.messages = historyToMessages(h.messages);
+                // Догруженные итоги токенов: перезаписываем (не суммируем); нет totals — нули.
+                st.tokenTotals = h.totals
                   ? {
                       promptTokens: h.totals.promptTokens,
                       completionTokens: h.totals.completionTokens,
                       costUsd: h.totals.costUsd,
                     }
-                  : { promptTokens: 0, completionTokens: 0, costUsd: 0 },
-              );
-              const lastAssistant = [...h.messages]
-                .reverse()
-                .find((m) => m.role === 'assistant' && m.promptTokens != null);
-              setLastPromptTokens(lastAssistant?.promptTokens ?? null);
+                  : { promptTokens: 0, completionTokens: 0, costUsd: 0 };
+                const lastAssistant = [...h.messages]
+                  .reverse()
+                  .find((m) => m.role === 'assistant' && m.promptTokens != null);
+                st.lastPromptTokens = lastAssistant?.promptTokens ?? null;
+                if (sessionId === activeIdRef.current) {
+                  setMessages(st.messages);
+                  setTokenTotals(st.tokenTotals);
+                  setLastPromptTokens(st.lastPromptTokens);
+                }
+              }
               pushSystemEvent(
                 h.messages.length > 0
                   ? `История диалога загружена (${h.messages.length} сообщений)`
@@ -889,6 +1064,7 @@ export function useAgentSession(): AgentSession {
   }, [pushSystemEvent]);
 
   // восстановление истории активной сессии при монтировании (и при смене sessionId)
+  // восстановление истории активной сессии при монтировании (и при смене sessionId)
   useEffect(() => {
     if (sessionId == null) return;
     let cancelled = false;
@@ -899,34 +1075,34 @@ export function useAgentSession(): AgentSession {
       fetchHistory(sessionId)
         .then((h) => {
           if (cancelled) return;
-          setMessages(
-            h.messages.map((m) => ({
-              id: newId(),
-              role: m.role,
-              content: m.content,
-              streaming: false,
-              promptTokens: m.promptTokens ?? null,
-              completionTokens: m.completionTokens ?? null,
-            })),
-          );
+          // Сессия с активным стримом уже наполнила свой буфер свежими сообщениями:
+          // серверная история на этот момент устарела — живому буферу отдаём приоритет,
+          // чтобы возврат на вкладку не «откатил» только что накопленные токены.
+          const live = runStateRef.current.get(sessionId);
+          if (runningSidsRef.current.has(sessionId) && live && live.messages.length > 0) return;
+          const st = getRunState(sessionId);
+          st.messages = historyToMessages(h.messages);
           // Приведение накопительных итогов токенов к серверной истине сессии (перезапись,
           // не суммирование). Бэкенд не отдаёт totals (null) для сессий без единого токена —
           // приравниваем к нулям, чтобы не «протекали» итоги другой вкладки.
-          setTokenTotals(
-            h.totals
-              ? {
-                  promptTokens: h.totals.promptTokens,
-                  completionTokens: h.totals.completionTokens,
-                  costUsd: h.totals.costUsd,
-                }
-              : { promptTokens: 0, completionTokens: 0, costUsd: 0 },
-          );
+          st.tokenTotals = h.totals
+            ? {
+                promptTokens: h.totals.promptTokens,
+                completionTokens: h.totals.completionTokens,
+                costUsd: h.totals.costUsd,
+              }
+            : { promptTokens: 0, completionTokens: 0, costUsd: 0 };
           // Текущий размер контекста: prompt_tokens последнего assistant-сообщения истории
           // (== входные токены последнего запроса в LLM на бэкенде).
           const lastAssistant = [...h.messages]
             .reverse()
             .find((m) => m.role === 'assistant' && m.promptTokens != null);
-          setLastPromptTokens(lastAssistant?.promptTokens ?? null);
+          st.lastPromptTokens = lastAssistant?.promptTokens ?? null;
+          if (sessionId === activeIdRef.current) {
+            setMessages(st.messages);
+            setTokenTotals(st.tokenTotals);
+            setLastPromptTokens(st.lastPromptTokens);
+          }
           // Fallback заголовка вкладки: первое сообщение пользователя из истории.
           const firstUser = h.messages.find((m) => m.role === 'user');
           if (firstUser && firstUser.content.trim() !== '') {
@@ -949,12 +1125,8 @@ export function useAgentSession(): AgentSession {
     return () => {
       cancelled = true;
       startAbortedRef.current = true;
-      // Прерываем стрим, принадлежащий уходящей сессии (при размонтировании или
-      // переключении). При ленивом создании во время отправки стрим не трогаем:
-      // он относится к новой сессии и только что стартовал.
-      if (runSidRef.current == null || runSidRef.current === sessionId) {
-        abortRef.current?.abort();
-      }
+      // НЕ прерываем стрим: переключение вкладки не должно гасить фоновые запуски —
+      // стрим прерывается только stopAgent / closeSession / stopService.
     };
   }, [sessionId, pushSystemEvent]);
 
@@ -964,11 +1136,16 @@ export function useAgentSession(): AgentSession {
     syncSessions();
   }, [refreshGlobalStats, syncSessions]);
 
-  // После завершения генерации сверяем вкладки ещё раз: во время run чистка
-  // пропускается (guard isRunning), поэтому ловим переход isRunning -> false.
+  // После завершения ВСЕХ генераций сверяем вкладки ещё раз: во время любого run
+  // чистка пропускается (guard runningCount), поэтому ловим переход runningCount -> 0.
   useEffect(() => {
-    if (!isRunning) syncSessions();
-  }, [isRunning, syncSessions]);
+    if (runningCount === 0) syncSessions();
+  }, [runningCount, syncSessions]);
+
+  // Зеркало активной вкладки для колбэков фоновых стримов (маршрутизация событий).
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   return {
     sessionId,

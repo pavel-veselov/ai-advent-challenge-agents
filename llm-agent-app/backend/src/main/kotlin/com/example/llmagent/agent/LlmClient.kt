@@ -1,5 +1,6 @@
 package com.example.llmagent.agent
 
+import com.example.llmagent.config.LlmSettings
 import reactor.core.publisher.Flux
 
 /** События, порождаемые одним вызовом LLM в режиме стриминга. */
@@ -19,9 +20,12 @@ data class LlmUsage(
 )
 
 /**
- * Транспорт к LLM (mock или GPUStack).
+ * Транспорт к LLM — GPUStack (реальная интеграция; mock удалён).
  * Один вызов = один ответ модели в режиме стриминга.
+ *
+ * [settings] — применённые настройки ИМЕННО этого вызова (per-session в чат-потоке):
+ * клиент берёт из них model/temperature/maxTokens/reasoningEnabled/timeout на каждый запрос.
  */
 interface LlmClient {
-    fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent>
+    fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>, settings: LlmSettings): Flux<LlmEvent>
 }

@@ -1,8 +1,10 @@
 package com.example.llmagent.transport
 
 import com.example.llmagent.agent.ChatMessage
+import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionStore
 import com.example.llmagent.config.LlmProperties
+import com.example.llmagent.config.SessionLlmSettingsStore
 import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -12,7 +14,9 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 class HistoryController(
     private val sessionStore: SessionStore,
+    private val compressionStore: SessionCompressionStore,
     private val llm: LlmProperties,
+    private val sessionLlmSettingsStore: SessionLlmSettingsStore,
 ) {
 
     data class HistoryMessage(
@@ -64,6 +68,10 @@ class HistoryController(
     @DeleteMapping("/api/sessions/{sessionId}")
     fun delete(@PathVariable sessionId: String): DeleteResponse {
         sessionStore.delete(sessionId)
+        // Per-session данные сжатия (настройки и свёрнутое резюме) и настройки LLM — тоже часть
+        // сессии, чистим, чтобы после пересоздания сессии не оставалось «призрачных» настроек.
+        compressionStore.remove(sessionId)
+        sessionLlmSettingsStore.remove(sessionId)
         return DeleteResponse(true)
     }
 }

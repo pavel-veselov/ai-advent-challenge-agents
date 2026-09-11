@@ -40,3 +40,45 @@ CREATE TABLE IF NOT EXISTS app_models (
     id      TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL
 );
+
+-- Per-session настройки сжатия истории (см. SessionCompressionStore, GET/PUT
+-- /api/sessions/{sessionId}/compression). Строка отсутствует → значения по умолчанию:
+-- enabled=0 (выключено), keep_last=5, summary_every=10. Переживают перезапуск backend.
+CREATE TABLE IF NOT EXISTS session_compression (
+    session_id    TEXT PRIMARY KEY,
+    enabled       INTEGER NOT NULL DEFAULT 0,
+    keep_last     INTEGER NOT NULL DEFAULT 5,
+    summary_every INTEGER NOT NULL DEFAULT 10
+);
+
+-- Свёрнутое резюме истории сессии (см. SessionCompressionStore). upto_order — id
+-- последнего свёрнутого сообщения из chat_messages (граница «уже покрыто резюме»).
+-- Содержимое НИКОГДА не отдаётся наружу через history/sessions-эндпоинты — его
+-- читает только агент при построении контекста LLM-запроса.
+CREATE TABLE IF NOT EXISTS session_summaries (
+    session_id TEXT PRIMARY KEY,
+    summary    TEXT NOT NULL,
+    upto_order INTEGER NOT NULL
+);
+
+-- Per-session настройки LLM (см. SessionLlmSettingsStore, GET/PUT
+-- /api/sessions/{sessionId}/llm-settings). Строка отсутствует → применяются ТЕКУЩИЕ
+-- ГЛОБАЛЬНЫЕ настройки (app_settings / defaults) без их персистентности.
+-- ВСЕ редактируемые поля настройки LLM переопределяются per-session (те же поля, что у
+-- глобального /api/llm-settings, кроме provider — тот привязан к env): model/text и др.
+-- Колонки TEXT: NULL = не переопределено (действует ТЕКУЩЕЕ глобальное значение),
+-- иначе строковое представление значения ("qwen3.8-27b", "0.2", "500", "true"/"false").
+-- contextLimit НЕ хранится — выводится из эффективной модели по каталогу (как в глобальном PUT).
+-- Переживают перезапуск backend. Для старых БД недостающие колонки добавляет store (ALTER TABLE).
+CREATE TABLE IF NOT EXISTS session_llm_settings (
+    session_id          TEXT PRIMARY KEY,
+    model               TEXT,
+    temperature         TEXT,
+    top_p               TEXT,
+    top_k               TEXT,
+    max_tokens          TEXT,
+    timeout_seconds     TEXT,
+    price_input_per_1m  TEXT,
+    price_output_per_1m TEXT,
+    reasoning_enabled   TEXT
+);

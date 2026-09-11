@@ -14,6 +14,13 @@ data class ChatMessage(
     val completionTokens: Int? = null,
 )
 
+/** Сообщение истории вместе с идентификатором (для границ сжатия в сессии). */
+data class StoredMessage(
+    val id: Long,
+    val role: String,
+    val content: String,
+)
+
 /** Агрегаты по сессии: число сообщений и суммы колонок токенов (всегда 0, если токенов нет). */
 data class SessionAggregate(
     val sessionId: String,
@@ -91,6 +98,22 @@ class SessionStore(
             rowMapper,
             sessionId,
         )
+
+    /** Возвращает историю сессии с id в порядке вставки (ORDER BY id) — для сжатия. */
+    fun getStored(sessionId: String): List<StoredMessage> =
+        jdbcTemplate.query(
+            "SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY id",
+            { rs, _ -> StoredMessage(rs.getLong("id"), rs.getString("role"), rs.getString("content")) },
+            sessionId,
+        )
+
+    /** true, если у сессии есть хотя бы одно сохранённое сообщение. */
+    fun exists(sessionId: String): Boolean =
+        (jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?",
+            Long::class.java,
+            sessionId,
+        ) ?: 0L) > 0L
 
     /**
      * Агрегаты по токенам для каждой сессии: число сообщений, суммы колонок токенов и

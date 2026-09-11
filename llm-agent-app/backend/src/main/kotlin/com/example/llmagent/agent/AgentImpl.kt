@@ -2,8 +2,11 @@ package com.example.llmagent.agent
 
 import com.example.llmagent.config.AgentProperties
 import com.example.llmagent.config.LlmSettings
-import com.example.llmagent.config.LlmSettingsProvider
+import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.knuddels.jtokkit.Encodings
+import com.knuddels.jtokkit.api.EncodingType
+import com.knuddels.jtokkit.api.Encoding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.flux
@@ -24,9 +27,12 @@ class AgentImpl(
     private val toolRegistry: ToolRegistry,
     private val sessionStore: SessionStore,
     private val agentProperties: AgentProperties,
-    private val settingsProvider: LlmSettingsProvider,
-    /** Применённые настройки LLM — динамические ([DynamicLlmSettings]): контекст, maxTokens, тарифы. */
+    /** Глобальные применённые настройки LLM (тарифы стоимости, таймаут, fallback-контекст). */
     private val settings: LlmSettings,
+    /** Per-session настройки LLM — разрешение по sessionId для каждого run (см. SessionLlmSettingsProvider). */
+    private val sessionLlmSettings: SessionLlmSettingsProvider,
+    /** Per-session настройки сжатия истории и свёрнутые резюме (см. SessionCompressionStore). */
+    private val compressionStore: SessionCompressionStore,
     private val om: ObjectMapper,
 ) : Agent {
 
@@ -34,15 +40,124 @@ class AgentImpl(
 
     override fun run(sessionId: String, userMessage: String): Flux<AgentEvent> = flux {
         sessionStore.append(sessionId, "user", userMessage)
-        val messages = mutableListOf<LlmMessage>()
-        messages += LlmMessage("system", SYSTEM_PROMPT)
-        sessionStore.get(sessionId).forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
-
         val toolCounters = mutableMapOf<String, Int>()
         var iteration = 0
         var errorIdx = 0
 
-        send(AgentStarted(userMessage, settingsProvider.settings()))
+        // Per-session настройки LLM — ЭФФЕКТИВНЫЙ набор по всем редактируемым полям (model,
+        // temperature, topP, topK, maxTokens, timeoutSeconds, тарифы, reasoningEnabled)
+        // для каждого run. У сессии без сохранённой строки — текущие ГЛОБАЛЬНЫЕ значения
+        // (поведение как сегодня). Билдер запроса берёт параметры отсюда на каждый вызов.
+        val runSettings = sessionLlmSettings.resolve(sessionId)
+
+        send(AgentStarted(userMessage, runSettings.settings() + mapOf(
+            "maxToolCallIterations" to agentProperties.maxToolCallIterations,
+            "tools" to toolRegistry.names().sorted(),
+        )))
+
+        // Сжатие истории (per-session): старые сообщения сворачиваются в резюме, чтобы контекст
+        // LLM не рос бесконечно. Происходит ДО основного цикла, поэтому события context_summary_*
+        // НЕ входят в нумерацию итераций; stepId фиксирован. При сбое вызова резюмирования —
+        // error-событие и fail-open: run продолжается со всей историей (поведение без сжатия).
+        val compression = compressionStore.getSettings(sessionId)
+        val previousSummary = compressionStore.getSummary(sessionId)
+        // Итоговое резюме для контекста (если сжатие применяем): либо только что свёрнутое, либо прежнее.
+        var contextSummary: String? = previousSummary?.summary
+        // Сжимаем контекст (резюме + последние keepLast + вопрос); false — выключено/сбой/резюме
+        // ещё не создано → вся история.
+        var compressionActive = false
+        if (compression.enabled) {
+            // Системные заметки (информация о сжатии) — служебные: в резюме и в контекст не попадают.
+            val stored = sessionStore.getStored(sessionId).filter { it.role != "system" }
+            val keep = compression.keepLast
+            val summaryUpto = previousSummary?.uptoOrder ?: 0L
+            // «Складываемые» сообщения: ещё не покрыты резюме И вне хвоста, который остаётся
+            // в контексте дословно. Хвост и сам новый вопрос в резюмирование не уходят:
+            // последнее сообщение промпта-резюме — не вопрос пользователя, иначе модель
+            // резюмирования отвечает на вопрос вместо сжатия; и без дубля хвостового
+            // сообщения (оно и так остаётся в контексте «как есть»).
+            val foldable = stored
+                .filterIndexed { index, m -> index < stored.size - 1 - keep && m.id > summaryUpto }
+            if (foldable.size >= compression.summaryEvery) {
+                // Промпт резюмирования собирается заранее, чтобы уйти в событие
+                // context_summary_started: в логе шагов видно, что именно отправлено в LLM.
+                val summaryPrompt = buildSummaryPrompt(foldable, previousSummary?.summary)
+                send(ContextSummaryStarted(foldable.size, promptSnapshot(summaryPrompt)))
+                try {
+                    val result = summarize(summaryPrompt, runSettings)
+                    compressionStore.saveSummary(sessionId, result.text, foldable.last().id)
+                    // Оценка размера контекста (в токенах, эвристика — см. estimateTokens):
+                    // «до» — контекст без сжатия (system + вся история с новым вопросом),
+                    // «после» — сжатый контекст этого run (system + резюме + хвост + вопрос).
+                    val contextBefore = estimateTokens(
+                        listOf(LlmMessage("system", SYSTEM_PROMPT)) +
+                            stored.map { LlmMessage(it.role, it.content) },
+                    )
+                    val contextAfter = estimateTokens(
+                        listOf(
+                            LlmMessage("system", SYSTEM_PROMPT),
+                            LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX${result.text}"),
+                        ) +
+                            stored.dropLast(1).takeLast(keep).map { LlmMessage(it.role, it.content) } +
+                            listOf(LlmMessage("user", userMessage)),
+                    )
+                    send(
+                        ContextSummaryFinished(
+                            foldable.size,
+                            result.usage?.inputTokens ?: 0,
+                            result.usage?.outputTokens ?: 0,
+                            result.text,
+                            contextBefore,
+                            contextAfter,
+                        )
+                    )
+                    // Информация о сжатии — в самом чате: короткая системная заметка,
+                    // переживает перезагрузку. В LLM-контекст она не попадает:
+                    // role "system" отфильтровывается при сборке контекста ниже.
+                    sessionStore.append(
+                        sessionId,
+                        "system",
+                        "Сжатие контекста: ${foldable.size} старых сообщений свернуто в резюме. " +
+                            "Контекст: $contextBefore → $contextAfter токенов.",
+                    )
+                    contextSummary = result.text
+                    compressionActive = true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Сбой вызова резюмирования — не валим run: error-событие и продолжаем БЕЗ сжатия.
+                    log.warn("session={} compression LLM call failed, run continues without it: {}", sessionId, e.message)
+                    send(ErrorEvent(errorIdx++, "Ошибка сжатия истории: ${compressionFailureMessage(e)}. Продолжаю без сжатия."))
+                    compressionActive = false
+                }
+            } else {
+                // Порог не достигнут — применяем прежнее резюме, если оно уже есть;
+                // если резюме ещё нет, шлём полную историю: иначе старые сообщения
+                // выпадали бы из контекста без суммаризации (молчаливая потеря данных).
+                compressionActive = contextSummary != null
+            }
+        }
+
+        val messages = mutableListOf<LlmMessage>()
+        messages += LlmMessage("system", SYSTEM_PROMPT)
+        if (compressionActive) {
+            // Сжатый контекст: [резюме как сообщение] + последние keepLast сообщений «как есть» + новый вопрос.
+            if (contextSummary != null) {
+                messages += LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX$contextSummary")
+            }
+            // Системные заметки (информация о сжатии) в контекст не идут; фильтр ДО
+            // dropLast/takeLast: новая реплика — последнее не-системное сообщение.
+            sessionStore.getStored(sessionId)
+                .filter { it.role != "system" }
+                .dropLast(1) // новый вопрос уже в истории — добавляем его отдельно, без дубля
+                .takeLast(compression.keepLast)
+                .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+            messages += LlmMessage("user", userMessage)
+        } else {
+            sessionStore.getStored(sessionId)
+                .filter { it.role != "system" }
+                .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+        }
 
         try {
             while (true) {
@@ -62,7 +177,7 @@ class AgentImpl(
                 var finishReason = "stop"
                 var usage: LlmUsage? = null
 
-                val events = llmClient.streamChat(messages, toolRegistry.definitions())
+                val events = llmClient.streamChat(messages, toolRegistry.definitions(), runSettings)
                     .collectList()
                     .awaitSingle()
                 for (e in events) {
@@ -186,6 +301,72 @@ class AgentImpl(
             mapOf("role" to m.role, "content" to content)
         }
 
+    /**
+     * Сборка промпта вызова резюмирования: при наличии прежнее резюме («Предыдущее
+     * резюме»), сами сообщения с их настоящими ролями (user/assistant) и простой
+     * запрос на сжатие ПОСЛЕДНИМ сообщением — так модель отвечает на запрос,
+     * а не на последнее сообщение истории. Вынесена отдельно, чтобы тот же
+     * промпт ушёл в снимок события context_summary_started.
+     */
+    private fun buildSummaryPrompt(foldable: List<StoredMessage>, previousSummary: String?): List<LlmMessage> {
+        val prompt = mutableListOf<LlmMessage>()
+        if (previousSummary != null) {
+            prompt += LlmMessage("user", "Предыдущее резюме:\n$previousSummary")
+        }
+        foldable.forEach { prompt += LlmMessage(it.role, it.content) }
+        prompt += LlmMessage("user", SUMMARY_REQUEST_PROMPT)
+        return prompt
+    }
+
+    /**
+     * Вызов LLM для резюмирования по готовому промпту (см. [buildSummaryPrompt]).
+     * Инструменты не передаются: резюме — чисто текстовый ответ. Возвращает текст
+     * резюме и usage (если провайдер прислал). Бросает [LlmSummaryException] при
+     * ответе с ошибкой, вызовом инструмента или пустом тексте — вызывающий код
+     * переводит это в fail-open.
+     */
+    private suspend fun summarize(
+        prompt: List<LlmMessage>,
+        settings: LlmSettings,
+    ): SummaryResult {
+        val text = StringBuilder()
+        var usage: LlmUsage? = null
+        var finishReason = "stop"
+        val events = llmClient.streamChat(prompt, emptyList(), settings).collectList().awaitSingle()
+        for (e in events) {
+            when (e) {
+                is LlmEvent.ContentDelta -> text.append(e.delta)
+                is LlmEvent.Finished -> {
+                    finishReason = e.finishReason
+                    usage = e.usage
+                }
+                is LlmEvent.ToolCallsComplete -> Unit
+            }
+        }
+        if (finishReason == "error" || finishReason == "tool_calls") {
+            throw LlmSummaryException("LLM вернул finishReason=$finishReason вместо текстового резюме")
+        }
+        val summary = text.toString()
+        if (summary.isBlank()) {
+            throw LlmSummaryException("LLM вернул пустой ответ вместо резюме")
+        }
+        return SummaryResult(summary, usage)
+    }
+
+    /** Агрегированный результат вызова LLM-резюмирования. */
+    private data class SummaryResult(val text: String, val usage: LlmUsage?)
+
+    /**
+     * Человекочитаемая причина сбоя вызова резюмирования — в той же стилистике, что
+     * формулировки существующих error-событий основного цикла (LLM API / таймаут / связь).
+     */
+    private fun compressionFailureMessage(e: Exception): String = when (e) {
+        is LlmApiException -> "LLM API (HTTP ${e.status}): ${e.message}"
+        is TimeoutException -> "превышен таймаут ожидания ответа от LLM (${settings.timeoutSeconds()} с)"
+        is LlmSummaryException -> e.message ?: "внутренняя ошибка"
+        else -> upstreamConnectionMessage(e) ?: e.message ?: e.javaClass.simpleName
+    }
+
     private fun parseArgs(arguments: String?): Map<String, Any?> {
         if (arguments.isNullOrBlank()) return emptyMap()
         return try {
@@ -206,5 +387,31 @@ class AgentImpl(
             "Ты — полезный ассистент. Отвечай кратко и по делу. " +
                 "Используй доступные инструменты, когда это нужно для точного ответа " +
                 "(арифметические вычисления, текущие дата и время)."
+
+        /**
+         * Простой запрос на сжатие истории — обычное user-сообщение, замыкающее промпт
+         * резюмирования (без системного промпта). Ставится последним, чтобы модель
+         * отвечала именно на него, а не продолжала диалог по последнему сообщению.
+         */
+        const val SUMMARY_REQUEST_PROMPT =
+        "Сожми историю нашего диалога. Это служебное сообщение о сжатии — его запоминать и включать в резюме не нужно."
+
+        /** Префикс сообщения-резюме в сжатом контексте (system-роль). */
+        const val SUMMARY_CONTEXT_PREFIX = "Резюме ранее: "
+
+        /**
+         * Фактический подсчёт токенов в списке сообщений BPE-токенизатором o200k_base
+         * (jtokkit) — тот же класс разметки, что у современных OpenAI-моделей, для других
+         * провайдеров даёт значения, близкие к их usage. Сверх содержимого добавляется
+         * ~4 токена на сообщение — роль и служебная разметка чат-формата.
+         */
+        private val contextEncoding: Encoding = Encodings.newDefaultEncodingRegistry()
+            .getEncoding(EncodingType.O200K_BASE)
+
+        fun estimateTokens(messages: List<LlmMessage>): Int =
+            messages.sumOf { 4 + contextEncoding.countTokens(it.content ?: "") }
     }
 }
+
+/** Сбой вызова LLM-резюмирования (не текст/ошибка модели) — переводится в fail-open. */
+class LlmSummaryException(message: String) : RuntimeException(message)

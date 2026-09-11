@@ -48,6 +48,8 @@ export type AgentEventType =
   | 'tool_call_started'
   | 'tool_call_finished'
   | 'agent_finished'
+  | 'context_summary_started'
+  | 'context_summary_finished'
   | 'error';
 
 export interface BaseEvent<TType extends AgentEventType, TPayload> {
@@ -75,6 +77,19 @@ export type AgentEvent =
   | BaseEvent<'tool_call_started', { toolName: string; args: Record<string, unknown> }>
   | BaseEvent<'tool_call_finished', { result: string; status: 'success' | 'error' }>
   | BaseEvent<'agent_finished', { finalText: string }>
+  | BaseEvent<'context_summary_started', { foldCount: number; prompt: PromptMessage[] }>
+  | BaseEvent<
+      'context_summary_finished',
+      {
+        foldCount: number;
+        promptTokens: number;
+        completionTokens: number;
+        summary: string;
+        /** Оценка размера контекста до/после сжатия (эвристика бэкенда, токены). */
+        contextTokensBefore: number;
+        contextTokensAfter: number;
+      }
+    >
   | BaseEvent<'error', { message: string }>;
 
 // ---- API ----
@@ -84,7 +99,7 @@ export interface ChatRequest {
 }
 
 export interface HistoryMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   /** Токены промпта сообщения (бэкенд отдаёт для user-сообщений); null/undefined — неизвестно. */
   promptTokens?: number | null;
@@ -102,6 +117,64 @@ export interface HistoryResponse {
 /** Ответ DELETE /api/sessions/{sessionId}. */
 export interface DeleteResponse {
   deleted: boolean;
+}
+
+/**
+ * Настройки сжатия контекста одной сессии (GET/PUT /api/sessions/{sessionId}/compression).
+ * Когда ничего не сохранено, бэкенд отдаёт дефолты: enabled=false, keepLast=5, summaryEvery=10.
+ */
+export interface SessionCompression {
+  sessionId: string;
+  enabled: boolean;
+  /** Сколько последних сообщений оставлять «как есть» (1..50). */
+  keepLast: number;
+  /** Как часто сворачивать старые сообщения в summary (2..100). */
+  summaryEvery: number;
+}
+
+/** Частичное тело PUT /api/sessions/{sessionId}/compression. */
+export interface SessionCompressionPatch {
+  enabled?: boolean;
+  keepLast?: number;
+  summaryEvery?: number;
+}
+
+/**
+ * Настройки LLM одной сессии (GET/PUT /api/sessions/{sessionId}/llm-settings).
+ * Бэкенд отдаёт полный эффективный набор: переопределённые сессией поля + текущие
+ * глобальные значения для остальных (наследованные поля не персистятся).
+ * provider сюда не входит — он задаётся окружением на сервере.
+ */
+export interface SessionLlmSettings {
+  model: string;
+  /** Лимит контекста модели в токенах (следует модели из каталога). */
+  contextLimit: number;
+  temperature: number;
+  topP: number;
+  /** null — параметр не уходит в API. */
+  topK: number | null;
+  /** null — без лимита выходных токенов (используется дефолт бэкенда). */
+  maxTokens: number | null;
+  timeoutSeconds: number;
+  priceInputPer1M: number;
+  priceOutputPer1M: number;
+  reasoningEnabled: boolean;
+}
+
+/**
+ * Частичное тело PUT /api/sessions/{sessionId}/llm-settings.
+ * null снимает переопределение сессии — поле откатывается к текущему глобальному значению.
+ */
+export interface SessionLlmSettingsPatch {
+  model?: string;
+  temperature?: number;
+  topP?: number;
+  topK?: number | null;
+  maxTokens?: number | null;
+  timeoutSeconds?: number;
+  priceInputPer1M?: number;
+  priceOutputPer1M?: number;
+  reasoningEnabled?: boolean | null;
 }
 
 /** Ответ супервизорного контроля: POST /system-ctrl/stop и /system-ctrl/start. */
@@ -186,7 +259,8 @@ export interface StepLogEntry {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  /** system — служебная заметка бэкенда (например, информация о сжатии контекста). */
+  role: 'user' | 'assistant' | 'system';
   content: string;
   streaming?: boolean;
   /** Ошибка агента/LLM, привязанная к этому сообщению (рисуется строкой под пузырём). */

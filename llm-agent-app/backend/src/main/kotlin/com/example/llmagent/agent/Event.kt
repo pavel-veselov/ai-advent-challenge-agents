@@ -77,6 +77,47 @@ data class AgentFinished(val finalText: String) : AgentEvent {
     override val payload = mapOf("finalText" to finalText)
 }
 
+/**
+ * Начало вызова LLM для сжатия истории (per-session). Идёт ДО основного цикла,
+ * поэтому НЕ входит в нумерацию итераций (stepId фиксирован, без `<iteration>`).
+ * `prompt` — снимок промпта вызова резюмирования: что именно ушло в LLM
+ * (тот же формат, что у llm_request_started).
+ */
+data class ContextSummaryStarted(
+    val foldCount: Int,
+    val prompt: List<Map<String, String>>,
+) : AgentEvent {
+    override val type = "context_summary_started"
+    override val stepId = "context-summary"
+    override val payload = mapOf("foldCount" to foldCount, "prompt" to prompt)
+}
+
+/**
+ * Завершение вызова LLM для сжатия истории: токены из usage API (0, если провайдер
+ * их не прислал), текст резюме, который вернула LLM и который сохранён в сессии,
+ * и эвристическая оценка размера контекста ДО сжатия и ПОСЛЕ (токены, см.
+ * AgentImpl.estimateTokens).
+ */
+data class ContextSummaryFinished(
+    val foldCount: Int,
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val summary: String,
+    val contextTokensBefore: Int,
+    val contextTokensAfter: Int,
+) : AgentEvent {
+    override val type = "context_summary_finished"
+    override val stepId = "context-summary"
+    override val payload = mapOf(
+        "foldCount" to foldCount,
+        "promptTokens" to promptTokens,
+        "completionTokens" to completionTokens,
+        "summary" to summary,
+        "contextTokensBefore" to contextTokensBefore,
+        "contextTokensAfter" to contextTokensAfter,
+    )
+}
+
 data class ErrorEvent(val idx: Int, val message: String) : AgentEvent {
     override val type = "error"
     override val stepId = "error-$idx"

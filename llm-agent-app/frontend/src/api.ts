@@ -5,6 +5,10 @@
   DeleteResponse,
   HistoryResponse,
   RunSettings,
+  SessionCompression,
+  SessionCompressionPatch,
+  SessionLlmSettings,
+  SessionLlmSettingsPatch,
   SessionsResponse,
   StatsResponse,
 } from './types';
@@ -52,6 +56,62 @@ export async function deleteSession(sessionId: string): Promise<DeleteResponse> 
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete-session http ${res.status}`);
   return (await res.json()) as DeleteResponse;
+}
+
+/**
+ * Настройки сжатия контекста активной сессии: GET /api/sessions/{sessionId}/compression.
+ * Когда ничего не сохранено, бэкенд отдаёт дефолты (enabled=false, keepLast=5, summaryEvery=10).
+ */
+export async function fetchSessionCompression(sessionId: string): Promise<SessionCompression> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/compression`);
+  if (!res.ok) throw new Error(`compression http ${res.status}`);
+  return (await res.json()) as SessionCompression;
+}
+
+/**
+ * Обновление настроек сжатия контекста: PUT /api/sessions/{sessionId}/compression
+ * (частичное тело). Возвращает полное состояние; при ошибке бросает (UI откатывает черновики).
+ */
+export async function updateSessionCompression(
+  sessionId: string,
+  patch: SessionCompressionPatch,
+): Promise<SessionCompression> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/compression`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`compression PUT http ${res.status}`);
+  return (await res.json()) as SessionCompression;
+}
+
+/**
+ * Эффективные настройки LLM активной сессии: GET /api/sessions/{sessionId}/llm-settings.
+ * Полный набор: переопределённые сессией поля + текущие глобальные для остальных
+ * (наследованные поля не персистятся).
+ */
+export async function fetchSessionLlmSettings(sessionId: string): Promise<SessionLlmSettings> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/llm-settings`);
+  if (!res.ok) throw new Error(`session llm-settings http ${res.status}`);
+  return (await res.json()) as SessionLlmSettings;
+}
+
+/**
+ * Обновление настроек LLM сессии: PUT /api/sessions/{sessionId}/llm-settings (частичное тело,
+ * null снимает переопределение). Возвращает полный эффективный набор; при ошибке бросает
+ * (UI откатывает черновики).
+ */
+export async function updateSessionLlmSettings(
+  sessionId: string,
+  patch: SessionLlmSettingsPatch,
+): Promise<SessionLlmSettings> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/llm-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`session llm-settings PUT http ${res.status}`);
+  return (await res.json()) as SessionLlmSettings;
 }
 
 /** РљР°С‚Р°Р»РѕРі РІСЃРµС… СЃРµСЃСЃРёР№ СЃ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅС‹РјРё РјРµС‚СЂРёРєР°РјРё (GET /api/sessions). */

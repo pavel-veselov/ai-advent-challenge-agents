@@ -8,8 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties
  */
 @ConfigurationProperties(prefix = "llm")
 data class LlmProperties(
-    /** mock | gpustack */
-    val provider: String = "mock",
+    /** Провайдер LLM — фиксирован на реальной интеграции GPUStack (mock удалён). */
+    val provider: String = "gpustack",
     /** Базовый адрес GPUStack-сервера, например https://<GPUStack-URL> (без /v1). */
     val baseUrl: String = "",
     /** Bearer-ключ GPUStack. Никогда не выводить в логи. */

@@ -71,7 +71,7 @@ class DynamicLlmSettingsTest {
         val s = settings()
         s.update(mapOf("provider" to "gpustack", "temperature" to 0.5))
         // провайдер не изменился, остальные поля применились
-        assertEquals("mock", s.provider())
+        assertEquals("gpustack", s.provider())
         assertEquals(0.5, s.temperature())
     }
 

@@ -10,13 +10,17 @@ import java.nio.file.Path
  */
 object SqliteTestSupport {
 
-    /** Создаёт SessionStore поверх SQLite-файла dbFile (минимальная схема chat_messages). */
-    fun store(dbFile: Path): SessionStore {
+    /** JdbcTemplate поверх SQLite-файла dbFile (прямые слэши, чтобы Windows корректно распарсил путь). */
+    fun jdbc(dbFile: Path): JdbcTemplate {
         val ds = DriverManagerDataSource()
         ds.setDriverClassName("org.sqlite.JDBC")
-        // прямые слэши — чтобы jdbc:sqlite корректно распарсил путь на Windows
         ds.url = "jdbc:sqlite:${dbFile.toAbsolutePath().toString().replace('\\', '/')}"
-        val jdbc = JdbcTemplate(ds)
+        return JdbcTemplate(ds)
+    }
+
+    /** Создаёт SessionStore поверх SQLite-файла dbFile (минимальная схема chat_messages). */
+    fun store(dbFile: Path): SessionStore {
+        val jdbc = jdbc(dbFile)
         jdbc.execute(
             """
             CREATE TABLE IF NOT EXISTS chat_messages (

@@ -30,13 +30,31 @@ class GpuStackLlmClient(
         .baseUrl(baseUrl)
         .build()
 
-    override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> {
+    /**
+     * Старый 2-аргументный вызов — для совместимости (тесты/смоук): тянет настройки из
+     * конструктора. Чат-поток (AgentImpl) всегда передаёт per-session настройки явно.
+     */
+    fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+        streamChat(messages, tools, this.settings)
+
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+    ): Flux<LlmEvent> {
+        // Пустые tools — отдельный случай: некоторые OpenAI-совместимые бэкенды (gpustack) отвечают
+        // 400 и на `"tools": []`, и на `"tool_choice"` без `tools`. Оба поля уходят ЛИБО вместе
+        // (в основном цикле, где инструменты всегда регистрируются), ЛИБО ни одно — при пустом
+        // списке (вызов резюмирования истории). Прочие параметры (model/temperature/top_p/stream,
+        // опциональные top_k/max_tokens/chat_template_kwargs/stream_options) к инструментам
+        // отношения не имеют и уходят как раньше.
+        val hasTools = tools.isNotEmpty()
         val body = om.createObjectNode()
             .put("model", settings.model())
             .put("temperature", settings.temperature())
             .put("top_p", settings.topP())
             .put("stream", true)
-            .put("tool_choice", "auto")
+        if (hasTools) body.put("tool_choice", "auto")
         // top_k и max_tokens отправляем только если заданы (>0): не все OpenAI-совместимые
         // бэкенды принимают top_k, а max_tokens=0 бессмыслен.
         settings.topK()?.takeIf { it > 0 }?.let { body.put("top_k", it) }
@@ -50,8 +68,10 @@ class GpuStackLlmClient(
         body.putObject("stream_options").put("include_usage", true)
         val msgArr = body.putArray("messages")
         messages.forEach { msgArr.add(messageNode(it)) }
-        val toolsArr = body.putArray("tools")
-        tools.forEach { toolsArr.add(toolNode(it)) }
+        if (hasTools) {
+            val toolsArr = body.putArray("tools")
+            tools.forEach { toolsArr.add(toolNode(it)) }
+        }
 
         return Flux.defer {
             val acc = Pending()

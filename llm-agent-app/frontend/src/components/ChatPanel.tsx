@@ -107,6 +107,10 @@ export default function ChatPanel({
                 ) : null}
                 {m.error ? <div className="chat-msg-error">{m.error}</div> : null}
               </>
+            ) : m.role === 'system' ? (
+              // Служебная заметка бэкенда (например, информация о сжатии контекста) —
+              // приглушённая строка между репликами, без пузыря.
+              <span className="chat-msg-text chat-msg-system">{m.content}</span>
             ) : (
               <span className="chat-msg-text">
                 {m.content}

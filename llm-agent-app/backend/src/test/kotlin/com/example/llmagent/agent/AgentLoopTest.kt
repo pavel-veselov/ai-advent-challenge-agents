@@ -1,9 +1,10 @@
 package com.example.llmagent.agent
 
 import com.example.llmagent.config.AgentProperties
+import com.example.llmagent.config.JdbcSessionLlmSettingsStore
 import com.example.llmagent.config.LlmProperties
 import com.example.llmagent.config.LlmSettings
-import com.example.llmagent.config.LlmSettingsProvider
+import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.example.llmagent.agent.tools.CalculatorTool
 import com.example.llmagent.agent.tools.GetCurrentDateTimeTool
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -20,7 +21,11 @@ import java.time.Duration
 /** LLM со скриптом ответов: каждая итерация берёт следующий элемент. */
 private class ScriptedLlmClient(private val script: List<List<LlmEvent>>) : LlmClient {
     private val calls = java.util.concurrent.atomic.AtomicInteger(0)
-    override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> {
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+    ): Flux<LlmEvent> {
         val i = calls.getAndIncrement()
         if (i >= script.size) {
             throw IllegalStateException("Неожиданный дополнительный вызов LLM (#$i)")
@@ -36,13 +41,19 @@ class AgentLoopTest {
 
     // SQLite-хранилище на временном файле — агент теперь пишет историю в БД
     private val sessionStore: SessionStore by lazy { SqliteTestSupport.store(tmpDir.resolve("agent-loop.db")) }
+    private val llmSettingsStore: JdbcSessionLlmSettingsStore by lazy {
+        JdbcSessionLlmSettingsStore(SqliteTestSupport.jdbc(tmpDir.resolve("agent-loop-llm.db")))
+    }
     private val om = ObjectMapper()
     private val tools = ToolRegistry(listOf(CalculatorTool(), GetCurrentDateTimeTool()))
 
     private fun agent(llm: LlmClient, maxIterations: Int = 8, llmProps: LlmProperties = LlmProperties()): AgentImpl {
         val agentProps = AgentProperties(maxIterations)
-        val settingsProvider = LlmSettingsProvider(LlmSettings.from(llmProps), agentProps, tools)
-        return AgentImpl(llm, tools, sessionStore, agentProps, settingsProvider, LlmSettings.from(llmProps), om)
+        val sessionLlmSettings = SessionLlmSettingsProvider(llmSettingsStore, LlmSettings.from(llmProps))
+        val compressionStore = SessionCompressionStore(
+            SqliteTestSupport.jdbc(tmpDir.resolve("agent-loop-compression.db"))
+        )
+        return AgentImpl(llm, tools, sessionStore, agentProps, LlmSettings.from(llmProps), sessionLlmSettings, compressionStore, om)
     }
 
     @Test
@@ -116,7 +127,11 @@ class AgentLoopTest {
     @Test
     fun iterationLimitSurfacesClearError() {
         val alwaysTool = object : LlmClient {
-            override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+            override fun streamChat(
+                messages: List<LlmMessage>,
+                tools: List<ToolDefinition>,
+                settings: LlmSettings,
+            ): Flux<LlmEvent> =
                 Flux.just(
                     LlmEvent.ToolCallsComplete(
                         listOf(LlmToolCall(index = 0, id = "c", name = "calculator", arguments = "{\"expression\": \"1+1\"}"))
@@ -139,7 +154,11 @@ class AgentLoopTest {
     fun llmFailureProducesErrorInsteadOfFinalAnswer() {
         var requested = 0
         val broken = object : LlmClient {
-            override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> {
+            override fun streamChat(
+                messages: List<LlmMessage>,
+                tools: List<ToolDefinition>,
+                settings: LlmSettings,
+            ): Flux<LlmEvent> {
                 requested++
                 return Flux.error(RuntimeException("LLM сервис недоступен"))
             }
@@ -195,7 +214,11 @@ class AgentLoopTest {
     @Test
     fun llmApi4xxErrorProducesClearErrorEvent() {
         val broken = object : LlmClient {
-            override fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+            override fun streamChat(
+                messages: List<LlmMessage>,
+                tools: List<ToolDefinition>,
+                settings: LlmSettings,
+            ): Flux<LlmEvent> =
                 Flux.error(LlmApiException(401, "invalid api key"))
         }
 

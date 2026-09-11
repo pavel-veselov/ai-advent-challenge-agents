@@ -11,12 +11,18 @@ interface StatsBarProps {
   globalStats: StatsResponse | null;
 }
 
-/** Нижняя полоса статистики на всю ширину: текущая сессия слева, итоги за всё время справа. */
-export default function StatsBar({ tokenTotals, lastPromptTokens, runSettings, globalStats }: StatsBarProps) {
+/** Нижняя полоса статистики: токены запросов, размер контекста, итоги за всё время. */
+export default function StatsBar({
+  tokenTotals,
+  lastPromptTokens,
+  runSettings,
+  globalStats,
+}: StatsBarProps) {
   const contextLimit = runSettings?.contextLimit;
   const limit = contextLimit != null && contextLimit > 0 ? contextLimit : null;
   // Занято/осталось считаются от РАЗМЕРА КОНТЕКСТА последнего запроса (prompt_tokens последнего
-  // assistant-сообщения), а не от кумулятивной суммы промпта диалога. Нет ни одного запроса — занято 0%.
+  // реального вызова LLM), а не от кумулятивной суммы промпта диалога. Нет ни одного запроса —
+  // занято 0%, а сам «текущий контекст» показываем как «—».
   const contextSize = lastPromptTokens ?? 0;
   const pct =
     limit != null ? Math.min(100, Math.max(0, Math.round((contextSize / limit) * 100))) : null;
@@ -35,17 +41,27 @@ export default function StatsBar({ tokenTotals, lastPromptTokens, runSettings, g
   return (
     <footer className="stats-bar">
       <div className="stats-section">
-        <span className="stats-label">Текущая сессия:</span>
+        <span className="stats-label">Токены:</span>
         <span
           className="stats-badge"
           title="Каждый запрос пересылает историю заново — сумма больше текущего контекста"
         >
-          вход <b>{tokenTotals.promptTokens}</b> · ответ <b>{tokenTotals.completionTokens}</b> ·
+          вход <b>{tokenTotals.promptTokens}</b> · выход <b>{tokenTotals.completionTokens}</b> ·
           всего <b>{tokenTotals.promptTokens + tokenTotals.completionTokens}</b>
+        </span>
+      </div>
+      <div className="stats-divider" aria-hidden="true" />
+      <div className="stats-section">
+        <span className="stats-label">Контекст:</span>
+        <span
+          className="stats-badge"
+          title="Размер контекста последнего реального запроса в LLM: вся история, ушедшая модели. «—» — запросов ещё не было"
+        >
+          текущий <b>{lastPromptTokens ?? '—'}</b>
         </span>
         {limit != null && pct != null ? (
           <span className="stats-badge" title={`Лимит контекста модели: ${limit} входных токенов`}>
-            лимит контекста модели <b>{limit}</b> · занято <b>{pct}%</b>
+            лимит модели <b>{limit}</b> · занято <b>{pct}%</b>
           </span>
         ) : null}
         {remaining != null ? (
@@ -57,13 +73,14 @@ export default function StatsBar({ tokenTotals, lastPromptTokens, runSettings, g
           </span>
         ) : null}
       </div>
+      <div className="stats-divider" aria-hidden="true" />
       <div className="stats-section">
         <span className="stats-label">За все время:</span>
         <span
           className="stats-badge"
           title="Каждый запрос пересылает историю заново — сумма больше текущего контекста"
         >
-          вход <b>{fmtSlot(allPrompt)}</b> · ответ{' '}
+          вход <b>{fmtSlot(allPrompt)}</b> · выход{' '}
           <b>{fmtSlot(allCompletion)}</b> · всего <b>{fmtSlot(allTotal)}</b> · ~$
           <b>{allCostStr}</b>
         </span>

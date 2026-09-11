@@ -1,5 +1,7 @@
 package com.example.llmagent.transport
 
+import com.example.llmagent.agent.LlmClient
+import com.example.llmagent.agent.MockLlmClient
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -7,13 +9,29 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
+import org.springframework.context.annotation.Primary
 import org.springframework.http.MediaType
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.reactive.server.WebTestClient
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(ChatTransportIntegrationTest.FakeLlm::class)
 class ChatTransportIntegrationTest {
+
+    /**
+     * Фейковый LLM вместо реального GPUStack (mock из production удалён; здесь — тестовый
+     * детерминированный клиент, чтобы интеграционный тест не зависел от внешнего сервиса).
+     */
+    @TestConfiguration
+    class FakeLlm {
+        @Bean
+        @Primary
+        fun fakeLlmClient(): LlmClient = MockLlmClient()
+    }
 
     // Отдельный временный SQLite-файл, чтобы тесты не писали в рабочую БД ./data
     companion object {

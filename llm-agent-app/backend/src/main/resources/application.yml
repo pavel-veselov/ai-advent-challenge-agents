@@ -20,7 +20,7 @@ server:
     include-message: always
 
 llm:
-  provider: ${LLM_PROVIDER:mock}            # mock | gpustack
+  provider: ${LLM_PROVIDER:gpustack}        # только gpustack (mock удалён)
   base-url: ${LLM_BASE_URL:}                # например https://<GPUStack-URL> (без /v1)
   api-key: ${LLM_API_KEY:}                  # Bearer-ключ GPUStack (из настроек opencode)
   model: ${LLM_MODEL:default-coding}

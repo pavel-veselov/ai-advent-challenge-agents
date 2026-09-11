@@ -1,15 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RunSettings } from '../types';
+import {
+  fetchSessionCompression,
+  fetchSessionLlmSettings,
+  updateSessionCompression,
+  updateSessionLlmSettings,
+} from '../api';
+import type {
+  RunSettings,
+  SessionCompression,
+  SessionLlmSettings,
+  SessionLlmSettingsPatch,
+} from '../types';
 
 /**
- * Каталог моделей UI: id -> окно контекста в токенах (для подписи «NNN K» и отправки
- * contextLimit в PUT при смене модели). Порядок опций — как в ТЗ.
+ * Каталог моделей UI: id -> окно контекста в токенах (для подписи «NNN K»).
+ * contextLimit в PUT не уходит — бэкенд выводит его из каталога по модели.
+ * Порядок опций — как в ТЗ.
  */
 const MODEL_CATALOG = [
   { model: 'glm-5.3-flash', contextLimit: 262144 },
   { model: 'qwen3.8-27b', contextLimit: 202752 },
   { model: 'deepseek-v4-flash', contextLimit: 1048576 },
 ] as const;
+
+/**
+ * Дефолты сжатия контекста (совпадают с серверными): показываются, пока GET не вернул
+ * сохранённые значения и когда активной сессии нет (к ней применить нечего).
+ */
+const COMPRESSION_DEFAULTS = { enabled: false, keepLast: 5, summaryEvery: 10 } as const;
+/** Допустимые диапазоны (валидация дублируется на сервере: keepLast 1..50, summaryEvery 2..100). */
+const KEEP_LAST_MIN = 1;
+const KEEP_LAST_MAX = 50;
+const SUMMARY_EVERY_MIN = 2;
+const SUMMARY_EVERY_MAX = 100;
 
 /** Окно контекста в «K» (1K = 1024 токена): 262144 → «256K». */
 function contextSizeLabel(limit: number): string {
@@ -27,6 +50,20 @@ interface SaveState {
   status: SaveStatus;
   message: string | null;
 }
+
+/** Общий источник черновиков: RunSettings (глобал) или SessionLlmSettings (сессия). */
+type DraftSource = Pick<
+  RunSettings,
+  | 'model'
+  | 'temperature'
+  | 'topP'
+  | 'topK'
+  | 'maxTokens'
+  | 'timeoutSeconds'
+  | 'priceInputPer1M'
+  | 'priceOutputPer1M'
+  | 'reasoningEnabled'
+>;
 
 interface NumFieldProps {
   label: string;
@@ -78,7 +115,7 @@ function NumField({
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={onCommit}
+          onBlur={() => onCommit()}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
           }}
@@ -90,22 +127,28 @@ function NumField({
 }
 
 interface LlmSettingsProps {
-  /** Применённые настройки (GET /api/llm-settings при открытии + agent_started на каждом запуске); null — не загружены. */
+  /** Глобальные настройки (GET /api/llm-settings + agent_started); в сессионном режиме — только чип провайдера и показ при отсутствии сессии. */
   settings: RunSettings | null;
+  /** id активной сессии; null — пустое состояние: все поля заблокированы (применять не к чему). */
+  sessionId: string | null;
   /** true — сервис занят/выключен: редактирование заблокировано. */
   disabled: boolean;
-  /** PUT настроек + обновление state (contextLimit пересчитывается в StatsBar). Может бросить — тогда поля откатываются. */
-  onUpdate: (patch: Partial<RunSettings>) => Promise<unknown>;
 }
 
 /**
- * Блок настроек LLM над логом шагов. Группы: модель (сегментированный выбор с окном
- * контекста + провайдер-чип), генерация (temperature/top_p/top_k/лимит токенов + переключатель
- * рассуждений thinking, для glm-* заблокирован), запрос (таймаут), тарифы ($ за 1M). PUT уходит
- * на каждое изменение (как раньше; reasoningEnabled — с каждым PUT); в шапке — индикатор
+ * Блок настроек LLM над логом шагов. Все редактируемые поля привязаны к активной сессии
+ * (GET/PUT /api/sessions/{id}/llm-settings): у каждой сессии свой набор (модель, генерация,
+ * таймаут, тарифы, thinking); бэкенд отдаёт эффективный набор — переопределения сессии
+ * поверх текущих глобальных значений. Без активной сессии блок показывает глобальные
+ * значения, но редактирование заблокировано (применять не к чему). PUT уходит на каждое
+ * изменение (reasoningEnabled — с каждым PUT); в шапке — метка сессии и индикатор
  * «сохранение… / сохранено / ошибка», при неудаче черновики откатываются.
+ * Провайдер задаётся на сервере и показывается отдельным чипом.
+ * Сжатие контекста живёт на собственном GET/PUT /api/sessions/{id}/compression и сохраняется
+ * автоматически (тумблер — сразу, числа — по blur/Enter); без активной сессии секция
+ * показывает дефолты и заблокирована.
  */
-export default function LlmSettings({ settings, disabled, onUpdate }: LlmSettingsProps) {
+export default function LlmSettings({ settings, sessionId, disabled }: LlmSettingsProps) {
   // Локальные черновики редактируемых полей; синхронизируются с применёнными настройками.
   const [model, setModel] = useState(settings?.model ?? '');
   const [temperature, setTemperature] = useState(numStr(settings?.temperature));
@@ -119,8 +162,13 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const [reasoning, setReasoning] = useState(settings?.reasoningEnabled ?? true);
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle', message: null });
 
-  // Последние известные применённые настройки (для отката черновиков при ошибке PUT).
+  // Последние известные глобальные настройки (для показа без сессии и отката в глобальном режиме).
   const settingsRef = useRef<RunSettings | null>(settings);
+  // Эффективные настройки активной сессии; null — GET ещё не отработал/не удался
+  // (в UI это не влияет: редактирование доступно при любой активной сессии).
+  const sessionSettingsRef = useRef<SessionLlmSettings | null>(null);
+  /** Актуальный sessionId для отбрасывания устаревших ответов GET/PUT после смены сессии. */
+  const sessionIdRef = useRef<string | null>(sessionId);
   /** Оптимистичное значение переключателя — уходит в тело каждого PUT. */
   const reasoningRef = useRef<boolean>(settings?.reasoningEnabled ?? true);
   // PUT-ы сериализуются: следующий уходит после завершения предыдущего (без гонок ответов).
@@ -128,7 +176,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const pendingRef = useRef(0);
   const savedTimerRef = useRef<number | null>(null);
 
-  const applyDrafts = (s: RunSettings | null) => {
+  const applyDrafts = (s: DraftSource | null) => {
     setModel(s?.model ?? '');
     setTemperature(numStr(s?.temperature));
     setTopP(numStr(s?.topP));
@@ -142,12 +190,24 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     reasoningRef.current = nextReasoning;
   };
 
+  /**
+   * Источник истины для отката черновиков: сессия — настройки сессии; пока GET не ответил
+   * или не удался — глобальные значения (у свежей сессии переопределений ещё нет).
+   */
+  const currentEffective = (): DraftSource | null =>
+    sessionIdRef.current != null
+      ? (sessionSettingsRef.current ?? settingsRef.current)
+      : settingsRef.current;
+
   useEffect(() => {
     settingsRef.current = settings;
+    // В сессионном режиме черновики ведёт session-эффект: глобальный agent_started
+    // их не затирает (у сессии свой набор настроек).
+    if (sessionId != null) return;
     // Пока PUT в полёте — не затираем черновики ответом сервера (sync после завершения).
     if (pendingRef.current > 0) return;
     applyDrafts(settings);
-  }, [settings]);
+  }, [settings, sessionId]);
 
   useEffect(
     () => () => {
@@ -164,10 +224,13 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   };
 
   /**
-   * PUT изменений в очередь (сериализованно); при неудаче черновики откатываются
-   * к применённым настройкам и показывается инлайн-ошибка (без alert()).
+   * PUT изменений в очередь (сериализованно) — на эндпоинт активной сессии; при неудаче
+   * черновики откатываются к эффективному набору и показывается инлайн-ошибка (без alert()).
+   * Без активной сессии недостижимо (editable = false блокирует все поля).
    */
-  const enqueue = (patch: Partial<RunSettings>) => {
+  const enqueue = (patch: SessionLlmSettingsPatch) => {
+    const sid = sessionIdRef.current;
+    if (sid == null) return;
     if (savedTimerRef.current != null) {
       window.clearTimeout(savedTimerRef.current);
       savedTimerRef.current = null;
@@ -176,11 +239,14 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     setSaveState({ status: 'saving', message: null });
     // reasoningEnabled уходит с каждым PUT рядом с прочими изменёнными полями
     // (контракт: boolean = установить; переключатель участвует в каждом применении).
-    const body: Partial<RunSettings> = { reasoningEnabled: reasoningRef.current, ...patch };
+    const body: SessionLlmSettingsPatch = { reasoningEnabled: reasoningRef.current, ...patch };
     queueRef.current = queueRef.current.then(() =>
-      onUpdate(body).then(
-        () => {
+      updateSessionLlmSettings(sid, body).then(
+        (next) => {
           pendingRef.current -= 1;
+          // Сессия сменилась, пока PUT был в полёте — ответ чужой сессии не применяем.
+          if (sessionIdRef.current !== sid) return;
+          sessionSettingsRef.current = next;
           if (pendingRef.current === 0) {
             setSaveState({ status: 'saved', message: null });
             armSavedTimer();
@@ -188,7 +254,8 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
         },
         (err: unknown) => {
           pendingRef.current -= 1;
-          applyDrafts(settingsRef.current);
+          if (sessionIdRef.current !== sid) return;
+          applyDrafts(currentEffective());
           setSaveState({
             status: 'error',
             message: err instanceof Error ? err.message : String(err),
@@ -198,7 +265,9 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     );
   };
 
-  const editable = !disabled && settings != null;
+  // Редактирование доступно сразу после создания сессии («+»): GET мог ещё не ответить —
+  // черновики уже можно менять, PUT сохранит переопределения сессии на бэкенде.
+  const editable = !disabled && sessionId != null;
   const busy = saveState.status === 'saving';
   /** Для glm-* шлюз оставляет рассуждения принудительно — переключатель не редактируется. */
   const isGlmModel = model.trim().toLowerCase().startsWith('glm');
@@ -206,8 +275,8 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const commitModel = (value: string) => {
     if (!editable || busy) return;
     setModel(value);
-    const entry = MODEL_CATALOG.find((x) => x.model === value);
-    enqueue({ model: value, contextLimit: entry?.contextLimit });
+    // contextLimit следует модели из каталога на бэкенде — в PUT уходит только model.
+    enqueue({ model: value });
   };
 
   /**
@@ -225,7 +294,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const commitFloat = (
     draft: string,
     revert: () => void,
-    build: (n: number) => Partial<RunSettings>,
+    build: (n: number) => SessionLlmSettingsPatch,
   ) => {
     const v = draft.trim();
     const n = Number(v);
@@ -239,14 +308,14 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const commitTemperature = () =>
     commitFloat(
       temperature,
-      () => setTemperature(numStr(settingsRef.current?.temperature)),
+      () => setTemperature(numStr(currentEffective()?.temperature)),
       (n) => ({ temperature: n }),
     );
 
   const commitTopP = () =>
     commitFloat(
       topP,
-      () => setTopP(numStr(settingsRef.current?.topP)),
+      () => setTopP(numStr(currentEffective()?.topP)),
       (n) => ({ topP: n }),
     );
 
@@ -258,7 +327,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     }
     const n = Number(v);
     if (!Number.isFinite(n)) {
-      setTopK(numStr(settingsRef.current?.topK));
+      setTopK(numStr(currentEffective()?.topK));
       return;
     }
     enqueue({ topK: Math.round(n) });
@@ -272,7 +341,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     }
     const n = Number(v);
     if (!Number.isFinite(n)) {
-      setMaxTokens(numStr(settingsRef.current?.maxTokens));
+      setMaxTokens(numStr(currentEffective()?.maxTokens));
       return;
     }
     enqueue({ maxTokens: Math.round(n) });
@@ -281,7 +350,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
   const commitTimeout = () =>
     commitFloat(
       timeoutSeconds,
-      () => setTimeoutSeconds(numStr(settingsRef.current?.timeoutSeconds)),
+      () => setTimeoutSeconds(numStr(currentEffective()?.timeoutSeconds)),
       (n) => ({ timeoutSeconds: n }),
     );
 
@@ -290,7 +359,7 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     const v = priceInput.trim();
     const n = Number(v);
     if (v === '' || !Number.isFinite(n)) {
-      setPriceInput(numStr(settingsRef.current?.priceInputPer1M));
+      setPriceInput(numStr(currentEffective()?.priceInputPer1M));
       return;
     }
     enqueue({ priceInputPer1M: n });
@@ -300,16 +369,166 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
     const v = priceOutput.trim();
     const n = Number(v);
     if (v === '' || !Number.isFinite(n)) {
-      setPriceOutput(numStr(settingsRef.current?.priceOutputPer1M));
+      setPriceOutput(numStr(currentEffective()?.priceOutputPer1M));
       return;
     }
     enqueue({ priceOutputPer1M: n });
+  };
+
+  // --- Сжатие контекста (per-session: GET при монтировании/смене сессии, автосохранение PUT-ом) ---
+  /** Черновики секции: переключатель + два числа; синхронизируются с ответами GET/PUT. */
+  const [compEnabled, setCompEnabled] = useState<boolean>(COMPRESSION_DEFAULTS.enabled);
+  const [compKeepLast, setCompKeepLast] = useState(String(COMPRESSION_DEFAULTS.keepLast));
+  const [compSummaryEvery, setCompSummaryEvery] = useState(String(COMPRESSION_DEFAULTS.summaryEvery));
+  const [compSave, setCompSave] = useState<SaveState>({ status: 'idle', message: null });
+  /** Последние известные применённые настройки сжатия (для отката черновиков). */
+  const compStateRef = useRef<SessionCompression | null>(null);
+  const compSavedTimerRef = useRef<number | null>(null);
+
+  const applyCompDrafts = (s: SessionCompression | null) => {
+    setCompEnabled(s?.enabled ?? COMPRESSION_DEFAULTS.enabled);
+    setCompKeepLast(String(s?.keepLast ?? COMPRESSION_DEFAULTS.keepLast));
+    setCompSummaryEvery(String(s?.summaryEvery ?? COMPRESSION_DEFAULTS.summaryEvery));
+  };
+
+  // Загрузка значений активной сессии (настройки LLM + сжатие): при монтировании и на
+  // каждую смену сессии. Без активной сессии — глобальные значения для показа (редактирование
+  // заблокировано) и дефолты сжатия; свежая сессия без сообщений получает глобальный
+  // эффективный набор (GET), редактирование доступно сразу.
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    if (sessionId == null) {
+      compStateRef.current = null;
+      sessionSettingsRef.current = null;
+      applyCompDrafts(null);
+      setCompSave({ status: 'idle', message: null });
+      if (pendingRef.current === 0) applyDrafts(settingsRef.current);
+      setSaveState({ status: 'idle', message: null });
+      return;
+    }
+    let cancelled = false;
+    fetchSessionLlmSettings(sessionId)
+      .then((s) => {
+        if (cancelled) return;
+        sessionSettingsRef.current = s;
+        // Пока PUT в полёте — не затираем черновики (ответ PUT применит свежий набор).
+        if (pendingRef.current === 0) applyDrafts(s);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Эндпоинт недоступен (бэкенд ещё не поднялся / сеть) — показываем глобальные
+        // значения как черновик; редактирование остаётся доступным, PUT вернёт ошибку инлайном.
+        sessionSettingsRef.current = null;
+        if (pendingRef.current === 0) applyDrafts(settingsRef.current);
+      });
+    fetchSessionCompression(sessionId)
+      .then((s) => {
+        if (cancelled) return;
+        compStateRef.current = s;
+        applyCompDrafts(s);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Эндпоинт недоступен или сессия ещё не заведена на бэкенде — показываем дефолты.
+        compStateRef.current = null;
+        applyCompDrafts(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(
+    () => () => {
+      if (compSavedTimerRef.current != null) window.clearTimeout(compSavedTimerRef.current);
+    },
+    [],
+  );
+
+  const armCompSavedTimer = () => {
+    if (compSavedTimerRef.current != null) window.clearTimeout(compSavedTimerRef.current);
+    compSavedTimerRef.current = window.setTimeout(() => {
+      setCompSave((prev) => (prev.status === 'saved' ? { status: 'idle', message: null } : prev));
+    }, 2000);
+  };
+
+  const compDisabled = disabled || sessionId == null;
+  const compBusy = compSave.status === 'saving';
+
+  /**
+   * Автосохранение: PUT полного набора {enabled, keepLast, summaryEvery} для активной сессии.
+   * Вызывается тумблером (с явным nextEnabled, применяется оптимистично) и числовыми полями
+   * (blur/Enter, без аргумента — берётся текущее compEnabled). Значения вне диапазона —
+   * черновики откатываются (тумблер тоже), инлайн-ошибка, PUT не уходит; ошибка сети/бэкенда —
+   * откат к последним серверным значениям и инлайн-ошибка.
+   */
+  const commitCompression = (nextEnabled?: boolean) => {
+    const sid = sessionIdRef.current;
+    if (sid == null || compBusy) return;
+    // Не-boolean (на случай протечки события из обработчика) трактуем как «не менять тумблер».
+    const enabled = typeof nextEnabled === 'boolean' ? nextEnabled : compEnabled;
+    if (enabled !== compEnabled) setCompEnabled(enabled);
+    const kl = Number(compKeepLast.trim());
+    const se = Number(compSummaryEvery.trim());
+    const klOk =
+      Number.isFinite(kl) &&
+      Math.round(kl) >= KEEP_LAST_MIN &&
+      Math.round(kl) <= KEEP_LAST_MAX;
+    const seOk =
+      Number.isFinite(se) &&
+      Math.round(se) >= SUMMARY_EVERY_MIN &&
+      Math.round(se) <= SUMMARY_EVERY_MAX;
+    if (!klOk || !seOk) {
+      applyCompDrafts(compStateRef.current);
+      setCompSave({
+        status: 'error',
+        message: `значения вне диапазона: последних ${KEEP_LAST_MIN}–${KEEP_LAST_MAX}, каждых ${SUMMARY_EVERY_MIN}–${SUMMARY_EVERY_MAX}`,
+      });
+      return;
+    }
+    if (compSavedTimerRef.current != null) {
+      window.clearTimeout(compSavedTimerRef.current);
+      compSavedTimerRef.current = null;
+    }
+    setCompSave({ status: 'saving', message: null });
+    updateSessionCompression(sid, {
+      enabled,
+      keepLast: Math.round(kl),
+      summaryEvery: Math.round(se),
+    }).then(
+      (next) => {
+        // Сессия сменилась, пока PUT был в полёте — ответ чужой сессии не применяем.
+        if (sessionIdRef.current !== sid) return;
+        compStateRef.current = next;
+        applyCompDrafts(next);
+        setCompSave({ status: 'saved', message: null });
+        armCompSavedTimer();
+      },
+      (err: unknown) => {
+        if (sessionIdRef.current !== sid) return;
+        applyCompDrafts(compStateRef.current);
+        setCompSave({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
   };
 
   return (
     <section className="llm-settings-block">
       <header className="llm-settings-block-header">
         <h2>Настройки LLM</h2>
+        {sessionId != null ? (
+          <span
+            className="llm-session-cue"
+            title="Все поля применяются к активной сессии — у каждой сессии свой набор"
+          >
+            сессия ···{sessionId.slice(-8)}
+          </span>
+        ) : (
+          <span className="llm-hint">применяется к активной сессии</span>
+        )}
         {saveState.status !== 'idle' ? (
           <span
             className={`llm-save-state is-${saveState.status}`}
@@ -476,6 +695,75 @@ export default function LlmSettings({ settings, disabled, onUpdate }: LlmSetting
             />
           </div>
         </div>
+      </div>
+
+      <div className="llm-group">
+        <div className="llm-group-label">Сжатие контекста</div>
+        <div className="llm-reasoning-row">
+          <span className="llm-field-label">Сжатие контекста (summary)</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={compEnabled}
+            aria-label="Сжатие контекста (summary)"
+            className={`llm-switch${compEnabled ? ' is-on' : ''}`}
+            disabled={compDisabled || compBusy}
+            title="Сворачивать старые сообщения диалога в summary, чтобы контекст не переполнял окно модели"
+            onClick={() => commitCompression(!compEnabled)}
+          >
+            <span className="llm-switch-knob" />
+          </button>
+        </div>
+        {compEnabled ? (
+          <div className="llm-fields-row two">
+            <NumField
+              label="Последних сообщений как есть"
+              title="Сколько последних сообщений диалога оставлять без сжатия (1–50)"
+              value={compKeepLast}
+              unit="1–50"
+              step="1"
+              min="1"
+              max="50"
+              disabled={compDisabled}
+              onChange={setCompKeepLast}
+              onCommit={commitCompression}
+            />
+            <NumField
+              label="Summary каждые N сообщений"
+              title="Раз в сколько сообщений сворачивать старую историю в summary (2–100)"
+              value={compSummaryEvery}
+              unit="2–100"
+              step="1"
+              min="2"
+              max="100"
+              disabled={compDisabled}
+              onChange={setCompSummaryEvery}
+              onCommit={commitCompression}
+            />
+          </div>
+        ) : null}
+        <div className="llm-compression-row">
+          {sessionId == null ? (
+            <span className="llm-hint">применяется к активной сессии</span>
+          ) : compSave.status !== 'idle' ? (
+            <span
+              className={`llm-save-state is-${compSave.status}`}
+              role="status"
+              aria-live="polite"
+            >
+              {compSave.status === 'saving'
+                ? 'сохранение…'
+                : compSave.status === 'saved'
+                  ? 'сохранено'
+                  : 'ошибка'}
+            </span>
+          ) : null}
+        </div>
+        {compSave.status === 'error' ? (
+          <div className="llm-error-line" role="alert">
+            не удалось сохранить{compSave.message != null ? `: ${compSave.message}` : ''}
+          </div>
+        ) : null}
       </div>
     </section>
   );
