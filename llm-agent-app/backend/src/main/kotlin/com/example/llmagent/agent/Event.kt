@@ -123,3 +123,16 @@ data class ErrorEvent(val idx: Int, val message: String) : AgentEvent {
     override val stepId = "error-$idx"
     override val payload = mapOf("message" to message)
 }
+
+/**
+ * Обновление «липких фактов» сессии (strategy=sticky_facts): факты только что извлечены
+ * LLM, сохранены и в текущем run подмешаны в контекст. Идёт ДО основного цикла (как
+ * контекстные events сжатия), поэтому НЕ входит в нумерацию итераций: stepId фиксирован
+ * ("facts", вне numbering context_summary_*). Полезной нагрузки минимум — поля токенов
+ * намеренно нет: факты нужны только для контекста, а не для метрик.
+ */
+data class FactsUpdated(val facts: Map<String, String>) : AgentEvent {
+    override val type = "facts_updated"
+    override val stepId = "facts"
+    override val payload = mapOf("facts" to facts)
+}

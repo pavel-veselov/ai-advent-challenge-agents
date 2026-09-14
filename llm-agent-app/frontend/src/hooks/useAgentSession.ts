@@ -1,20 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  createBranch as createBranchApi,
   deleteSession as deleteSessionApi,
+  fetchBranches,
+  fetchContextStrategy,
+  fetchFacts,
   fetchGlobalStats,
   fetchHistory,
   fetchLlmSettings,
   fetchSessions,
+  setActiveBranch as setActiveBranchApi,
   startBackend as startBackendApi,
   stopBackend as stopBackendApi,
   streamChat,
+  updateContextStrategy,
   updateLlmSettings as updateLlmSettingsApi,
 } from '../api';
 import type {
   AgentEvent,
+  BranchesState,
   ChatMessage,
+  ContextStrategy,
   HistoryMessage,
+  HistoryResponse,
   RunSettings,
+  SessionContextStrategyPatch,
   StatsResponse,
   StepLogEntry,
   TokenTotals,
@@ -22,6 +32,9 @@ import type {
 
 const SESSION_KEY = 'llm-agent-session-id';
 const TABS_KEY = 'llm-agent-tabs';
+
+/** Дефолтный размер окна последних сообщений (sliding_window/sticky_facts) до ответа GET. */
+const DEFAULT_CONTEXT_WINDOW = 10;
 
 function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -64,12 +77,21 @@ interface SessionRunState {
   /** id ассистентского сообщения текущего стрима сессии (для приклейки токенов). */
   assistantId: string;
   controller: AbortController | null;
+  /** Стратегия контекста сессии (GET/PUT /context-strategy); 'none' — полная история. */
+  strategy: ContextStrategy;
+  /** Размер окна последних сообщений стратегии (sliding_window/sticky_facts; 1..50). */
+  windowSize: number;
+  /** Ключевые факты диалога сессии (GET /facts, события facts_updated); null — ещё не загружены. */
+  facts: Record<string, string> | null;
+  /** Ветки диалога сессии (GET/PUT /branches); null — ещё не загружены. */
+  branches: BranchesState | null;
 }
 
 /** Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming). */
 function historyToMessages(msgs: HistoryMessage[]): ChatMessage[] {
   return msgs.map((m) => ({
     id: newId(),
+    historyId: m.id,
     role: m.role,
     content: m.content,
     streaming: false,
@@ -164,8 +186,31 @@ export interface AgentSession {
   titles: Record<string, string>;
   /** Глобальная статистика по всем сессиям (GET /api/stats); null — ещё не загружена. */
   globalStats: StatsResponse | null;
+  /** Стратегия контекста активной сессии (свитчер в LlmSettings); 'none' — полная история. */
+  strategy: ContextStrategy;
+  /** Размер окна последних сообщений активной сессии (sliding_window/sticky_facts). */
+  windowSize: number;
+  /** Факты диалога активной сессии (GET /facts + события facts_updated); null — не загружены. */
+  facts: Record<string, string> | null;
+  /** Ветки диалога активной сессии (GET /branches); null — не загружены. */
+  branches: BranchesState | null;
   sendMessage: (text: string) => void;
   stopAgent: () => void;
+  /**
+   * Смена стратегии контекста сессии: PUT /context-strategy (оптимистично применяется,
+   * при ошибке откатывается), затем перечитывает историю (стратегия меняет вид сообщений).
+   */
+  changeContextStrategy: (sessionId: string, patch: SessionContextStrategyPatch) => Promise<void>;
+  /**
+   * Ветка сессии от сообщения истории: POST /branches {messageId}, затем обновляет список
+   * веток и перечитывает историю (новая ветка становится активной).
+   */
+  forkBranch: (sessionId: string, messageId: number) => Promise<void>;
+  /**
+   * Переключение активной ветки: PUT /branches {activeBranchId}, затем обновляет список веток
+   * и заменяет сообщения сессии историей новой активной ветки.
+   */
+  switchBranch: (sessionId: string, branchId: number) => Promise<void>;
   /** Удаление активной сессии: DELETE на бэкенде + закрытие вкладки (синоним closeSession(activeId)). */
   deleteSession: () => void;
   switchSession: (id: string) => void;
@@ -208,6 +253,14 @@ export function useAgentSession(): AgentSession {
   const [lastPromptTokens, setLastPromptTokens] = useState<number | null>(null);
   /** Глобальная статистика по всем сессиям (GET /api/stats); null — ещё не загружена. */
   const [globalStats, setGlobalStats] = useState<StatsResponse | null>(null);
+  /** Стратегия контекста активной сессии (зеркало буфера сессии). */
+  const [strategy, setStrategy] = useState<ContextStrategy>('none');
+  /** Размер окна последних сообщений активной сессии (зеркало буфера сессии). */
+  const [windowSize, setWindowSize] = useState(DEFAULT_CONTEXT_WINDOW);
+  /** Факты диалога активной сессии (зеркало буфера сессии); null — не загружены. */
+  const [facts, setFacts] = useState<Record<string, string> | null>(null);
+  /** Ветки диалога активной сессии (зеркало буфера сессии); null — не загружены. */
+  const [branches, setBranches] = useState<BranchesState | null>(null);
 
   /** sessionId -> буфер состояния выполнения (сообщения/итоги/стрим каждой сессии). */
   const runStateRef = useRef<Map<string, SessionRunState>>(new Map());
@@ -251,6 +304,10 @@ export function useAgentSession(): AgentSession {
         isRunning: false,
         assistantId: '',
         controller: null,
+        strategy: 'none',
+        windowSize: DEFAULT_CONTEXT_WINDOW,
+        facts: null,
+        branches: null,
       };
       runStateRef.current.set(sid, st);
     }
@@ -270,6 +327,192 @@ export function useAgentSession(): AgentSession {
     st.messages = updater(st.messages, st);
     if (sid === activeIdRef.current) setMessages(st.messages);
   };
+
+  /**
+   * Обновляет факты диалога сессии sid (событие facts_updated / GET /facts).
+   * Та же дисциплина роутинга, что и у updateSessionMessages: активная сессия — сразу
+   * в живой вид, фоновая — в буфер до переключения вкладки.
+   */
+  const updateSessionFacts = (sid: string, next: Record<string, string>) => {
+    const st = runStateRef.current.get(sid);
+    if (!st) return;
+    st.facts = next;
+    if (sid === activeIdRef.current) setFacts(next);
+  };
+
+  /**
+   * Накладывает ответ истории бэкенда на буфер сессии sid: сообщения, накопительные итоги
+   * токенов, текущий размер контекста (prompt_tokens последнего ответа ассистента). Активная
+   * сессия — сразу в живой вид; фоновая — в буфер. Общая функция для открытия сессии,
+   * восстановления после рестарта сервиса и перечитывания после смены стратегии/ветки.
+   */
+  const applyHistoryToRunState = useCallback((sid: string, h: HistoryResponse) => {
+    const st = getRunState(sid);
+    st.messages = historyToMessages(h.messages);
+    st.tokenTotals = h.totals
+      ? {
+          promptTokens: h.totals.promptTokens,
+          completionTokens: h.totals.completionTokens,
+          costUsd: h.totals.costUsd,
+        }
+      : { promptTokens: 0, completionTokens: 0, costUsd: 0 };
+    const lastAssistant = [...h.messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.promptTokens != null);
+    st.lastPromptTokens = lastAssistant?.promptTokens ?? null;
+    if (sid === activeIdRef.current) {
+      setMessages(st.messages);
+      setTokenTotals(st.tokenTotals);
+      setLastPromptTokens(st.lastPromptTokens);
+    }
+  }, []);
+
+  /**
+   * Перечитывает историю сессии sid с бэкенда и заменяет её сообщения (после смены ветки
+   * или стратегии). Замена идёт через тот же буферный роутинг, что и открытие сессии:
+   * активная вкладка — сразу в живой вид, фоновая — в буфер. Сессия с активным стримом
+   * уже наполнила буфер свежими сообщениями — серверная история на этот момент устарела,
+   * живому буферу отдаём приоритет (тот же guard, что и в эффекте открытия сессии).
+   * Ошибки чтения молча игнорируются — остаётся прежнее состояние.
+   */
+  const refreshSessionHistory = useCallback((sid: string): Promise<void> => {
+    return fetchHistory(sid)
+      .then((h) => {
+        const live = runStateRef.current.get(sid);
+        if (runningSidsRef.current.has(sid) && live && live.messages.length > 0) return;
+        applyHistoryToRunState(sid, h);
+      })
+      .catch(() => {});
+  }, [applyHistoryToRunState]);
+
+  /** Перечитывает факты сессии sid (GET /facts); ошибки игнорируются. */
+  const refreshFacts = useCallback((sid: string): Promise<void> => {
+    return fetchFacts(sid)
+      .then((f) => updateSessionFacts(sid, f.facts))
+      .catch(() => {});
+  }, []);
+
+  /** Перечитывает ветки сессии sid (GET /branches); ошибки игнорируются. */
+  const refreshBranches = useCallback((sid: string): Promise<void> => {
+    return fetchBranches(sid)
+      .then((b) => {
+        const st = getRunState(sid);
+        st.branches = b;
+        if (sid === activeIdRef.current) setBranches(b);
+      })
+      .catch(() => {});
+  }, []);
+
+  /**
+   * Загружает стратегию контекста, факты и ветки сессии (всё вместе с первичной загрузкой
+   * истории). isStale — предикат отмены (unmount/смена сессии): если вернул true, ответ
+   * отбрасывается (защита от гонок при быстром переключении вкладок).
+   */
+  const loadPerSessionExtras = (sid: string, isStale: () => boolean = () => false) => {
+    fetchContextStrategy(sid)
+      .then((s) => {
+        if (isStale()) return;
+        const st = getRunState(sid);
+        st.strategy = s.strategy;
+        st.windowSize = s.windowSize;
+        if (sid === activeIdRef.current) {
+          setStrategy(s.strategy);
+          setWindowSize(s.windowSize);
+        }
+      })
+      .catch(() => {
+        /* эндпоинт недоступен — остаются дефолты ('none' / DEFAULT_CONTEXT_WINDOW) */
+      });
+    fetchFacts(sid)
+      .then((f) => {
+        if (isStale()) return;
+        updateSessionFacts(sid, f.facts);
+      })
+      .catch(() => {
+        /* фактов ещё нет — остаётся null */
+      });
+    fetchBranches(sid)
+      .then((b) => {
+        if (isStale()) return;
+        const st = getRunState(sid);
+        st.branches = b;
+        if (sid === activeIdRef.current) setBranches(b);
+      })
+      .catch(() => {
+        /* веток ещё нет — остаётся null */
+      });
+  };
+
+  /**
+   * Смена стратегии контекста сессии: PUT /context-strategy. Применяется оптимистично
+   * (переключатель реагирует сразу), PUT подтверждает ответом сервера; при ошибке — откат
+   * к прежним значениям и повторный throw (UI показывает ошибку сохранения). После успеха
+   * перечитываем факты/ветки/историю — стратегия меняет вид сообщений (сжатие, цепочки веток).
+   */
+  const changeContextStrategy = useCallback(
+    async (sid: string, patch: SessionContextStrategyPatch): Promise<void> => {
+      const st = getRunState(sid);
+      const prevStrategy = st.strategy;
+      const prevWindowSize = st.windowSize;
+      if (patch.strategy !== undefined && patch.strategy !== st.strategy) {
+        st.strategy = patch.strategy;
+        if (sid === activeIdRef.current) setStrategy(patch.strategy);
+      }
+      if (patch.windowSize != null) {
+        st.windowSize = patch.windowSize;
+        if (sid === activeIdRef.current) setWindowSize(patch.windowSize);
+      }
+      try {
+        const next = await updateContextStrategy(sid, patch);
+        st.strategy = next.strategy;
+        st.windowSize = next.windowSize;
+        if (sid === activeIdRef.current) {
+          setStrategy(next.strategy);
+          setWindowSize(next.windowSize);
+        }
+        void refreshBranches(sid);
+        void refreshFacts(sid);
+        void refreshSessionHistory(sid);
+      } catch (err) {
+        st.strategy = prevStrategy;
+        st.windowSize = prevWindowSize;
+        if (sid === activeIdRef.current) {
+          setStrategy(prevStrategy);
+          setWindowSize(prevWindowSize);
+        }
+        throw err;
+      }
+    },
+    [refreshBranches, refreshFacts, refreshSessionHistory],
+  );
+
+  /** Ветка от сообщения истории: POST /branches, затем свежие ветки и история (новая — активна). */
+  const forkBranch = useCallback(
+    async (sid: string, messageId: number): Promise<void> => {
+      try {
+        await createBranchApi(sid, messageId);
+        await refreshBranches(sid);
+        await refreshSessionHistory(sid);
+      } catch {
+        /* ошибка ветвления молча игнорируется — состояние не меняем */
+      }
+    },
+    [refreshBranches, refreshSessionHistory],
+  );
+
+  /** Переключение активной ветки: PUT /branches, затем свежие ветки и история активной ветки. */
+  const switchBranch = useCallback(
+    async (sid: string, branchId: number): Promise<void> => {
+      try {
+        await setActiveBranchApi(sid, branchId);
+        await refreshBranches(sid);
+        await refreshSessionHistory(sid);
+      } catch {
+        /* ошибка переключения молча игнорируется — состояние не меняем */
+      }
+    },
+    [refreshBranches, refreshSessionHistory],
+  );
 
   /** Меняет лог шагов сессии: активной — сразу в живой вид, фоновой — в её кэш шагов. */
   const mutateSessionSteps = (sid: string, mutate: (map: Map<string, StepLogEntry>) => void) => {
@@ -293,7 +536,11 @@ export function useAgentSession(): AgentSession {
       if (sid === activeIdRef.current) setIsRunning(false);
     }
     if (runningSidsRef.current.delete(sid)) setRunningCount((c) => c - 1);
-  }, []);
+    // Живые сообщения не несут historyId (его присваивает бэкенд при сохранении истории).
+    // Перечитываем историю сразу после завершения прогона — иначе кнопки ветвления
+    // (им нужен historyId) не появятся до перезагрузки страницы или смены стратегии.
+    void refreshSessionHistory(sid);
+  }, [refreshSessionHistory]);
 
   /** Добавляет служебное событие жизненного цикла UI в лог шагов (kind = system). */
   const pushSystemEvent = useCallback((title: string) => {
@@ -388,6 +635,11 @@ export function useAgentSession(): AgentSession {
     setLastPromptTokens(null);
     setIsRunning(false);
     setError(null);
+    // Пер-сессионные стратегия/факты/ветки: новая сессия и пустое состояние стартуют начисто.
+    setStrategy('none');
+    setWindowSize(DEFAULT_CONTEXT_WINDOW);
+    setFacts(null);
+    setBranches(null);
   };
 
   /**
@@ -620,6 +872,12 @@ export function useAgentSession(): AgentSession {
           result: e.payload.message,
           explanation: 'Непредвиденная ошибка — работа агента остановлена.',
         });
+        return;
+      }
+      case 'facts_updated': {
+        // Живое обновление фактов диалога (sticky_facts): пишем в буфер сессии,
+        // активная — сразу в живой вид панели фактов.
+        updateSessionFacts(sid, e.payload.facts);
         return;
       }
       default:
@@ -980,24 +1238,8 @@ export function useAgentSession(): AgentSession {
               const h = await fetchHistory(sessionId);
               const st = getRunState(sessionId);
               if (st.messages.length === 0) {
-                st.messages = historyToMessages(h.messages);
-                // Догруженные итоги токенов: перезаписываем (не суммируем); нет totals — нули.
-                st.tokenTotals = h.totals
-                  ? {
-                      promptTokens: h.totals.promptTokens,
-                      completionTokens: h.totals.completionTokens,
-                      costUsd: h.totals.costUsd,
-                    }
-                  : { promptTokens: 0, completionTokens: 0, costUsd: 0 };
-                const lastAssistant = [...h.messages]
-                  .reverse()
-                  .find((m) => m.role === 'assistant' && m.promptTokens != null);
-                st.lastPromptTokens = lastAssistant?.promptTokens ?? null;
-                if (sessionId === activeIdRef.current) {
-                  setMessages(st.messages);
-                  setTokenTotals(st.tokenTotals);
-                  setLastPromptTokens(st.lastPromptTokens);
-                }
+                // Сообщения, итоги токенов и размер контекста — общей функцией наложения истории.
+                applyHistoryToRunState(sessionId, h);
               }
               pushSystemEvent(
                 h.messages.length > 0
@@ -1007,6 +1249,8 @@ export function useAgentSession(): AgentSession {
             } catch {
               /* история недоступна — оставляем чат как есть */
             }
+            // Стратегия/факты/ветки тоже не загрузились при неработающем сервисе — догружаем.
+            loadPerSessionExtras(sessionId);
           }
           // После восстановления сервиса обновляем глобальную статистику и сверяем вкладки.
           refreshGlobalStats();
@@ -1022,7 +1266,7 @@ export function useAgentSession(): AgentSession {
       pushSystemEvent('Бэк-сервис не запустился — попробуйте ещё раз');
       setBackendStarting(false);
     })();
-  }, [backendStopped, pushSystemEvent, sessionId, refreshGlobalStats, syncSessions]);
+  }, [backendStopped, pushSystemEvent, sessionId, applyHistoryToRunState, refreshGlobalStats, syncSessions]);
 
   /**
    * Сохранение настроек LLM: PUT + обновление общей state-настройки, чтобы contextLimit
@@ -1080,29 +1324,9 @@ export function useAgentSession(): AgentSession {
           // чтобы возврат на вкладку не «откатил» только что накопленные токены.
           const live = runStateRef.current.get(sessionId);
           if (runningSidsRef.current.has(sessionId) && live && live.messages.length > 0) return;
-          const st = getRunState(sessionId);
-          st.messages = historyToMessages(h.messages);
-          // Приведение накопительных итогов токенов к серверной истине сессии (перезапись,
-          // не суммирование). Бэкенд не отдаёт totals (null) для сессий без единого токена —
-          // приравниваем к нулям, чтобы не «протекали» итоги другой вкладки.
-          st.tokenTotals = h.totals
-            ? {
-                promptTokens: h.totals.promptTokens,
-                completionTokens: h.totals.completionTokens,
-                costUsd: h.totals.costUsd,
-              }
-            : { promptTokens: 0, completionTokens: 0, costUsd: 0 };
-          // Текущий размер контекста: prompt_tokens последнего assistant-сообщения истории
-          // (== входные токены последнего запроса в LLM на бэкенде).
-          const lastAssistant = [...h.messages]
-            .reverse()
-            .find((m) => m.role === 'assistant' && m.promptTokens != null);
-          st.lastPromptTokens = lastAssistant?.promptTokens ?? null;
-          if (sessionId === activeIdRef.current) {
-            setMessages(st.messages);
-            setTokenTotals(st.tokenTotals);
-            setLastPromptTokens(st.lastPromptTokens);
-          }
+          // Сообщения, накопительные итоги токенов и размер контекста — общей функцией
+          // наложения истории на буфер сессии (используется и при смене ветки/стратегии).
+          applyHistoryToRunState(sessionId, h);
           // Fallback заголовка вкладки: первое сообщение пользователя из истории.
           const firstUser = h.messages.find((m) => m.role === 'user');
           if (firstUser && firstUser.content.trim() !== '') {
@@ -1121,6 +1345,9 @@ export function useAgentSession(): AgentSession {
         .catch(() => {
           /* история недоступна — стартуем пустыми */
         });
+      // Стратегия контекста, факты и ветки сессии — вместе с первичной загрузкой истории
+      // (isStale отбрасывает ответы, пришедшие после переключения вкладки/размонтирования).
+      loadPerSessionExtras(sessionId, () => cancelled);
     }
     return () => {
       cancelled = true;
@@ -1128,7 +1355,7 @@ export function useAgentSession(): AgentSession {
       // НЕ прерываем стрим: переключение вкладки не должно гасить фоновые запуски —
       // стрим прерывается только stopAgent / closeSession / stopService.
     };
-  }, [sessionId, pushSystemEvent]);
+  }, [sessionId, applyHistoryToRunState, pushSystemEvent]);
 
   // Глобальная статистика + сверка вкладок с бэкендом при монтировании окна.
   useEffect(() => {
@@ -1141,6 +1368,20 @@ export function useAgentSession(): AgentSession {
   useEffect(() => {
     if (runningCount === 0) syncSessions();
   }, [runningCount, syncSessions]);
+
+  // Зеркала стратегии/фактов/веток активной сессии: при смене вкладки копируем из её буфера.
+  // Пер-сессионный источник истины этих значений — SessionRunState, как и у сообщений.
+  useEffect(() => {
+    if (sessionId == null) {
+      resetSessionView();
+      return;
+    }
+    const st = getRunState(sessionId);
+    setStrategy(st.strategy);
+    setWindowSize(st.windowSize);
+    setFacts(st.facts);
+    setBranches(st.branches);
+  }, [sessionId]);
 
   // Зеркало активной вкладки для колбэков фоновых стримов (маршрутизация событий).
   useEffect(() => {
@@ -1162,8 +1403,15 @@ export function useAgentSession(): AgentSession {
     activeId,
     titles,
     globalStats,
+    strategy,
+    windowSize,
+    facts,
+    branches,
     sendMessage,
     stopAgent,
+    changeContextStrategy,
+    forkBranch,
+    switchBranch,
     deleteSession,
     switchSession,
     newSession,

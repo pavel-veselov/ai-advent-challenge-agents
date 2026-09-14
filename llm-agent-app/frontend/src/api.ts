@@ -1,12 +1,17 @@
 ﻿import type {
   AgentEvent,
+  BranchInfo,
+  BranchesState,
   ChatRequest,
   ControlResponse,
   DeleteResponse,
+  FactsState,
   HistoryResponse,
   RunSettings,
   SessionCompression,
   SessionCompressionPatch,
+  SessionContextStrategyPatch,
+  SessionContextStrategyState,
   SessionLlmSettings,
   SessionLlmSettingsPatch,
   SessionsResponse,
@@ -83,6 +88,81 @@ export async function updateSessionCompression(
   });
   if (!res.ok) throw new Error(`compression PUT http ${res.status}`);
   return (await res.json()) as SessionCompression;
+}
+
+/**
+ * Стратегия управления контекстом активной сессии: GET /api/sessions/{sessionId}/context-strategy.
+ * Когда ничего не сохранено, бэкенд отдаёт дефолт: strategy="none".
+ */
+export async function fetchContextStrategy(sessionId: string): Promise<SessionContextStrategyState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-strategy`);
+  if (!res.ok) throw new Error(`context-strategy http ${res.status}`);
+  return (await res.json()) as SessionContextStrategyState;
+}
+
+/**
+ * Обновление стратегии контекста: PUT /api/sessions/{sessionId}/context-strategy
+ * (частичное тело {strategy?, windowSize?}). 400 — на невалидные значения. Возвращает
+ * полное состояние; при ошибке бросает (UI откатывает).
+ */
+export async function updateContextStrategy(
+  sessionId: string,
+  patch: SessionContextStrategyPatch,
+): Promise<SessionContextStrategyState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-strategy`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`context-strategy PUT http ${res.status}`);
+  return (await res.json()) as SessionContextStrategyState;
+}
+
+/**
+ * Факты диалога сессии: GET /api/sessions/{sessionId}/facts.
+ * Порядок ключей = порядок вставки (живёт также в событиях SSE facts_updated).
+ */
+export async function fetchFacts(sessionId: string): Promise<FactsState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/facts`);
+  if (!res.ok) throw new Error(`facts http ${res.status}`);
+  return (await res.json()) as FactsState;
+}
+
+/**
+ * Ветки диалога сессии: GET /api/sessions/{sessionId}/branches (активная ветка + список).
+ */
+export async function fetchBranches(sessionId: string): Promise<BranchesState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/branches`);
+  if (!res.ok) throw new Error(`branches http ${res.status}`);
+  return (await res.json()) as BranchesState;
+}
+
+/**
+ * Новая ветка от сообщения истории: POST /api/sessions/{sessionId}/branches
+ * {messageId: <id из истории>}. Новая ветка становится активной.
+ */
+export async function createBranch(sessionId: string, messageId: number): Promise<BranchInfo> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/branches`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageId }),
+  });
+  if (!res.ok) throw new Error(`branches POST http ${res.status}`);
+  return (await res.json()) as BranchInfo;
+}
+
+/**
+ * Переключение активной ветки: PUT /api/sessions/{sessionId}/branches
+ * {activeBranchId}; возвращает полный GET-шейп веток.
+ */
+export async function setActiveBranch(sessionId: string, branchId: number): Promise<BranchesState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/branches`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activeBranchId: branchId }),
+  });
+  if (!res.ok) throw new Error(`branches PUT http ${res.status}`);
+  return (await res.json()) as BranchesState;
 }
 
 /**

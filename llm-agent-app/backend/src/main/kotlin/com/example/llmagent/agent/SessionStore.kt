@@ -3,9 +3,12 @@ package com.example.llmagent.agent
 import com.example.llmagent.config.LlmProperties
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.RowMapper
+import org.springframework.jdbc.support.GeneratedKeyHolder
 import org.springframework.stereotype.Component
 
 data class ChatMessage(
+    /** Идентификатор строки в chat_messages (для history/веток); null — если не загружен. */
+    val id: Long? = null,
     val role: String,
     val content: String,
     /** Токены запроса (оценка) для user, точные из usage для assistant; null — неизвестно. */
@@ -19,6 +22,8 @@ data class StoredMessage(
     val id: Long,
     val role: String,
     val content: String,
+    /** id предыдущего сообщения той же ветки (branching); null — корень/системная заметка. */
+    val parentId: Long? = null,
 )
 
 /** Агрегаты по сессии: число сообщений и суммы колонок токенов (всегда 0, если токенов нет). */
@@ -54,6 +59,12 @@ class SessionStore(
     private val jdbcTemplate: JdbcTemplate,
     /** Тарифы для условной стоимости — только для бэкафилла lifetime_stats. */
     private val llm: LlmProperties = LlmProperties(),
+    /**
+     * Хранилище веток (branching). Дерево parent_id поддерживается ВО ВСЕХ стратегиях
+     * (см. [append]), но только когда ветки подключены — юнит-тесты без него строятся
+     * как раньше (веток нет, parent_id остаётся NULL).
+     */
+    private val branchStore: SessionBranchStore? = null,
 ) {
 
     init {
@@ -62,6 +73,7 @@ class SessionStore(
 
     private val rowMapper = RowMapper<ChatMessage> { rs, _ ->
         ChatMessage(
+            id = rs.getLong("id"),
             role = rs.getString("role"),
             content = rs.getString("content"),
             promptTokens = rs.getNullableInt("prompt_tokens"),
@@ -69,43 +81,188 @@ class SessionStore(
         )
     }
 
-    /** Добавляет сообщение в историю сессии без токенов (совместимость). */
-    fun append(sessionId: String, role: String, content: String) {
-        append(sessionId, role, content, null, null)
+    /** Добавляет сообщение в историю сессии без токенов (совместимость). Возвращает id нового сообщения. */
+    fun append(sessionId: String, role: String, content: String): Long {
+        return append(sessionId, role, content, null, null)
     }
 
-    /** Добавляет сообщение с учётом токенов (prompt_tokens / completion_tokens). */
-    fun append(sessionId: String, role: String, content: String, promptTokens: Int?, completionTokens: Int?) {
+    /** Добавляет сообщение с учётом токенов (prompt_tokens / completion_tokens). Возвращает id нового сообщения. */
+    fun append(sessionId: String, role: String, content: String, promptTokens: Int?, completionTokens: Int?): Long {
         // Первая запись «создаёт» сессию — увеличиваем кумулятивный счётчик «за всё время».
         val isNewSession = (jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?",
             Long::class.java,
             sessionId,
         ) ?: 0L) == 0L
-        jdbcTemplate.update(
-            "INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens) VALUES (?, ?, ?, ?, ?)",
-            sessionId, role, content, promptTokens, completionTokens,
-        )
+
+        // Поддержка дерева веток (branching): каждый не-системный append прикрепляет новое
+        // сообщение к голове активной ветки и двигает голову к нему; системные заметки
+        // (о сжатии) голову НЕ двигают и parent_id не получают. Тот же путь для ВСЕХ
+        // стратегий — дерево остаётся согласованным без дополнительного обслуживания в AgentImpl.
+        val newId: Long = if (role != "system" && branchStore != null) {
+            if (branchStore.list(sessionId).isEmpty()) {
+                // Первое не-системное сообщение после отсутствия веток: линейный бэккафилл
+                // уже накопленной истории (parent_id = предыдущее не-системное) и ветка
+                // «Основная», голова которой — последнее не-системное сообщение истории.
+                backfillLinearParents(sessionId)
+                branchStore.ensureDefault(sessionId, getStored(sessionId).lastOrNull { it.role != "system" }?.id)
+            }
+            val branch = branchStore.effectiveBranch(sessionId)
+                ?: error("branching невозможно: нет ни одной ветки сессии $sessionId")
+            val id = insert(sessionId, role, content, promptTokens, completionTokens, branch.headMessageId)
+            branchStore.advanceHead(sessionId, branch.id, id)
+            id
+        } else {
+            insert(sessionId, role, content, promptTokens, completionTokens, null)
+        }
+
         if (isNewSession) {
             incrementLifetimeSessions()
         }
+        return newId
+    }
+
+    /** Вставляет сообщение и возвращает его id (GeneratedKeyHolder — надёжно для SQLite). */
+    private fun insert(
+        sessionId: String,
+        role: String,
+        content: String,
+        promptTokens: Int?,
+        completionTokens: Int?,
+        parentId: Long?,
+    ): Long {
+        val keyHolder = GeneratedKeyHolder()
+        jdbcTemplate.update({ connection ->
+            val ps = if (parentId != null) {
+                connection.prepareStatement(
+                    "INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens, parent_id) " +
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                    arrayOf("id"),
+                )
+            } else {
+                connection.prepareStatement(
+                    "INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens) " +
+                        "VALUES (?, ?, ?, ?, ?)",
+                    arrayOf("id"),
+                )
+            }
+            ps.setString(1, sessionId)
+            ps.setString(2, role)
+            ps.setString(3, content)
+            ps.setObject(4, promptTokens)
+            ps.setObject(5, completionTokens)
+            if (parentId != null) ps.setLong(6, parentId)
+            ps
+        }, keyHolder)
+        return keyHolder.key?.toLong()
+            ?: throw IllegalStateException("Не удалось получить id нового сообщения сессии $sessionId")
     }
 
     /** Возвращает историю сессии в порядке вставки (ORDER BY id). */
     fun get(sessionId: String): List<ChatMessage> =
         jdbcTemplate.query(
-            "SELECT role, content, prompt_tokens, completion_tokens FROM chat_messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, prompt_tokens, completion_tokens FROM chat_messages WHERE session_id = ? ORDER BY id",
             rowMapper,
             sessionId,
         )
 
-    /** Возвращает историю сессии с id в порядке вставки (ORDER BY id) — для сжатия. */
+    /** Возвращает историю сессии с id в порядке вставки (ORDER BY id) — для сжатия и веток. */
     fun getStored(sessionId: String): List<StoredMessage> =
         jdbcTemplate.query(
-            "SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY id",
-            { rs, _ -> StoredMessage(rs.getLong("id"), rs.getString("role"), rs.getString("content")) },
+            "SELECT id, role, content, parent_id FROM chat_messages WHERE session_id = ? ORDER BY id",
+            { rs, _ ->
+                StoredMessage(
+                    id = rs.getLong("id"),
+                    role = rs.getString("role"),
+                    content = rs.getString("content"),
+                    parentId = rs.getNullableLong("parent_id"),
+                )
+            },
             sessionId,
         )
+
+    /** Сообщение сессии по id (для валидации messageId в POST /api/sessions/{id}/branches); null — нет. */
+    fun getStoredById(sessionId: String, id: Long): StoredMessage? =
+        jdbcTemplate.query(
+            "SELECT id, role, content, parent_id FROM chat_messages WHERE session_id = ? AND id = ?",
+            { rs, _ ->
+                StoredMessage(
+                    id = rs.getLong("id"),
+                    role = rs.getString("role"),
+                    content = rs.getString("content"),
+                    parentId = rs.getNullableLong("parent_id"),
+                )
+            },
+            sessionId, id,
+        ).firstOrNull()
+
+    /**
+     * Цепочка сообщений ветки: поднимаемся по parent_id от головы до корня (parent_id IS NULL)
+     * и разворачиваем в хронологическом порядке (корень → голова). ВОЗВРАЩАЕТ ВСЕ роли
+     * (включая system) — фильтрацию «не-системных» делает вызывающий код (AgentImpl /
+     * HistoryController), как и для истории. Если цепочка разорвана (родитель удалён) —
+     * обрываемся на первом найденном предке.
+     */
+    fun getBranchChain(sessionId: String, headMessageId: Long): List<StoredMessage> {
+        val byId = jdbcTemplate.query(
+            "SELECT id, parent_id, role, content FROM chat_messages WHERE session_id = ?",
+            { rs, _ ->
+                StoredMessage(
+                    id = rs.getLong("id"),
+                    role = rs.getString("role"),
+                    content = rs.getString("content"),
+                    parentId = rs.getNullableLong("parent_id"),
+                )
+            },
+            sessionId,
+        ).associateBy { it.id }
+        val chain = mutableListOf<StoredMessage>()
+        var current = byId[headMessageId]
+        while (current != null) {
+            chain += current
+            current = current.parentId?.let { byId[it] }
+        }
+        return chain.asReversed()
+    }
+
+    /**
+     * Линейный бэккафилл parent_id для истории, накопленной ДО подключения веток:
+     * каждое не-системное сообщение с parent_id IS NULL связывается с предыдущим
+     * не-системным (первые два «уже связанных» сообщения пропускаются — курсор двигается),
+     * корневое остаётся NULL; системные заметки в связывание не входят и parent_id
+     * не получают. Идемпотентно: повторный запуск ничего не меняет. Вызывается при
+     * активации стратегии 'branching' и при первом не-системном append без веток.
+     */
+    fun backfillLinearParents(sessionId: String) {
+        val rows = jdbcTemplate.query(
+            "SELECT id, role, parent_id FROM chat_messages WHERE session_id = ? ORDER BY id",
+            { rs, _ ->
+                Triple(rs.getLong("id"), rs.getString("role"), rs.getLong("parent_id").takeIf { !rs.wasNull() })
+            },
+            sessionId,
+        )
+        var prevLinked: Long? = null
+        for ((id, role, parent) in rows) {
+            if (role == "system") {
+                continue
+            }
+            if (parent == null) {
+                if (prevLinked != null) {
+                    jdbcTemplate.update(
+                        "UPDATE chat_messages SET parent_id = ? WHERE id = ? AND session_id = ?",
+                        prevLinked, id, sessionId,
+                    )
+                } else {
+                    // Корневое сообщение: страховочно гарантируем NULL (могло остаться от старой схемы)
+                    jdbcTemplate.update(
+                        "UPDATE chat_messages SET parent_id = NULL WHERE id = ? AND session_id = ?",
+                        id, sessionId,
+                    )
+                }
+            }
+            prevLinked = id
+        }
+    }
 
     /** true, если у сессии есть хотя бы одно сохранённое сообщение. */
     fun exists(sessionId: String): Boolean =
@@ -191,6 +348,10 @@ class SessionStore(
         if (!hasColumn("completion_tokens")) {
             jdbcTemplate.execute("ALTER TABLE chat_messages ADD COLUMN completion_tokens INTEGER")
         }
+        // parent_id (ветки) — досоздаём для старых файлов БД без потери данных.
+        if (!hasColumn("parent_id")) {
+            jdbcTemplate.execute("ALTER TABLE chat_messages ADD COLUMN parent_id INTEGER")
+        }
         // Таблица кумулятивной статистики — досоздаём и для старых файлов БД
         // (schema.sql с CREATE TABLE IF NOT EXISTS добавит её только при чистом старте).
         jdbcTemplate.execute(
@@ -249,6 +410,16 @@ class SessionStore(
         return when (v) {
             null -> null
             is Number -> v.toInt()
+            else -> null
+        }
+    }
+
+    /** Читает INTEGER-колонку, допуская NULL (parent_id). */
+    private fun java.sql.ResultSet.getNullableLong(column: String): Long? {
+        val v = getObject(column)
+        return when (v) {
+            null -> null
+            is Number -> v.toLong()
             else -> null
         }
     }

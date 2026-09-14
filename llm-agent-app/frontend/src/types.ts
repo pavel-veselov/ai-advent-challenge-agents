@@ -50,6 +50,7 @@ export type AgentEventType =
   | 'agent_finished'
   | 'context_summary_started'
   | 'context_summary_finished'
+  | 'facts_updated'
   | 'error';
 
 export interface BaseEvent<TType extends AgentEventType, TPayload> {
@@ -90,6 +91,7 @@ export type AgentEvent =
         contextTokensAfter: number;
       }
     >
+  | BaseEvent<'facts_updated', { facts: Record<string, string> }>
   | BaseEvent<'error', { message: string }>;
 
 // ---- API ----
@@ -99,6 +101,8 @@ export interface ChatRequest {
 }
 
 export interface HistoryMessage {
+  /** id сообщения в истории бэкенда (нужен для ветвления: POST /branches {messageId}); всегда есть по контракту. */
+  id: number;
   role: 'user' | 'assistant' | 'system';
   content: string;
   /** Токены промпта сообщения (бэкенд отдаёт для user-сообщений); null/undefined — неизвестно. */
@@ -137,6 +141,56 @@ export interface SessionCompressionPatch {
   enabled?: boolean;
   keepLast?: number;
   summaryEvery?: number;
+}
+
+// ---- Стратегия контекста (GET/PUT /api/sessions/{sessionId}/context-strategy) ----
+
+/**
+ * Стратегия управления контекстом сессии.
+ * - "none" — полная история (без сжатия);
+ * - "sliding_window" — скользящее окно: остаются последние N сообщений;
+ * - "sticky_facts" — ключевые факты диалога + окно;
+ * - "summary" — резюме + хвост (существующее сжатие контекста);
+ * - "branching" — ветки диалога (история = активная цепочка ветки).
+ */
+export type ContextStrategy = 'none' | 'sliding_window' | 'sticky_facts' | 'summary' | 'branching';
+
+/** Ответ GET/PUT /api/sessions/{sessionId}/context-strategy. */
+export interface SessionContextStrategyState {
+  sessionId: string;
+  strategy: ContextStrategy;
+  /** Размер окна последних сообщений; значим для sliding_window и sticky_facts (1..50). */
+  windowSize: number;
+}
+
+/** Частичное тело PUT /api/sessions/{sessionId}/context-strategy (400 на невалидные значения). */
+export interface SessionContextStrategyPatch {
+  strategy?: ContextStrategy;
+  windowSize?: number;
+}
+
+// ---- Факты диалога (GET /api/sessions/{sessionId}/facts, событие facts_updated) ----
+
+/** Ответ GET /api/sessions/{sessionId}/facts; порядок ключей = порядок вставки. */
+export interface FactsState {
+  sessionId: string;
+  facts: Record<string, string>;
+}
+
+// ---- Ветки диалога (GET/POST/PUT /api/sessions/{sessionId}/branches) ----
+
+export interface BranchInfo {
+  id: number;
+  name: string;
+  headMessageId: number | null;
+  createdAt: string;
+}
+
+/** Ответ GET /api/sessions/{sessionId}/branches и PUT (смена активной ветки). */
+export interface BranchesState {
+  sessionId: string;
+  activeBranchId: number | null;
+  branches: BranchInfo[];
 }
 
 /**
@@ -259,6 +313,12 @@ export interface StepLogEntry {
 
 export interface ChatMessage {
   id: string;
+  /**
+   * id сообщения в истории бэкенда (HistoryMessage.id), если это сообщение пришло из истории
+   * (а не стримится «вживую»). Нужен для ветвления: POST /branches {messageId}.
+   * null/отсутствует — разветвить сообщение нельзя (ещё нет id на бэкенде).
+   */
+  historyId?: number | null;
   /** system — служебная заметка бэкенда (например, информация о сжатии контекста). */
   role: 'user' | 'assistant' | 'system';
   content: string;

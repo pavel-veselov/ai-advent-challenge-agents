@@ -34,6 +34,16 @@ class AgentImpl(
     /** Per-session настройки сжатия истории и свёрнутые резюме (см. SessionCompressionStore). */
     private val compressionStore: SessionCompressionStore,
     private val om: ObjectMapper,
+    /**
+     * Per-session стратегия контекста (none/sliding_window/sticky_facts/summary/branching,
+     * см. SessionContextStore). null — в юнит-тестах, где стратегия не подключена: поведение
+     * ровно как раньше (fallback по сжатию, см. [resolveStrategy]).
+     */
+    private val contextStore: SessionContextStore? = null,
+    /** Хранилище «липких фактов» сессии (sticky_facts); null — извлечение фактов отключено. */
+    private val factsStore: SessionFactsStore? = null,
+    /** Хранилище веток диалога (branching); null — ветки не подключены (контекст = вся история). */
+    private val branchStore: SessionBranchStore? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -50,9 +60,21 @@ class AgentImpl(
         // (поведение как сегодня). Билдер запроса берёт параметры отсюда на каждый вызов.
         val runSettings = sessionLlmSettings.resolve(sessionId)
 
+        // Разрешение эффективной стратегии контекста сессии для этого run. Правило
+        // (см. SessionContextStore.resolve): сохранённая стратегия; при 'none' — fallback
+        // на 'summary', если включено legacy-сжатие (compression.enabled==true). Так
+        // старая функциональность сжатия работает неизменно для сессий, не выбиравших
+        // стратегию. Без хранилища (юнит-тесты) — то же падение только по сжатию.
+        val compressionEnabled = compressionStore.getSettings(sessionId).enabled
+        val contextStrategy = contextStore?.resolve(sessionId, compressionEnabled)
+            ?: if (compressionEnabled) SessionContextStore.STRATEGY_SUMMARY else SessionContextStore.STRATEGY_NONE
+        val strategyWindowSize = contextStore?.get(sessionId)?.windowSize
+            ?: ContextStrategySettings(sessionId).windowSize
+
         send(AgentStarted(userMessage, runSettings.settings() + mapOf(
             "maxToolCallIterations" to agentProperties.maxToolCallIterations,
             "tools" to toolRegistry.names().sorted(),
+            "contextStrategy" to contextStrategy,
         )))
 
         // Сжатие истории (per-session): старые сообщения сворачиваются в резюме, чтобы контекст
@@ -64,9 +86,10 @@ class AgentImpl(
         // Итоговое резюме для контекста (если сжатие применяем): либо только что свёрнутое, либо прежнее.
         var contextSummary: String? = previousSummary?.summary
         // Сжимаем контекст (резюме + последние keepLast + вопрос); false — выключено/сбой/резюме
-        // ещё не создано → вся история.
+        // ещё не создано → вся история. Сжатие работает ТОЛЬКО для стратегии summary
+        // (в неё разрешается и legacy-включённое сжатие, см. resolveStrategy выше).
         var compressionActive = false
-        if (compression.enabled) {
+        if (contextStrategy == SessionContextStore.STRATEGY_SUMMARY && compression.enabled) {
             // Системные заметки (информация о сжатии) — служебные: в резюме и в контекст не попадают.
             val stored = sessionStore.getStored(sessionId).filter { it.role != "system" }
             val keep = compression.keepLast
@@ -138,25 +161,85 @@ class AgentImpl(
             }
         }
 
+        // «Липкие факты» (strategy=sticky_facts): извлечение фактов о пользователе и диалоге
+        // LLM-вызовом — синхронно и ДО сборки контекста (как блок сжатия выше). stepId
+        // события facts_updated фиксирован ("facts") и в нумерацию итераций не входит.
+        // Fail-open: при ЛЮБОМ сбое (LLM API/таймаут/связь/не-JSON/пустой ответ) — error-событие
+        // «Не удалось обновить факты: ...» и run продолжается с ПРЕЖНИМИ фактами; событие
+        // facts_updated при сбое не шлётся, факты не меняются.
+        val factsStoreInstance = factsStore
+        var facts: Map<String, String> = factsStoreInstance?.getAll(sessionId) ?: emptyMap()
+        if (contextStrategy == SessionContextStore.STRATEGY_STICKY_FACTS && factsStoreInstance != null) {
+            try {
+                val window = sessionStore.getStored(sessionId)
+                    .filter { it.role != "system" }
+                    .takeLast(strategyWindowSize)
+                val factsPrompt = buildFactsPrompt(window, facts)
+                val updated = extractFacts(factsPrompt, runSettings)
+                factsStoreInstance.replaceAll(sessionId, updated)
+                facts = updated
+                send(FactsUpdated(updated))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Сбой извлечения фактов — не валим run: error-событие и прежние факты.
+                log.warn("session={} facts LLM call failed, run continues with previous facts: {}", sessionId, e.message)
+                send(ErrorEvent(errorIdx++, "Не удалось обновить факты: ${factsFailureMessage(e)}. Продолжаю с предыдущими фактами."))
+            }
+        }
+
         val messages = mutableListOf<LlmMessage>()
         messages += LlmMessage("system", SYSTEM_PROMPT)
-        if (compressionActive) {
-            // Сжатый контекст: [резюме как сообщение] + последние keepLast сообщений «как есть» + новый вопрос.
-            if (contextSummary != null) {
-                messages += LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX$contextSummary")
+        when {
+            // Сжатый контекст (strategy=summary): [резюме как сообщение] + последние keepLast
+            // сообщений «как есть» + новый вопрос (поведение сжатия не изменилось).
+            compressionActive -> {
+                if (contextSummary != null) {
+                    messages += LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX$contextSummary")
+                }
+                // Системные заметки (информация о сжатии) в контекст не идут; фильтр ДО
+                // dropLast/takeLast: новая реплика — последнее не-системное сообщение.
+                sessionStore.getStored(sessionId)
+                    .filter { it.role != "system" }
+                    .dropLast(1) // новый вопрос уже в истории — добавляем его отдельно, без дубля
+                    .takeLast(compression.keepLast)
+                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                messages += LlmMessage("user", userMessage)
             }
-            // Системные заметки (информация о сжатии) в контекст не идут; фильтр ДО
-            // dropLast/takeLast: новая реплика — последнее не-системное сообщение.
-            sessionStore.getStored(sessionId)
-                .filter { it.role != "system" }
-                .dropLast(1) // новый вопрос уже в истории — добавляем его отдельно, без дубля
-                .takeLast(compression.keepLast)
-                .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
-            messages += LlmMessage("user", userMessage)
-        } else {
-            sessionStore.getStored(sessionId)
-                .filter { it.role != "system" }
-                .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+            // Окно последних сообщений (strategy=sliding_window / sticky_facts): новый вопрос
+            // уже последнее не-системное сообщение в истории — входит в окно как есть.
+            contextStrategy == SessionContextStore.STRATEGY_SLIDING_WINDOW ||
+                contextStrategy == SessionContextStore.STRATEGY_STICKY_FACTS -> {
+                if (contextStrategy == SessionContextStore.STRATEGY_STICKY_FACTS && facts.isNotEmpty()) {
+                    // Текущие известные факты — системное сообщение перед окном диалога.
+                    messages += LlmMessage(
+                        "system",
+                        "Известные факты:\n" + facts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" },
+                    )
+                }
+                sessionStore.getStored(sessionId)
+                    .filter { it.role != "system" }
+                    .takeLast(strategyWindowSize)
+                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+            }
+            // Цепочка активной ветки (strategy=branching): корень → … → вопрос (после append
+            // вопрос — голова активной ветки); системные заметки фильтруются, порядок
+            // хронологический (root→head уже в getBranchChain).
+            contextStrategy == SessionContextStore.STRATEGY_BRANCHING && branchStore != null -> {
+                val branch = branchStore.effectiveBranch(sessionId)
+                val branchMessages = branch?.headMessageId
+                    ?.let { sessionStore.getBranchChain(sessionId, it) }
+                    ?: emptyList()
+                branchMessages
+                    .filter { it.role != "system" }
+                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+            }
+            // Вся история целиком (strategy=none и любой непокрытый выше случай).
+            else -> {
+                sessionStore.getStored(sessionId)
+                    .filter { it.role != "system" }
+                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+            }
         }
 
         try {
@@ -367,6 +450,84 @@ class AgentImpl(
         else -> upstreamConnectionMessage(e) ?: e.message ?: e.javaClass.simpleName
     }
 
+    /**
+     * Сборка промпта извлечения «липких фактов»: прежние известные факты (если есть,
+     * user-сообщение «Текущие известные факты: …»), последние windowSize не-системных
+     * сообщений с их реальными ролями и ПОСЛЕДНИМ user-сообщением — запрос выдачи
+     * JSON-фактов (см. [FACTS_REQUEST_PROMPT]). Так модель отвечает на запрос фактов,
+     * а не продолжает диалог по последнему сообщению окна.
+     */
+    private fun buildFactsPrompt(window: List<StoredMessage>, facts: Map<String, String>): List<LlmMessage> {
+        val prompt = mutableListOf<LlmMessage>()
+        if (facts.isNotEmpty()) {
+            prompt += LlmMessage(
+                "user",
+                "Текущие известные факты:\n" + facts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" } +
+                    "\n(обнови этот список с учётом нового сообщения)",
+            )
+        }
+        window.forEach { prompt += LlmMessage(it.role, it.content) }
+        prompt += LlmMessage("user", FACTS_REQUEST_PROMPT)
+        return prompt
+    }
+
+    /**
+     * Вызов LLM для извлечения фактов по готовому промпту (см. [buildFactsPrompt]).
+     * Инструменты не передаются. Возвращает LinkedHashMap в порядке, который вернула
+     * модель (сохраняется при replaceAll). Принимаются ТОЛЬКО строковые значения; прочие
+     * молча пропускаются. Бросает [LlmSummaryException] при finishReason error/tool_calls,
+     * пустом ответе или не-JSON-ответе — вызывающий код переводит это в fail-open.
+     */
+    private suspend fun extractFacts(prompt: List<LlmMessage>, runSettings: LlmSettings): LinkedHashMap<String, String> {
+        // Один ретрай на пустой/сбойный ответ: модель изредка отдаёт пустоту на короткие
+        // служебные промпты — повторная попытка обычно успешна (fail-open остаётся крайним случаем).
+        return try {
+            extractFactsOnce(prompt, runSettings)
+        } catch (e: LlmSummaryException) {
+            extractFactsOnce(prompt, runSettings)
+        }
+    }
+
+    private suspend fun extractFactsOnce(prompt: List<LlmMessage>, runSettings: LlmSettings): LinkedHashMap<String, String> {
+        val text = StringBuilder()
+        var finishReason = "stop"
+        val events = llmClient.streamChat(prompt, emptyList(), runSettings).collectList().awaitSingle()
+        for (e in events) {
+            when (e) {
+                is LlmEvent.ContentDelta -> text.append(e.delta)
+                is LlmEvent.Finished -> finishReason = e.finishReason
+                is LlmEvent.ToolCallsComplete -> Unit
+            }
+        }
+        if (finishReason == "error" || finishReason == "tool_calls") {
+            throw LlmSummaryException("LLM вернул finishReason=$finishReason вместо фактов")
+        }
+        if (text.isBlank()) {
+            throw LlmSummaryException("LLM вернул пустой ответ вместо фактов")
+        }
+        val node = om.readTree(text.toString())
+        if (node == null || !node.isObject) {
+            throw LlmSummaryException("LLM вернул не-JSON-объект вместо фактов")
+        }
+        val parsed = LinkedHashMap<String, String>()
+        node.fields().forEach { (key, value) ->
+            // Принимаем только строковые значения — остальное молча пропускаем.
+            if (value.isTextual) parsed[key] = value.asText()
+        }
+        return parsed
+    }
+
+    /**
+     * Человекочитаемая причина сбоя вызова извлечения фактов — та же стилистика, что
+     * [compressionFailureMessage] (LLM API / таймаут / связь / не-JSON / пустой ответ).
+     */
+    private fun factsFailureMessage(e: Exception): String = when (e) {
+        is LlmApiException -> "LLM API (HTTP ${e.status}): ${e.message}"
+        is TimeoutException -> "превышен таймаут ожидания ответа от LLM (${settings.timeoutSeconds()} с)"
+        is LlmSummaryException -> e.message ?: "внутренняя ошибка"
+        else -> upstreamConnectionMessage(e) ?: e.message ?: e.javaClass.simpleName
+    }
+
     private fun parseArgs(arguments: String?): Map<String, Any?> {
         if (arguments.isNullOrBlank()) return emptyMap()
         return try {
@@ -395,6 +556,17 @@ class AgentImpl(
          */
         const val SUMMARY_REQUEST_PROMPT =
         "Сожми историю нашего диалога. Это служебное сообщение о сжатии — его запоминать и включать в резюме не нужно."
+
+        /**
+         * Простой запрос на извлечение «липких фактов» (strategy=sticky_facts) — обычное
+         * user-сообщение, замыкающее промпт извлечения (без системного промпта). Ставится
+         * последним, чтобы модель отвечала именно на него, а не продолжала диалог по
+         * последнему сообщению окна. Ответ — ТОЛЬКО JSON-объект вида {"ключ": "значение"}.
+         */
+        const val FACTS_REQUEST_PROMPT =
+        "Обнови список фактов о пользователе и диалоге (цель, ограничения, предпочтения, решения, договорённости). " +
+            "Верни ТОЛЬКО JSON-объект вида {\"ключ\": \"значение\"} без пояснений и без markdown. " +
+            "Это служебное сообщение — не отвечай на него как на часть диалога."
 
         /** Префикс сообщения-резюме в сжатом контексте (system-роль). */
         const val SUMMARY_CONTEXT_PREFIX = "Резюме ранее: "

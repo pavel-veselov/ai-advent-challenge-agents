@@ -6,8 +6,10 @@ import {
   updateSessionLlmSettings,
 } from '../api';
 import type {
+  ContextStrategy,
   RunSettings,
   SessionCompression,
+  SessionContextStrategyPatch,
   SessionLlmSettings,
   SessionLlmSettingsPatch,
 } from '../types';
@@ -33,6 +35,24 @@ const KEEP_LAST_MIN = 1;
 const KEEP_LAST_MAX = 50;
 const SUMMARY_EVERY_MIN = 2;
 const SUMMARY_EVERY_MAX = 100;
+
+/** Допустимый диапазон окна последних сообщений скользящего окна/фактов (1..50, как на сервере). */
+const WINDOW_MIN = 1;
+const WINDOW_MAX = 50;
+/** Дефолт окна до ответа GET /context-strategy. */
+const WINDOW_DEFAULT = 10;
+
+/**
+ * Варианты стратегии контекста — свитчер вместо тумблера сжатия. Короткая метка + описание.
+ * Порядок — как в ТЗ: none → sliding_window → sticky_facts → summary → branching.
+ */
+const STRATEGY_OPTIONS: { value: ContextStrategy; label: string; description?: string }[] = [
+  { value: 'none', label: 'Полная история' },
+  { value: 'sliding_window', label: 'Скользящее окно', description: 'последние N сообщений' },
+  { value: 'sticky_facts', label: 'Факты + окно', description: 'ключевые факты диалога + N сообщений' },
+  { value: 'summary', label: 'Резюме + хвост', description: 'сжатие старых сообщений в summary' },
+  { value: 'branching', label: 'Ветки диалога', description: 'развилки истории с точки ветвления' },
+];
 
 /** Окно контекста в «K» (1K = 1024 токена): 262144 → «256K». */
 function contextSizeLabel(limit: number): string {
@@ -133,6 +153,17 @@ interface LlmSettingsProps {
   sessionId: string | null;
   /** true — сервис занят/выключен: редактирование заблокировано. */
   disabled: boolean;
+  /** Стратегия контекста активной сессии (зеркало хука; управляется свитчером ниже). */
+  strategy: ContextStrategy;
+  /** Размер окна последних сообщений активной сессии (sliding_window/sticky_facts). */
+  windowSize: number;
+  /** Факты диалога активной сессии (GET /facts + события facts_updated); null — не загружены. */
+  facts: Record<string, string> | null;
+  /**
+   * Смена стратегии/окна активной сессии: PUT /context-strategy через хук (оптимистично,
+   * откатывается при ошибке). Резолвится после подтверждения бэкендом.
+   */
+  onChangeStrategy: (patch: SessionContextStrategyPatch) => Promise<void>;
 }
 
 /**
@@ -144,11 +175,21 @@ interface LlmSettingsProps {
  * изменение (reasoningEnabled — с каждым PUT); в шапке — метка сессии и индикатор
  * «сохранение… / сохранено / ошибка», при неудаче черновики откатываются.
  * Провайдер задаётся на сервере и показывается отдельным чипом.
- * Сжатие контекста живёт на собственном GET/PUT /api/sessions/{id}/compression и сохраняется
- * автоматически (тумблер — сразу, числа — по blur/Enter); без активной сессии секция
- * показывает дефолты и заблокирована.
+ * Первичный контроль контекста — свитчер «Стратегия контекста» (GET/PUT /context-strategy
+ * через хук): none / sliding_window / sticky_facts / summary / branching. Поля окна (1..50)
+ * показываются для sliding_window и sticky_facts; keepLast+summaryEvery — только для summary
+ * и по-прежнему сохраняются через старый GET/PUT /compression (бэкенд синхронизирует его
+ * со стратегией). В sticky_facts под свитчером живёт панель фактов диалога.
  */
-export default function LlmSettings({ settings, sessionId, disabled }: LlmSettingsProps) {
+export default function LlmSettings({
+  settings,
+  sessionId,
+  disabled,
+  strategy,
+  windowSize,
+  facts,
+  onChangeStrategy,
+}: LlmSettingsProps) {
   // Локальные черновики редактируемых полей; синхронизируются с применёнными настройками.
   const [model, setModel] = useState(settings?.model ?? '');
   const [temperature, setTemperature] = useState(numStr(settings?.temperature));
@@ -381,6 +422,8 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
   const [compKeepLast, setCompKeepLast] = useState(String(COMPRESSION_DEFAULTS.keepLast));
   const [compSummaryEvery, setCompSummaryEvery] = useState(String(COMPRESSION_DEFAULTS.summaryEvery));
   const [compSave, setCompSave] = useState<SaveState>({ status: 'idle', message: null });
+  /** Черновик окна последних сообщений (sliding_window/sticky_facts); синхронизируется с ответами PUT/сменой сессии. */
+  const [winSizeDraft, setWinSizeDraft] = useState(String(windowSize ?? WINDOW_DEFAULT));
   /** Последние известные применённые настройки сжатия (для отката черновиков). */
   const compStateRef = useRef<SessionCompression | null>(null);
   const compSavedTimerRef = useRef<number | null>(null);
@@ -445,6 +488,11 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
     [],
   );
 
+  // Черновик окна следует серверной истине (ответы PUT /context-strategy, смена сессии).
+  useEffect(() => {
+    setWinSizeDraft(String(windowSize ?? WINDOW_DEFAULT));
+  }, [windowSize]);
+
   const armCompSavedTimer = () => {
     if (compSavedTimerRef.current != null) window.clearTimeout(compSavedTimerRef.current);
     compSavedTimerRef.current = window.setTimeout(() => {
@@ -456,18 +504,21 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
   const compBusy = compSave.status === 'saving';
 
   /**
-   * Автосохранение: PUT полного набора {enabled, keepLast, summaryEvery} для активной сессии.
+   * Автосохранение: PUT {keepLast, summaryEvery}; поле enabled уходит только от тумблера.
    * Вызывается тумблером (с явным nextEnabled, применяется оптимистично) и числовыми полями
-   * (blur/Enter, без аргумента — берётся текущее compEnabled). Значения вне диапазона —
+   * (blur/Enter, без аргумента — enabled в PUT не попадает: бэкенд применяет только переданные
+   * поля, поэтому серверное enabled, выставленное сменой стратегии, не затирается устаревшим
+   * значением черновика). Значения вне диапазона —
    * черновики откатываются (тумблер тоже), инлайн-ошибка, PUT не уходит; ошибка сети/бэкенда —
    * откат к последним серверным значениям и инлайн-ошибка.
    */
   const commitCompression = (nextEnabled?: boolean) => {
     const sid = sessionIdRef.current;
     if (sid == null || compBusy) return;
-    // Не-boolean (на случай протечки события из обработчика) трактуем как «не менять тумблер».
-    const enabled = typeof nextEnabled === 'boolean' ? nextEnabled : compEnabled;
-    if (enabled !== compEnabled) setCompEnabled(enabled);
+    // Оптимистично двигаем тумблер только при явном boolean (клик по переключателю).
+    if (typeof nextEnabled === 'boolean' && nextEnabled !== compEnabled) {
+      setCompEnabled(nextEnabled);
+    }
     const kl = Number(compKeepLast.trim());
     const se = Number(compSummaryEvery.trim());
     const klOk =
@@ -492,7 +543,7 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
     }
     setCompSave({ status: 'saving', message: null });
     updateSessionCompression(sid, {
-      enabled,
+      ...(typeof nextEnabled === 'boolean' ? { enabled: nextEnabled } : {}),
       keepLast: Math.round(kl),
       summaryEvery: Math.round(se),
     }).then(
@@ -507,6 +558,73 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
       (err: unknown) => {
         if (sessionIdRef.current !== sid) return;
         applyCompDrafts(compStateRef.current);
+        setCompSave({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
+  };
+
+  /** Смена стратегии контекста: клик по опции свитчера → PUT через хук. Индикатор compSave. */
+  const commitStrategy = (next: ContextStrategy) => {
+    if (compDisabled || compBusy || next === strategy) return;
+    setCompSave({ status: 'saving', message: null });
+    onChangeStrategy({ strategy: next }).then(
+      () => {
+        setCompSave({ status: 'saved', message: null });
+        armCompSavedTimer();
+        // Смена стратегии на бэкенде могла изменить enabled (переход в summary выставляет
+        // enabled=true) — перечитываем сжатие, чтобы тумблер показывал серверную истину.
+        const sid = sessionIdRef.current;
+        if (sid != null) {
+          fetchSessionCompression(sid)
+            .then((s) => {
+              if (sessionIdRef.current !== sid) return;
+              compStateRef.current = s;
+              applyCompDrafts(s);
+            })
+            .catch(() => {});
+        }
+      },
+      (err: unknown) => {
+        setCompSave({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
+  };
+
+  /**
+   * Коммит окна последних сообщений (sliding_window/sticky_facts): blur/Enter → PUT
+   * windowSize через хук. Вне диапазона 1..50 / не число — откат черновика, инлайн-ошибка.
+   */
+  const commitWindowSize = () => {
+    if (compDisabled || compBusy) return;
+    const v = winSizeDraft.trim();
+    const n = Number(v);
+    const rounded = Math.round(n);
+    if (v === '' || !Number.isFinite(n) || rounded < WINDOW_MIN || rounded > WINDOW_MAX) {
+      setWinSizeDraft(String(windowSize ?? WINDOW_DEFAULT));
+      setCompSave({
+        status: 'error',
+        message: `значения вне диапазона: окно последних сообщений ${WINDOW_MIN}–${WINDOW_MAX}`,
+      });
+      return;
+    }
+    if (compSavedTimerRef.current != null) {
+      window.clearTimeout(compSavedTimerRef.current);
+      compSavedTimerRef.current = null;
+    }
+    setCompSave({ status: 'saving', message: null });
+    onChangeStrategy({ windowSize: rounded }).then(
+      () => {
+        setCompSave({ status: 'saved', message: null });
+        armCompSavedTimer();
+      },
+      (err: unknown) => {
+        setWinSizeDraft(String(windowSize ?? WINDOW_DEFAULT));
         setCompSave({
           status: 'error',
           message: err instanceof Error ? err.message : String(err),
@@ -698,23 +816,47 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
       </div>
 
       <div className="llm-group">
-        <div className="llm-group-label">Сжатие контекста</div>
-        <div className="llm-reasoning-row">
-          <span className="llm-field-label">Сжатие контекста (summary)</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={compEnabled}
-            aria-label="Сжатие контекста (summary)"
-            className={`llm-switch${compEnabled ? ' is-on' : ''}`}
-            disabled={compDisabled || compBusy}
-            title="Сворачивать старые сообщения диалога в summary, чтобы контекст не переполнял окно модели"
-            onClick={() => commitCompression(!compEnabled)}
-          >
-            <span className="llm-switch-knob" />
-          </button>
+        <div className="llm-group-label">Стратегия контекста</div>
+        <div className="llm-strategy-picker" role="radiogroup" aria-label="Стратегия контекста">
+          {STRATEGY_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={strategy === o.value}
+              className={`llm-strategy-option${strategy === o.value ? ' is-active' : ''}`}
+              disabled={compDisabled || compBusy}
+              title={o.description != null ? `${o.label} — ${o.description}` : o.label}
+              onClick={() => commitStrategy(o.value)}
+            >
+              <span className="llm-strategy-name">{o.label}</span>
+              {o.description != null ? (
+                <span className="llm-strategy-desc">{o.description}</span>
+              ) : null}
+            </button>
+          ))}
         </div>
-        {compEnabled ? (
+
+        {/* Скользящее окно и факты — общее поле «окно последних N сообщений» (1..50) */}
+        {(strategy === 'sliding_window' || strategy === 'sticky_facts') ? (
+          <div className="llm-fields-row two">
+            <NumField
+              label="Окно, последних сообщений"
+              title="Сколько последних сообщений диалога оставлять «как есть» в контексте (1–50)"
+              value={winSizeDraft}
+              unit="1–50"
+              step="1"
+              min="1"
+              max="50"
+              disabled={compDisabled || compBusy}
+              onChange={setWinSizeDraft}
+              onCommit={commitWindowSize}
+            />
+          </div>
+        ) : null}
+
+        {/* Resume + хвост (summary): существующее сжатие, сохраняется через /compression */}
+        {strategy === 'summary' ? (
           <div className="llm-fields-row two">
             <NumField
               label="Последних сообщений как есть"
@@ -724,7 +866,7 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
               step="1"
               min="1"
               max="50"
-              disabled={compDisabled}
+              disabled={compDisabled || compBusy}
               onChange={setCompKeepLast}
               onCommit={commitCompression}
             />
@@ -736,12 +878,32 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
               step="1"
               min="2"
               max="100"
-              disabled={compDisabled}
+              disabled={compDisabled || compBusy}
               onChange={setCompSummaryEvery}
               onCommit={commitCompression}
             />
           </div>
         ) : null}
+
+        {/* Панель фактов (sticky_facts): живые ключ-значение из event'ов facts_updated */}
+        {strategy === 'sticky_facts' ? (
+          <div className="llm-facts-block">
+            <div className="llm-facts-label">Факты диалога</div>
+            {facts != null && Object.keys(facts).length > 0 ? (
+              <ul className="llm-facts-list">
+                {Object.entries(facts).map(([k, v]) => (
+                  <li key={k} className="llm-fact-row">
+                    <span className="llm-fact-key">{k}</span>
+                    <span className="llm-fact-value">{v}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="llm-hint">Факты появятся после первого сообщения</div>
+            )}
+          </div>
+        ) : null}
+
         <div className="llm-compression-row">
           {sessionId == null ? (
             <span className="llm-hint">применяется к активной сессии</span>
@@ -768,3 +930,4 @@ export default function LlmSettings({ settings, sessionId, disabled }: LlmSettin
     </section>
   );
 }
+

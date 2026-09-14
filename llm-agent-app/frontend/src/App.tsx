@@ -49,9 +49,17 @@ export default function App() {
             backendStarting={session.backendStarting}
             error={session.error}
             sessionId={session.sessionId}
+            strategy={session.strategy}
+            branches={session.branches}
             onSend={session.sendMessage}
             onStop={session.stopAgent}
             onDeleteSession={session.deleteSession}
+            onForkBranch={(messageId) => {
+              if (session.sessionId != null) void session.forkBranch(session.sessionId, messageId);
+            }}
+            onSwitchBranch={(branchId) => {
+              if (session.sessionId != null) void session.switchBranch(session.sessionId, branchId);
+            }}
           />
         )}
         <div className="steps-column">
@@ -59,6 +67,13 @@ export default function App() {
             settings={session.runSettings}
             sessionId={session.sessionId}
             disabled={llmSettingsDisabled}
+            strategy={session.strategy}
+            windowSize={session.windowSize}
+            facts={session.facts}
+            onChangeStrategy={(patch) => {
+              if (session.sessionId == null) return Promise.resolve();
+              return session.changeContextStrategy(session.sessionId, patch);
+            }}
           />
           <StepsLog
             steps={session.steps}

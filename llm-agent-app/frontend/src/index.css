@@ -1296,6 +1296,172 @@ button:disabled {
   min-height: 20px;
 }
 
+/* Свитчер стратегии контекста — вертикальный список опций в стиле выбора модели */
+.llm-strategy-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.llm-strategy-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: 5px 8px 4px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  text-align: left;
+  box-shadow: inset 0 2px 4px rgba(5, 12, 8, 0.4);
+  transition: border-color 0.15s, color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.llm-strategy-option:hover:not(:disabled):not(.is-active) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--text);
+}
+
+/* Активная стратегия — горящий индикатор, как у активной модели */
+.llm-strategy-option.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--field));
+  color: var(--text);
+  box-shadow: var(--glow-amber), inset 0 2px 4px rgba(5, 12, 8, 0.35);
+}
+
+.llm-strategy-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.llm-strategy-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.llm-strategy-desc {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
+}
+
+.llm-strategy-option.is-active .llm-strategy-desc {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-dim));
+}
+
+/* Панель фактов диалога (sticky_facts): живые записи ключ → значение */
+.llm-facts-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.llm-facts-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.llm-facts-list {
+  margin: 0;
+  padding: 6px 8px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: inset 0 2px 4px rgba(5, 12, 8, 0.4);
+}
+
+.llm-fact-row {
+  display: grid;
+  grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.llm-fact-key {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-fact-value {
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* Селектор веток в шапке чата — приборная пилюля */
+.branch-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+}
+
+.branch-select {
+  max-width: 150px;
+  background: var(--field);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.branch-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.branch-select option {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* Кнопка «Ветка отсюда» под сообщением (панель ветвления): приглушённая пилюля */
+.chat-msg-fork {
+  align-self: flex-start;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.chat-msg-fork:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .steps-list {
   flex: 1;
   min-height: 0;

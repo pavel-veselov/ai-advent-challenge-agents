@@ -4,7 +4,10 @@ import com.example.llmagent.agent.Agent
 import com.example.llmagent.agent.AgentImpl
 import com.example.llmagent.agent.GpuStackLlmClient
 import com.example.llmagent.agent.LlmClient
+import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
+import com.example.llmagent.agent.SessionContextStore
+import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
 import com.example.llmagent.agent.ToolRegistry
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -40,6 +43,12 @@ class AppConfig {
         settings: LlmSettings,
         sessionLlmSettings: SessionLlmSettingsProvider,
         compressionStore: SessionCompressionStore,
+        contextStore: SessionContextStore,
+        factsStore: SessionFactsStore,
+        branchStore: SessionBranchStore,
         om: ObjectMapper,
-    ): Agent = AgentImpl(llmClient, toolRegistry, sessionStore, agentProperties, settings, sessionLlmSettings, compressionStore, om)
+    ): Agent = AgentImpl(
+        llmClient, toolRegistry, sessionStore, agentProperties, settings,
+        sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
+    )
 }

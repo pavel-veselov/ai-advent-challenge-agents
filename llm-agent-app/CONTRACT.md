@@ -7,8 +7,8 @@
 | Метод | Путь | Тело / Параметры | Ответ |
 |-------|------|------------------|-------|
 | `POST` | `/api/chat` | `{ "sessionId": string, "message": string }` | `text/event-stream` — поток событий агента (см. ниже) |
-| `GET` | `/api/sessions/{sessionId}/history` | — | `{ "sessionId": string, "messages": [{ "role": "user"\|"assistant", "content": string, "promptTokens": number\|null, "completionTokens": number\|null }], "totals": { "promptTokens": number, "completionTokens": number, "costUsd": number } \| null }` |
-| `DELETE` | `/api/sessions/{sessionId}` | — | `{ "deleted": boolean }` — удаляет всю историю сессии (всегда 200) |
+| `GET` | `/api/sessions/{sessionId}/history` | — | `{ "sessionId": string, "messages": [{ "id": number, "role": "user"\|"assistant"\|"system", "content": string, "promptTokens": number\|null, "completionTokens": number\|null }], "totals": { "promptTokens": number, "completionTokens": number, "costUsd": number } \| null }` — см. раздел «История и ветки» ниже |
+| `DELETE` | `/api/sessions/{sessionId}` | — | `{ "deleted": boolean }` — удаляет всю историю сессии и ВСЕ per-session данные (сжатие, настройки LLM, стратегию контекста, факты, ветки); всегда 200 |
 | `GET` | `/api/sessions` | — | `{ "sessions": [{ "sessionId": string, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lastActivity": string, "firstUserMessage": string\|null }] }` — все сессии с агрегатами по токенам, стоимостью и первым user-сообщением |
 | `GET` | `/api/stats` | — | `{ "sessionCount": number, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lifetime": { "sessions": number, "promptTokens": number, "completionTokens": number, "totalTokens": number, "costUsd": number } }` — глобальная статистика по всем сессиям + кумулятивные счётчики «за всё время» (переживают удаление сессий) |
 | `GET` | `/api/llm-settings` | — | применённые настройки LLM — та же структура, что `settings` у `agent_started` (см. ниже) |
@@ -19,6 +19,12 @@
 | `PUT` | `/api/sessions/{sessionId}/compression` | частичное обновление: `{ "enabled"?: boolean, "keepLast"?: number, "summaryEvery"?: number }` (отсутствующее поле не меняется) | `200` — полное состояние после обновления (та же структура, что `GET`); `400` — невалидное значение (`enabled` не boolean, `keepLast` вне 1..50, `summaryEvery` вне 2..100); `404` — неизвестная сессия |
 | `GET` | `/api/sessions/{sessionId}/llm-settings` | — | `200` — `{ "model": string, "contextLimit": number, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "timeoutSeconds": number, "priceInputPer1M": number, "priceOutputPer1M": number, "reasoningEnabled": boolean }` — эффективные настройки LLM сессии (те же поля, что у глобального `/api/llm-settings`, БЕЗ `provider`): per-field сохранённое значение сессии, иначе ТЕКУЩЕЕ глобальное; `404` — неизвестная сессия |
 | `PUT` | `/api/sessions/{sessionId}/llm-settings` | частичное обновление: `{ "model"?: string, "contextLimit"?: number, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number, "reasoningEnabled"?: boolean\|null }` — отсутствующее поле не меняется; `null` у любого поля — снять переопределение сессии (эффективно применяется ТЕКУЩЕЕ глобальное значение) | `200` — полное эффективное состояние после обновления (та же структура, что `GET`); `400` — невалидное значение (модель не из каталога/отключена; числовые поля — проверки как в глобальном PUT; `maxTokens` дополнительно ≤ контекстное окно эффективной модели); `404` — неизвестная сессия |
+| `GET` | `/api/sessions/{sessionId}/context-strategy` | — | `200` — `{ "sessionId": string, "strategy": "none"\|"sliding_window"\|"sticky_facts"\|"summary"\|"branching", "windowSize": number, "activeBranchId": number\|null }` — стратегия контекста сессии; строки нет → `strategy="none"`, `windowSize=12`, `activeBranchId=null`; `404` НЕ выбрасывается |
+| `PUT` | `/api/sessions/{sessionId}/context-strategy` | частичное обновление: `{ "strategy"?: string, "windowSize"?: number }` (отсутствующее поле не меняется) | `200` — полное состояние после обновления (та же структура, что `GET`); `400` — неизвестная стратегия или `windowSize` вне 1..50; `404` НЕ выбрасывается. Побочные эффекты: `summary` → `compression.enabled=true`; любая другая стратегия → `compression.enabled=false`; `branching` → плюс ленивое подключение веток (см. «Стратегии контекста») |
+| `GET` | `/api/sessions/{sessionId}/facts` | — | `200` — `{ "sessionId": string, "facts": { "ключ": "значение" } }` — «липкие факты» сессии (порядок — порядок вставки; пусто — фактов ещё нет) |
+| `GET` | `/api/sessions/{sessionId}/branches` | — | `200` — `{ "sessionId": string, "activeBranchId": number\|null, "branches": [ { "id": number, "name": string, "headMessageId": number\|null, "createdAt": string } ] }` — ветки диалога; пусто — веток нет |
+| `POST` | `/api/sessions/{sessionId}/branches` | `{ "messageId": number }` | `200` — объект ветки (`{ "id", "name", "headMessageId", "createdAt" }`): ветка создаётся с головой в `messageId` (fork), авто-имя «Ветка N» (N = число веток + 1), становится АКТИВНОЙ; `400` — `messageId` не принадлежит сессии |
+| `PUT` | `/api/sessions/{sessionId}/branches` | `{ "activeBranchId": number }` | `200` — полный GET-shape после переключения активной ветки; `400` — неизвестная ветка |
 
 ### Управление сервисом (супервизор, не HTTP-эндпоинт backend)
 
@@ -44,15 +50,20 @@
 **переживает перезапуск backend**. Схема таблиц `chat_messages`, `lifetime_stats`, `app_settings`
 (динамические настройки LLM), `app_models` (состояние «включена/отключена» моделей каталога),
 `session_compression` (per-session настройки сжатия истории), `session_summaries` (свёрнутые
-резюме) и `session_llm_settings` (per-session настройки LLM) создаётся автоматически при старте из
+резюме), `session_llm_settings` (per-session настройки LLM), `session_context_strategy`
+(стратегия контекста + активная ветка), `session_facts` («липкие факты») и `session_branches`
+(ветки диалога) создаётся автоматически при старте из
 `backend/src/main/resources/schema.sql` (`spring.sql.init.mode=always`); для старых файлов БД
 таблица `lifetime_stats` и колонки токенов добавляются миграцией при инициализации `SessionStore`,
-а `app_settings`/`app_models`/`session_compression`/`session_summaries`/`session_llm_settings`
-досоздаются имплементациями соответствующих хранилищ.
+а `app_settings`/`app_models`/`session_compression`/`session_summaries`/`session_llm_settings`/
+`session_context_strategy`/`session_facts`/`session_branches` досоздаются имплементациями
+соответствующих хранилищ (страховочные `CREATE TABLE IF NOT EXISTS` в init-блоках + `ALTER TABLE`
+для новых колонок `prompt_tokens`/`completion_tokens`/`parent_id` у `chat_messages`).
 `DELETE /api/sessions/{sessionId}` удаляет все строки сессии из `chat_messages`, **не**
 уменьшает кумулятивные счётчики `lifetime_stats` («за всё время») и — вместе с историей —
-удаляет per-session данные сжатия (`session_compression`, `session_summaries`) и per-session
-настройки LLM (`session_llm_settings`).
+удаляет все per-session данные: сжатие (`session_compression`, `session_summaries`), настройки
+LLM (`session_llm_settings`), стратегию контекста (`session_context_strategy`), «липкие факты»
+(`session_facts`) и ветки (`session_branches`).
 
 Жизненным циклом backend управляет супервизор (см. раздел «Управление сервисом» выше):
 остановка/запуск через флаг-файл и контрольный сервер `127.0.0.1:8081`. При остановке и
@@ -85,7 +96,7 @@
 
 | type | payload | stepId (id узла графа) | Узел графа |
 |------|---------|------------------------|------------|
-| `agent_started` | `{ "userMessage": string, "settings": { "provider": string, "model": string, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "reasoningEnabled": boolean, "timeoutSeconds": number, "contextLimit": number, "priceInputPer1M": number, "priceOutputPer1M": number, "maxToolCallIterations": number, "tools": string[] } }` | `user` | «Запрос пользователя» |
+| `agent_started` | `{ "userMessage": string, "settings": { "provider": string, "model": string, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "reasoningEnabled": boolean, "timeoutSeconds": number, "contextLimit": number, "priceInputPer1M": number, "priceOutputPer1M": number, "maxToolCallIterations": number, "tools": string[], "contextStrategy": string } }` | `user` | «Запрос пользователя» |
 | `llm_request_started` | `{ "iteration": number, "prompt": [{ "role": string, "content": string }], "estimatedRequestTokens": number }` | `llm-<iteration>` | «LLM (итерация N)» |
 | `llm_token` | `{ "delta": string }` | `llm-<iteration>` | — (токен, статус running) |
 | `llm_response_finished` | `{ "finishReason": "stop"\|"tool_calls"\|"length"\|"error", "estimatedRequestTokens": number\|null, "costUsd"?: number, "usage"?: { "inputTokens": number, "outputTokens": number } }` | `llm-<iteration>` | — (статус success/error) |
@@ -94,6 +105,7 @@
 | `agent_finished` | `{ "finalText": string }` | `answer` | «Ответ» |
 | `context_summary_started` | `{ "foldCount": number, "prompt": [{ "role": string, "content": string }] }` | `context-summary` | «Сжатие истории» (идёт при сжатии ДО основного цикла); `prompt` — точный промпт вызова резюмирования |
 | `context_summary_finished` | `{ "foldCount": number, "promptTokens": number, "completionTokens": number, "summary": string }` | `context-summary` | — (финализация сжатия); `summary` — дословный текст резюме от LLM |
+| `facts_updated` | `{ "facts": { "ключ": "значение" } }` | `facts` | — (sticky_facts): только что извлечённые «липкие факты» сохранены и применены к контексту текущего run; идёт ДО основного цикла (фиксированный `stepId`, вне нумерации итераций, как `context-summary`); payload минимальный — полей токенов нет |
 | `error` | `{ "message": string }` | `error-<idx>` | — (только баннер в UI) |
 
 Правила генерации `stepId`:
@@ -124,7 +136,9 @@
 лимит локально не проверяется: при переполнении ошибка апстрима пробрасывается дословно, см. ниже),
 `priceInputPer1M` / `priceOutputPer1M` (условная цена в USD за 1M входных/выходных токенов),
 `maxToolCallIterations` (лимит цикла tool-calling), `tools`
-(отсортированный список имён зарегистрированных инструментов, уходящих в параметр `tools` API).
+(отсортированный список имён зарегистрированных инструментов, уходящих в параметр `tools` API),
+`contextStrategy` (разрешённая для этого run стратегия контекста — одна из
+`none|sliding_window|sticky_facts|summary|branching`; правило разрешения см. «Стратегии контекста»).
 Секреты (`apiKey`) и внутренний `baseUrl` наружу не отдаются. Значения по умолчанию настраиваются env
 (`LLM_TOP_P` / `LLM_TOP_K` / `LLM_MAX_TOKENS` / `LLM_CONTEXT_LIMIT` / `LLM_PRICE_INPUT_PER_1M` /
 `LLM_PRICE_OUTPUT_PER_1M` и др.; по умолчанию `LLM_MAX_TOKENS=10000`).
@@ -340,6 +354,65 @@
 свернуто в резюме. Контекст: X → Y токенов.». Порядок в потоке:
 `agent_started` → (при сжатии) `context_summary_started` → `context_summary_finished` →
 `llm_request_started` (итерация 1) → …
+
+> **Устаревший переключатель `/compression` синхронизирован со стратегией:** эндпоинт
+> `/api/sessions/{sessionId}/compression` остаётся и работает как раньше, но при переключении
+> стратегии через `/context-strategy` он ведётся в соответствие: стратегия `summary` →
+> `compression.enabled=true`; любая другая стратегия → `compression.enabled=false` (legacy-сессия,
+> включившая сжатие напрямую и не выбиравшая стратегию, продолжает работать «как раньше» — см.
+> правило разрешения ниже). Обратное изменение `compression.enabled` стратегию не меняет
+> (стратегия `none` + включённое сжатие разрешается в `summary`).
+
+### Стратегии контекста (переключатель context-strategy)
+
+Каждая сессия может выбрать стратегию построения контекста LLM-запроса через
+`GET/PUT /api/sessions/{sessionId}/context-strategy` (см. таблицу API). Доступные стратегии:
+
+| Стратегия | Контекст основного цикла агента |
+|-----------|-------------------------------|
+| `none` | Вся история целиком (не-системные сообщения по id) — поведение «как раньше» при выключенном сжатии |
+| `sliding_window` | `system` + последние `windowSize` не-системных сообщений (новый вопрос — уже последнее сохранённое, входит в окно) |
+| `sticky_facts` | `system` + (если факты есть) системное «Известные факты:\n- ключ: значение…» + последние `windowSize` не-системных сообщений; факты извлекаются LLM ДО основного цикла (см. событие `facts_updated`) |
+| `summary` | Существующий механизм сжатия истории (резюме + хвост `keepLast` + вопрос), см. «Сжатие истории» выше — равно legacy `compression.enabled=true` |
+| `branching` | `system` + цепочка АКТИВНОЙ ветки (корень → … → новый вопрос; только не-системные сообщения в хронологическом порядке) |
+
+**Разрешение эффективной стратегии** (для каждого `POST /api/chat` и для `GET /history`):
+сохранённая в `session_context_strategy` стратегия, а при `none` — **fallback на `summary`**,
+если включено legacy-сжатие (`compression.enabled=true`). Это правило сохраняет старое поведение
+сжатия для сессий, никогда не выбиравших стратегию: `/context-strategy` GET отдаёт `"none"`, а
+чат этих сессий сжимает историю как раньше. Сессии, явно выбравшие `sliding_window` /
+`sticky_facts` / `branching`, не сжимаются даже при включённом legacy-сжатии (в PUT стратегия
+выключает `compression.enabled`).
+
+**Настройки окна:** `windowSize` 1..50, по умолчанию 12 (применяется в `sliding_window` и
+`sticky_facts`). Полное состояние GET: `{ sessionId, strategy, windowSize, activeBranchId }`
+(`activeBranchId` — ид активной ветки для `branching`, служебное поле полного состояния).
+
+**Семантика перехода на `branching`** (побочный эффект PUT `strategy=branching`):
+- `compression.enabled` выключается (как для любой не-`summary` стратегии);
+- история сессии линейно бэккафиллится: каждое не-системное сообщение получает
+  `parent_id` предыдущего не-системного (корень — NULL; системные заметки не связываются);
+- создаётся ветка по умолчанию **«Основная»** с головой в последнем не-системном сообщении.
+
+**Дерево веток поддерживается автоматически для ВСЕХ стратегий** (SessionStore.append): каждое
+не-системное сообщение прикрепляется к голове активной ветки и продвигает её; системные заметки
+(о сжатии) голову не двигают и `parent_id` не получают. Поэтому ветки существуют даже у сессий,
+которые не выбирали `branching` (после первого не-системного сообщения появляется «Основная»), а
+переключение стратегии не ломает целостность дерева.
+
+> **Совместимость:** изменение существующих поведений минимально — `SummaryRequestPrompt` и вся
+> семантика `summary` не тронуты; `agent_started` лишь дополнен полем `settings.contextStrategy`.
+
+### История и ветки (branching в GET /history)
+
+У каждого сообщения `GET /api/sessions/{sessionId}/history` теперь есть поле `id` (аддитивно).
+При разрешённой стратегии `branching` И наличии веток история возвращает цепочку АКТИВНОЙ ветки:
+корень → голова (только не-системные сообщения в хронологическом порядке); общие предки до точки
+fork входят, сообщения других веток — нет. Иначе (legacy) — все сообщения сессии по id (включая
+системные заметки, как и раньше). `POST /branches` с `{messageId}` создаёт ветку с головой в этом
+сообщении (fork), имя «Ветка N» (N = число веток + 1) и делает её активной; `PUT /branches` с
+`{activeBranchId}` переключает активную ветку. Сообщения, добавленные после fork/переключения,
+уходят в активную ветку — именно они видны в её истории и контексте агента.
 
 ### Per-session настройки LLM (GET/PUT /api/sessions/{sessionId}/llm-settings)
 

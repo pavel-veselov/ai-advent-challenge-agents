@@ -18,9 +18,8 @@ object SqliteTestSupport {
         return JdbcTemplate(ds)
     }
 
-    /** Создаёт SessionStore поверх SQLite-файла dbFile (минимальная схема chat_messages). */
-    fun store(dbFile: Path): SessionStore {
-        val jdbc = jdbc(dbFile)
+    /** Создаёт минимальную схему chat_messages (той же формы, что schema.sql) на [jdbc]. */
+    fun createChatMessagesTable(jdbc: JdbcTemplate) {
         jdbc.execute(
             """
             CREATE TABLE IF NOT EXISTS chat_messages (
@@ -33,6 +32,25 @@ object SqliteTestSupport {
             """.trimIndent()
         )
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages (session_id)")
+    }
+
+    /** Создаёт SessionStore поверх SQLite-файла dbFile (минимальная схема chat_messages). */
+    fun store(dbFile: Path): SessionStore {
+        val jdbc = jdbc(dbFile)
+        createChatMessagesTable(jdbc)
         return SessionStore(jdbc)
+    }
+
+    /**
+     * SessionStore поверх SQLite-файла dbFile с ПОДКЛЮЧЁННЫМИ ветками: дерево parent_id
+     * в chat_messages поддерживается самим append (см. SessionStore), активную ветку
+     * знает возвращаемый SessionBranchStore. Имя файла dbFile должно быть уникальным
+     * для каждого набора (ветки/стратегии персистятся в той же БД).
+     */
+    fun branchingStore(dbFile: Path): Pair<SessionStore, SessionBranchStore> {
+        val jdbc = jdbc(dbFile)
+        createChatMessagesTable(jdbc)
+        val branchStore = SessionBranchStore(jdbc)
+        return SessionStore(jdbc, branchStore = branchStore) to branchStore
     }
 }

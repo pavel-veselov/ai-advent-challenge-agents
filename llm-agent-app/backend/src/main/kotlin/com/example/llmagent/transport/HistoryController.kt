@@ -1,7 +1,10 @@
 package com.example.llmagent.transport
 
 import com.example.llmagent.agent.ChatMessage
+import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
+import com.example.llmagent.agent.SessionContextStore
+import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
 import com.example.llmagent.config.LlmProperties
 import com.example.llmagent.config.SessionLlmSettingsStore
@@ -17,9 +20,14 @@ class HistoryController(
     private val compressionStore: SessionCompressionStore,
     private val llm: LlmProperties,
     private val sessionLlmSettingsStore: SessionLlmSettingsStore,
+    private val contextStore: SessionContextStore,
+    private val factsStore: SessionFactsStore,
+    private val branchStore: SessionBranchStore,
 ) {
 
     data class HistoryMessage(
+        /** Идентификатор сообщения в chat_messages; null — сообщение без id (устаревшие данные). */
+        val id: Long? = null,
         val role: String,
         val content: String,
         val promptTokens: Int? = null,
@@ -43,10 +51,26 @@ class HistoryController(
 
     @GetMapping("/api/sessions/{sessionId}/history")
     fun history(@PathVariable sessionId: String): HistoryResponse {
-        val messages = sessionStore.get(sessionId)
+        val strategy = contextStore.resolve(sessionId, compressionStore.getSettings(sessionId).enabled)
+        val branches = branchStore.list(sessionId)
+        val messages: List<ChatMessage> =
+            if (strategy == SessionContextStore.STRATEGY_BRANCHING && branches.isNotEmpty()) {
+                // Branching: история — цепочка АКТИВНОЙ ветки (корень → голова), не-системные
+                // сообщения в хронологическом порядке. Общие предки до точки fork входят в цепочку.
+                val branch = branchStore.getActive(sessionId) ?: branches.first()
+                val allById = sessionStore.get(sessionId).associateBy { it.id }
+                val chain = branch.headMessageId?.let { sessionStore.getBranchChain(sessionId, it) } ?: emptyList()
+                chain
+                    .filter { it.role != "system" }
+                    .mapNotNull { m -> allById[m.id] }
+            } else {
+                // Legacy-поведение: все сообщения сессии в порядке вставки (ORDER BY id),
+                // включая системные заметки (о сжатии и т.п.).
+                sessionStore.get(sessionId)
+            }
         return HistoryResponse(
             sessionId,
-            messages.map { HistoryMessage(it.role, it.content, it.promptTokens, it.completionTokens) },
+            messages.map { HistoryMessage(it.id, it.role, it.content, it.promptTokens, it.completionTokens) },
             totals(messages),
         )
     }
@@ -64,14 +88,20 @@ class HistoryController(
         return Totals(promptTokens, completionTokens, costUsd)
     }
 
-    /** Удаляет всю историю сессии (в том числе для несуществующей — всё равно 200). */
+    /**
+     * Удаляет всю историю сессии (в том числе для несуществующей — всё равно 200) вместе
+     * со ВСЕМИ per-session данными: сжатие (настройки + резюме), настройки LLM, стратегия
+     * контекста, «липкие факты» и ветки — чтобы после пересоздания сессии не оставалось
+     * «призрачных» настроек.
+     */
     @DeleteMapping("/api/sessions/{sessionId}")
     fun delete(@PathVariable sessionId: String): DeleteResponse {
         sessionStore.delete(sessionId)
-        // Per-session данные сжатия (настройки и свёрнутое резюме) и настройки LLM — тоже часть
-        // сессии, чистим, чтобы после пересоздания сессии не оставалось «призрачных» настроек.
         compressionStore.remove(sessionId)
         sessionLlmSettingsStore.remove(sessionId)
+        contextStore.remove(sessionId)
+        factsStore.remove(sessionId)
+        branchStore.remove(sessionId)
         return DeleteResponse(true)
     }
 }

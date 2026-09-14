@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage } from '../types';
+import type { BranchesState, ChatMessage, ContextStrategy } from '../types';
 
 /**
  * Строка «контекст запроса: N · ответ: M» для пузыря ассистента.
@@ -27,9 +27,17 @@ interface ChatPanelProps {
   backendStarting: boolean;
   error: string | null;
   sessionId: string | null;
+  /** Стратегия контекста активной сессии: ветвление UI видно только при strategy='branching'. */
+  strategy: ContextStrategy;
+  /** Ветки диалога активной сессии (GET /branches); null — не загружены. */
+  branches: BranchesState | null;
   onSend: (text: string) => void;
   onStop: () => void;
   onDeleteSession: () => void;
+  /** Новая ветка от сообщения истории: POST /branches {messageId}. */
+  onForkBranch: (messageId: number) => void;
+  /** Переключение активной ветки: PUT /branches {activeBranchId}. */
+  onSwitchBranch: (branchId: number) => void;
 }
 
 export default function ChatPanel({
@@ -39,14 +47,23 @@ export default function ChatPanel({
   backendStarting,
   error,
   sessionId,
+  strategy,
+  branches,
   onSend,
   onStop,
   onDeleteSession,
+  onForkBranch,
+  onSwitchBranch,
 }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
   const serviceDown = backendStopped || backendStarting;
+
+  // Ветвление доступно только в стратегии «Ветки диалога» и вне запуска (активная сессия),
+  // как и прочие сервисные операции — во время генерации ветки не трогаем.
+  const branchMode = strategy === 'branching';
+  const branchOpsEnabled = branchMode && !isRunning && !serviceDown;
 
   useEffect(() => {
     const el = listRef.current;
@@ -65,6 +82,25 @@ export default function ChatPanel({
         <span>Чат</span>
         {sessionId ? (
           <span className="session-chip" title="sessionId">{sessionId.slice(0, 8)}</span>
+        ) : null}
+        {branchMode && branches != null && branches.branches.length > 0 ? (
+          <label
+            className="branch-select-wrap"
+            title="Активная ветка диалога — история показывает только её цепочку сообщений"
+          >
+            <select
+              className="branch-select"
+              value={branches.activeBranchId ?? ''}
+              disabled={!branchOpsEnabled}
+              onChange={(e) => onSwitchBranch(Number(e.target.value))}
+            >
+              {branches.branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </label>
         ) : null}
         <button
           type="button"
@@ -89,36 +125,50 @@ export default function ChatPanel({
       )}
 
       <div className="chat-list" ref={listRef}>
-        {messages.map((m) => (
-          <div key={m.id} className={`chat-msg ${m.role}`}>
-            {m.role === 'assistant' ? (
-              <>
-                <div className={`chat-msg-text chat-md${m.streaming ? ' streaming' : ''}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                  {!m.content && m.streaming && <span className="streaming-cursor" />}
-                </div>
-                {tokenLabel(m) ? (
-                  <div
-                    className="chat-msg-tokens"
-                    title="Вход последнего запроса = вся история на момент ответа"
-                  >
-                    {tokenLabel(m)}
+        {messages.map((m) => {
+          // Id сообщения в истории бэкенда, если оно пришло из истории (для ветвления).
+          const historyId = m.historyId;
+          return (
+            <div key={m.id} className={`chat-msg ${m.role}`}>
+              {m.role === 'assistant' ? (
+                <>
+                  <div className={`chat-msg-text chat-md${m.streaming ? ' streaming' : ''}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    {!m.content && m.streaming && <span className="streaming-cursor" />}
                   </div>
-                ) : null}
-                {m.error ? <div className="chat-msg-error">{m.error}</div> : null}
-              </>
-            ) : m.role === 'system' ? (
-              // Служебная заметка бэкенда (например, информация о сжатии контекста) —
-              // приглушённая строка между репликами, без пузыря.
-              <span className="chat-msg-text chat-msg-system">{m.content}</span>
-            ) : (
-              <span className="chat-msg-text">
-                {m.content}
-                {m.streaming && <span className="streaming-cursor" />}
-              </span>
-            )}
-          </div>
-        ))}
+                  {tokenLabel(m) ? (
+                    <div
+                      className="chat-msg-tokens"
+                      title="Вход последнего запроса = вся история на момент ответа"
+                    >
+                      {tokenLabel(m)}
+                    </div>
+                  ) : null}
+                  {m.error ? <div className="chat-msg-error">{m.error}</div> : null}
+                </>
+              ) : m.role === 'system' ? (
+                // Служебная заметка бэкенда (например, информация о сжатии контекста) —
+                // приглушённая строка между репликами, без пузыря.
+                <span className="chat-msg-text chat-msg-system">{m.content}</span>
+              ) : (
+                <span className="chat-msg-text">
+                  {m.content}
+                  {m.streaming && <span className="streaming-cursor" />}
+                </span>
+              )}
+              {branchOpsEnabled && historyId != null ? (
+                <button
+                  type="button"
+                  className="chat-msg-fork"
+                  title="Создать ветку диалога от этого сообщения — история продолжится с новой цепочкой"
+                  onClick={() => onForkBranch(historyId)}
+                >
+                  Ветка отсюда
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
         {isRunning && (
           <div className="thinking">
             <span className="thinking-text">агент думает</span>

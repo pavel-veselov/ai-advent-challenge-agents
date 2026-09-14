@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content TEXT NOT NULL,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
+    -- id предыдущего сообщения той же ветки (branching); null — корень/системные заметки.
+    -- Поддерживается SessionStore.append для ВСЕХ стратегий; подробности в SessionBranchStore.
+    parent_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -81,4 +84,38 @@ CREATE TABLE IF NOT EXISTS session_llm_settings (
     price_input_per_1m  TEXT,
     price_output_per_1m TEXT,
     reasoning_enabled   TEXT
+);
+
+-- Стратегия контекста сессии (см. SessionContextStore, GET/PUT
+-- /api/sessions/{sessionId}/context-strategy). Строка отсутствует → strategy='none',
+-- window_size=12. active_branch_id — ид активной ветки (branching; см. SessionBranchStore);
+-- null — активная не выбрана (действует ветка «Основная»). Переживает перезапуск backend.
+CREATE TABLE IF NOT EXISTS session_context_strategy (
+    session_id       TEXT PRIMARY KEY,
+    strategy         TEXT NOT NULL DEFAULT 'none',
+    window_size      INTEGER NOT NULL DEFAULT 12,
+    active_branch_id INTEGER NULL
+);
+
+-- «Липкие факты» сессии (см. SessionFactsStore, GET /api/sessions/{sessionId}/facts):
+-- ключ-значение, извлекаемые LLM при стратегии sticky_facts. Порядок строк — порядок
+-- вставки replaceAll (без сортировки по ключу). Переживают перезапуск backend.
+CREATE TABLE IF NOT EXISTS session_facts (
+    session_id TEXT NOT NULL,
+    fact_key   TEXT NOT NULL,
+    fact_value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(session_id, fact_key)
+);
+
+-- Ветки диалога сессии (см. SessionBranchStore, GET/POST/PUT
+-- /api/sessions/{sessionId}/branches). head_message_id — id последнего сообщения ветки
+-- (chat_messages.id); цепочка ветки строится по parent_id (см. SessionStore.append).
+-- Переживают перезапуск backend.
+CREATE TABLE IF NOT EXISTS session_branches (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    head_message_id INTEGER,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
