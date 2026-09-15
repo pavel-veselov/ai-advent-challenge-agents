@@ -7,6 +7,9 @@
   DeleteResponse,
   FactsState,
   HistoryResponse,
+  MemoryState,
+  Project,
+  ProjectSessionCreated,
   RunSettings,
   SessionCompression,
   SessionCompressionPatch,
@@ -14,6 +17,7 @@
   SessionContextStrategyState,
   SessionLlmSettings,
   SessionLlmSettingsPatch,
+  SessionSummary,
   SessionsResponse,
   StatsResponse,
 } from './types';
@@ -129,6 +133,79 @@ export async function fetchFacts(sessionId: string): Promise<FactsState> {
 }
 
 /**
+ * Память проекта (рабочая + долговременная): GET /api/projects/{projectId}/memory.
+ * Рабочая память общая для всех сессий проекта; долговременная — глобальна.
+ */
+export async function fetchProjectMemory(projectId: number): Promise<MemoryState> {
+  const res = await fetch(`/api/projects/${projectId}/memory`);
+  if (!res.ok) throw new Error(`project memory http ${res.status}`);
+  return (await res.json()) as MemoryState;
+}
+
+/**
+ * Добавить запись долговременной памяти: POST /api/sessions/{sessionId}/memory/long-term.
+ * LTM глобальна; sessionId задаёт только источник записи (source_session_id).
+ */
+export async function addLongTermMemory(
+  sessionId: string,
+  body: { type: string; key: string; value: string },
+): Promise<void> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/memory/long-term`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`long-term memory POST http ${res.status}`);
+}
+
+/**
+ * Удалить запись долговременной памяти: DELETE /api/sessions/{sessionId}/memory/long-term/{entryId}.
+ */
+export async function deleteLongTermMemory(sessionId: string, entryId: number): Promise<void> {
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/memory/long-term/${entryId}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw new Error(`long-term memory DELETE http ${res.status}`);
+}
+
+/**
+ * Очистка ВСЕЙ долговременной памяти (глобальная: все проекты и сессии):
+ * DELETE /api/memory/long-term. Тело ответа не разбираем: успех — 200.
+ */
+export async function clearLongTermMemory(): Promise<void> {
+  const res = await fetch('/api/memory/long-term', { method: 'DELETE' });
+  if (!res.ok) throw new Error(`long-term memory clear DELETE http ${res.status}`);
+}
+
+/**
+ * Новая задача (сброс рабочей памяти проекта): POST /api/projects/{projectId}/memory/new-task.
+ */
+export async function resetProjectMemory(projectId: number): Promise<void> {
+  const res = await fetch(`/api/projects/${projectId}/memory/new-task`, { method: 'POST' });
+  if (!res.ok) throw new Error(`project memory new-task POST http ${res.status}`);
+}
+
+/** Тело POST /api/projects/{projectId}/memory/notes. */
+export interface SaveWorkingNoteRequest {
+  note: string;
+}
+
+/**
+ * Добавить заметку в рабочую память проекта: POST /api/projects/{projectId}/memory/notes.
+ * Заметка попадает в notes рабочей памяти, общей для всех сессий проекта.
+ * Тело запроса не разбираем: успех — 200, ошибка бросает (UI показывает «Ошибка» у кнопки).
+ */
+export async function saveWorkingNote(projectId: number, note: string): Promise<void> {
+  const res = await fetch(`/api/projects/${projectId}/memory/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note } satisfies SaveWorkingNoteRequest),
+  });
+  if (!res.ok) throw new Error(`project memory notes POST http ${res.status}`);
+}
+
+/**
  * Ветки диалога сессии: GET /api/sessions/{sessionId}/branches (активная ветка + список).
  */
 export async function fetchBranches(sessionId: string): Promise<BranchesState> {
@@ -192,6 +269,69 @@ export async function updateSessionLlmSettings(
   });
   if (!res.ok) throw new Error(`session llm-settings PUT http ${res.status}`);
   return (await res.json()) as SessionLlmSettings;
+}
+
+/** Каталог проектов: GET /api/projects. */
+export async function fetchProjects(): Promise<Project[]> {
+  const res = await fetch('/api/projects');
+  if (!res.ok) throw new Error(`projects http ${res.status}`);
+  return (await res.json()) as Project[];
+}
+
+/** Создание проекта: POST /api/projects {name}; возвращает созданный Project. */
+export async function createProject(name: string): Promise<Project> {
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`projects POST http ${res.status}`);
+  return (await res.json()) as Project;
+}
+
+/** Переименование проекта: PATCH /api/projects/{id} {name}; возвращает обновлённый Project. */
+export async function renameProject(id: number, name: string): Promise<Project> {
+  const res = await fetch(`/api/projects/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`projects PATCH http ${res.status}`);
+  return (await res.json()) as Project;
+}
+
+/**
+ * Удаление проекта: DELETE /api/projects/{id}. Каскад на бэкенде: сессии проекта
+ * (вместе с историями) и рабочая память проекта; долговременная память не трогается.
+ */
+export async function deleteProject(id: number): Promise<DeleteResponse> {
+  const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`projects DELETE http ${res.status}`);
+  return (await res.json()) as DeleteResponse;
+}
+
+/** Сессии проекта: GET /api/projects/{id}/sessions. */
+export async function fetchProjectSessions(projectId: number): Promise<SessionSummary[]> {
+  const res = await fetch(`/api/projects/${projectId}/sessions`);
+  if (!res.ok) throw new Error(`project sessions http ${res.status}`);
+  return (await res.json()) as SessionSummary[];
+}
+
+/**
+ * Создание сессии внутри проекта: POST /api/projects/{id}/sessions {title?}.
+ * id сессии генерирует сервер (UUID); возвращает {sessionId, projectId, title}.
+ */
+export async function createSessionInProject(
+  projectId: number,
+  title?: string,
+): Promise<ProjectSessionCreated> {
+  const res = await fetch(`/api/projects/${projectId}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(title != null ? { title } : {}),
+  });
+  if (!res.ok) throw new Error(`project sessions POST http ${res.status}`);
+  return (await res.json()) as ProjectSessionCreated;
 }
 
 /** РљР°С‚Р°Р»РѕРі РІСЃРµС… СЃРµСЃСЃРёР№ СЃ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅС‹РјРё РјРµС‚СЂРёРєР°РјРё (GET /api/sessions). */

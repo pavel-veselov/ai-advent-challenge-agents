@@ -113,23 +113,65 @@ body::after {
   background-clip: padding-box;
 }
 
+/* Каркас: горизонтальная строка на всю высоту окна — слева рабочая зона (проект-бар ·
+   вкладки · чат), правее разделитель и общая колонка «настройки LLM + лог шагов»,
+   которая тянется от верхнего края окна до нижнего, а не только до панелей. */
 .app-shell {
-  display: grid;
-  grid-template-rows: auto 1fr auto; /* вкладки · основная область · статистика */
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-direction: row;
   height: 100vh;
   background: var(--seam);
-  gap: 1px;
 }
 
-/* Основная область между вкладками и статистикой: чат (2/3) + лог шагов (1/3) */
-.app-main {
-  display: grid;
-  grid-template-columns: 2fr 1fr; /* лог шагов — 1/3 экрана */
-  gap: 1px;
+/* Левая рабочая зона app-shell: проект-бар, вкладки, чат. Правее — разделитель и общая
+   колонка «настройки LLM + лог шагов» (sidebar-column), тянущаяся на всю высоту окна. */
+.app-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   min-width: 0;
   background: var(--seam);
+}
+
+/* Основная область: чат (настройки LLM переехали в правую колонку app-shell) */
+.app-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+  min-width: 0;
+  background: var(--seam);
+}
+
+/* Разделитель перетаскивания ширины колонки лога: узкая зона захвата с гравировкой */
+.steps-resizer {
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none; /* перетаскивание мышью/тачем без прокрутки страницы */
+  background: var(--seam);
+}
+
+/* Видимая линия разделителя — тонкая, «выгравированная» */
+.steps-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: var(--border);
+}
+
+.steps-resizer:hover::before,
+.steps-resizer.active::before {
+  background: var(--accent);
+}
+
+.steps-resizer.active::before {
+  box-shadow: var(--glow-amber);
 }
 
 /* Пустое состояние вместо чата: сессий нет — приглашение создать первую */
@@ -203,6 +245,139 @@ body::after {
 .app-empty-btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* ---------- Проекты (уровень над сессиями) ---------- */
+.project-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(242, 232, 213, 0.05), inset 0 -6px 12px rgba(5, 12, 8, 0.3);
+  flex-shrink: 0;
+}
+
+.project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--text-dim);
+  flex: none;
+  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.3);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.project-chip.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--field));
+  color: var(--text-dim);
+  box-shadow: var(--glow-amber), inset 1px 1px 0 rgba(242, 232, 213, 0.07);
+}
+
+.project-chip-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: inherit;
+  padding: 0;
+  line-height: 1.5;
+}
+
+.project-chip-name:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.project-chip.active .project-chip-name {
+  color: var(--accent);
+}
+
+.project-chip-del {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  font-size: 14px;
+  border-radius: 3px;
+  color: var(--steel);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-chip-del:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  color: var(--red-bright);
+}
+
+.project-add {
+  flex: none;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px dashed var(--steel);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.project-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--accent);
+  box-shadow: var(--glow-amber);
+}
+
+.project-btn {
+  flex: none;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text-dim);
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.project-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.project-btn:disabled {
+  opacity: 0.55;
+}
+
+.project-create-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.project-create-input {
+  width: 200px;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.project-create-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* ---------- Вкладки сессий ---------- */
@@ -294,71 +469,6 @@ body::after {
   border-color: var(--accent);
   color: var(--accent);
   box-shadow: var(--glow-amber);
-}
-
-/* ---------- Статистика (нижняя полоса на всю ширину) ---------- */
-.stats-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px 24px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--border);
-  background: linear-gradient(180deg, #22352b, #182720);
-  box-shadow: inset 0 1px 0 rgba(242, 232, 213, 0.07);
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.4;
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-
-.stats-section {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 14px;
-}
-
-.stats-label {
-  color: var(--accent);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 11px;
-}
-
-/* Красная звезда перед меткой раздела статистики */
-.stats-label::before {
-  content: '';
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  margin-right: 6px;
-  vertical-align: -1px;
-  background: var(--svg-star) center / contain no-repeat;
-}
-
-.stats-badge {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
-}
-
-.stats-badge b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-/* Вертикальный разделитель между разделами полосы статистики
-   (токены | контекст | за все время) — тонкая гравировка. */
-.stats-divider {
-  align-self: stretch;
-  width: 1px;
-  background: color-mix(in srgb, var(--border) 65%, transparent);
 }
 
 /* ---------- Панели: скошенные грани + клёпки по углам ---------- */
@@ -891,17 +1001,29 @@ button:disabled {
   font: inherit;
 }
 
-/* Правая колонка: блок настроек LLM сверху, лог шагов под ним */
-.steps-column {
+/* Правая колонка «настройки LLM + лог шагов»: прямой ребёнок app-shell, поэтому тянется
+   на всю высоту окна. Фиксированную ширину задаёт App (inline style, меняется
+   разделителем .steps-resizer), поэтому flex: none. Внутри — настройки сверху,
+   лог снизу (занимает остаток высоты). */
+.sidebar-column {
+  flex: none;
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
+  background: var(--seam);
 }
 
-/* Блок настроек LLM: приборная доска с янтарной световой линией сверху */
+/* Блок настроек LLM: приборная доска с янтарной световой линией сверху. В правой колонке
+   живёт над логом шагов: разворачивается максимум до 65% высоты колонки и скроллится сам
+   (overflow-y), поэтому лог снизу остаётся видимым при любой высоте настроек. */
 .llm-settings-block {
   flex-shrink: 0;
+  min-height: 0;
+  max-height: 65%;
+  overflow-y: auto;
   background-color: #20332a;
   background-image:
     repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
@@ -929,6 +1051,29 @@ button:disabled {
 .llm-settings-block-header h2 {
   margin: 0;
   font: inherit;
+}
+
+/* Заголовок блока — кнопка (по названию секции): клик сворачивает/разворачивает весь блок.
+   По умолчанию блок свёрнут; подсказки и индикатор сохранения остаются в шапке всегда. */
+.llm-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+}
+
+.llm-settings-toggle:hover {
+  color: var(--accent);
+}
+
+.llm-settings-chevron {
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
 }
 
 /* Индикатор результата сохранения в шапке блока: точка-лампа + текст (моно 11px) */
@@ -1000,7 +1145,7 @@ button:disabled {
   word-break: break-word;
 }
 
-/* Группа полей: маленький uppercase-заголовок с линией-отбивкой */
+/* Группа полей: маленький uppercase-заголовок с линией-отбивкой (статичный, не кликабельный) */
 .llm-group {
   display: flex;
   flex-direction: column;
@@ -1462,6 +1607,53 @@ button:disabled {
   color: var(--accent);
 }
 
+/* Ряд мини-кнопок «сохранить в память» под сообщением (только по клику пользователя) */
+.chat-msg-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chat-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.chat-save-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-save-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Статус сохранения: гаснет через 2 секунды (сброс таймером из ChatPanel) */
+.chat-save-state {
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.chat-save-state.is-ok {
+  color: var(--green);
+}
+
+.chat-save-state.is-error {
+  color: var(--red-bright);
+}
+
 .steps-list {
   flex: 1;
   min-height: 0;
@@ -1560,7 +1752,7 @@ button:disabled {
 .step-time {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
@@ -1628,21 +1820,34 @@ button:disabled {
   color: var(--text-dim);
 }
 
-/* Служебное событие жизненного цикла (kind = system): приглушённая строка без карточки */
+/* Служебная строка лога (kind = system): текст + пояснение «для чайников» под ним */
 .step-system {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 4px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.step-system-line {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 4px;
-  font-size: 11px;
-  font-style: italic;
-  color: var(--text-dim);
 }
 
 .step-system-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Пояснение под служебной строкой — приглушённое, как .step-explanation */
+.step-system-hint {
+  padding-left: 44px; /* под текст события (время + отступ) */
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
 }
 
 /* ---------- Служебное ---------- */
@@ -1721,4 +1926,331 @@ button:disabled {
   /* Никакого wait-курсора: действие не выполняется, пока кнопку не кликнули */
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* ---------- Панель «Память»: краткосрочная / рабочая / долговременная ---------- */
+
+/* Хром панели берётся у .steps-panel (клёпки + скошенные грани), но сама панель
+   не растягивается на колонку: остаток забирает лог шагов (steps-panel flex: 1). */
+.mem-panel {
+  flex: none;
+  max-height: 58vh;
+}
+
+/* Тело панели: скроллится, если три раздела не влезли в отведённый лимит */
+.mem-body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Секция: статический заголовок-метка, содержимое видно всегда (сворачивания нет) */
+.mem-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mem-section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+.mem-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--steel) 80%, transparent), transparent);
+}
+
+/* Подсказка-пояснение (краткосрочная память): моно 11px, приглушённая — как .llm-hint */
+.mem-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.2px;
+  color: color-mix(in srgb, var(--text-dim) 75%, transparent);
+}
+
+/* Пока GET /memory не ответил: тонкая строка вместо данных */
+.mem-loading {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  color: color-mix(in srgb, var(--text-dim) 70%, transparent);
+}
+
+/* Пустое состояние внутри раздела (нет задачи / нет записей) */
+.mem-empty-inline {
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* Строка рабочей памяти: текст задачи слева, кнопка «Новая задача» справа */
+.mem-wm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mem-wm-task {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* Нумерованные заметки рабочей памяти: маленькие блоки с моно-нумерацией */
+.mem-wm-notes {
+  margin: 0;
+  padding: 0 0 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  counter-reset: mem-note;
+}
+
+.mem-wm-note {
+  position: relative;
+  padding: 5px 8px;
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 3px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  list-style: none;
+  counter-increment: mem-note;
+}
+
+.mem-wm-note::before {
+  content: counter(mem-note);
+  position: absolute;
+  left: -20px;
+  top: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* Список долговременных записей: колонка карточек, при переполнении — скролл */
+.mem-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.mem-entry {
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.mem-entry-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mem-entry-key {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem-entry-del {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mem-entry-del:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red-bright);
+}
+
+.mem-entry-value {
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.mem-entry-src {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: color-mix(in srgb, var(--text-dim) 70%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Бейджи типов долговременной памяти — те же пилюли, что .debug-badge, три оттенка палитры */
+.mem-type-badge {
+  flex: none;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+
+.mem-type-badge.is-profile {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.mem-type-badge.is-decision {
+  color: var(--green);
+  border: 1px solid var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.mem-type-badge.is-knowledge {
+  color: var(--text-dim);
+  border: 1px solid var(--steel);
+  background: color-mix(in srgb, var(--steel) 22%, transparent);
+}
+
+/* Кнопки панели: пилюли в стиле .btn-reset; «Сохранить» — с янтарным намёком */
+.mem-btn {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mem-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mem-btn-primary {
+  margin-left: auto;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+}
+
+.mem-btn-primary:hover:not(:disabled) {
+  box-shadow: var(--glow-amber);
+}
+
+/* Форма добавления записи: селект типа + ключ в ряд, значение и кнопка ниже */
+.mem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mem-form-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mem-form-type {
+  flex: none;
+  width: 118px;
+}
+
+/* Поля ввода: утопленное «стекло» приборов, как .llm-num / .branch-select */
+.mem-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.mem-input::placeholder {
+  color: color-mix(in srgb, var(--text-dim) 60%, transparent);
+}
+
+.mem-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mem-form-type {
+  cursor: pointer;
+}
+
+.mem-form-type option {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* Инлайн-ошибка API формы (вместо alert) — как .llm-error-line */
+.mem-error {
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-left: 3px solid var(--red);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red-bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
 }

@@ -1,6 +1,7 @@
 package com.example.llmagent.agent
 
 import com.example.llmagent.config.LlmProperties
+import org.slf4j.LoggerFactory
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.RowMapper
 import org.springframework.jdbc.support.GeneratedKeyHolder
@@ -35,6 +36,27 @@ data class SessionAggregate(
     val lastActivity: String,
     /** Содержимое ПЕРВОГО user-сообщения сессии (для заголовка вкладки); null, если user-сообщений нет. */
     val firstUserMessage: String? = null,
+    /** id проекта, которому принадлежит сессия; -1 — сессия без строки в chat_sessions (легаси/осиротевшая). */
+    val projectId: Long = -1,
+)
+
+/**
+ * Сводка сессии ПРОЕКТА (см. [SessionStore.listByProject]): агрегаты по сообщениям/токенам
+ * сессии + title из chat_sessions + projectId. costUsd — условная стоимость по ТЕКУЩИМ
+ * тарифам настроек ((prompt*priceInput + completion*priceOutput)/1M), как у
+ * GET /api/sessions. [lastActivity] — created_at последнего сообщения (для пустой сессии —
+ * created_at самой сессии из chat_sessions).
+ */
+data class ProjectSession(
+    val sessionId: String,
+    val title: String?,
+    val messageCount: Long = 0,
+    val promptTokens: Long = 0,
+    val completionTokens: Long = 0,
+    val costUsd: Double = 0.0,
+    val lastActivity: String,
+    val firstUserMessage: String? = null,
+    val projectId: Long,
 )
 
 /** Кумулятивная статистика «за всё время» (переживает удаление сессий, только растёт). */
@@ -46,18 +68,23 @@ data class LifetimeStats(
 )
 
 /**
- * История диалогов в SQLite (таблица chat_messages) через JdbcTemplate.
+ * История диалогов в SQLite (таблица chat_messages) через JdbcTemplate, а с появлением
+ * проектов — и реестр сессий (таблица chat_sessions: server-side session_id, project_id,
+ * title). Сессии СОЗДАЮТСЯ ЯВНО через [createSession] (POST /api/projects/{id}/sessions);
+ * [append] по-прежнему молча пишет сообщения для любого session_id (в т.ч. сессий,
+ * которых нет в chat_sessions — легаси/тестовые орфаны, см. [listSessionAggregates]).
  * Данные переживают перезапуск backend: файл БД по умолчанию ./data/llm-agent.db
  * (переопределяется переменной окружения SQLITE_DB_PATH). Схема создаётся
  * автоматически из schema.sql при старте приложения; колонки токенов и таблица
  * lifetime_stats добавляются миграцией при инициализации (см. migrate()), чтобы
  * поднять старые БД. lifetime_stats при первом создании бэкафиллится из уже
- * накопленной истории (см. seedLifetimeFromHistory()).
+ * накопленной истории (см. seedLifetimeFromHistory). Легаси-сессии (chat_messages без
+ * строки в chat_sessions) удаляются при инициализации (см. purgeLegacySessions).
  */
 @Component
 class SessionStore(
     private val jdbcTemplate: JdbcTemplate,
-    /** Тарифы для условной стоимости — только для бэкафилла lifetime_stats. */
+    /** Тарифы для условной стоимости — только для бэкафилла lifetime_stats и listByProject (costUsd). */
     private val llm: LlmProperties = LlmProperties(),
     /**
      * Хранилище веток (branching). Дерево parent_id поддерживается ВО ВСЕХ стратегиях
@@ -66,6 +93,8 @@ class SessionStore(
      */
     private val branchStore: SessionBranchStore? = null,
 ) {
+
+    private val log = LoggerFactory.getLogger(SessionStore::class.java)
 
     init {
         migrate()
@@ -197,6 +226,103 @@ class SessionStore(
         ).firstOrNull()
 
     /**
+     * Создаёт сессию В ПРОЕКТЕ (POST /api/projects/{id}/sessions): server-side id
+     * (UUID), title (null — без заголовка), project_id = FK. Должен вызываться после
+     * того, как проект создан (ProjectStore.create). Fail-open: сбой записи — warn и
+     * "unknown" (вызывающий код обычно проверяет проект до создания сессии).
+     */
+    fun createSession(projectId: Long, title: String?): String {
+        val sessionId = java.util.UUID.randomUUID().toString()
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO chat_sessions (session_id, project_id, title) VALUES (?, ?, ?)",
+                sessionId, projectId, title,
+            )
+            return sessionId
+        } catch (e: Exception) {
+            log.warn("SessionStore.createSession(project={}) не удался: {}", projectId, e.message)
+            // Fail-open: вернуть "unknown" — запись в чат с таким id потом молча не найдёт проект.
+            return SESSION_ID_FALLBACK
+        }
+    }
+
+    /** id проекта, которому принадлежит сессия; null — строки в chat_sessions нет (или сбой БД). */
+    fun getProjectId(sessionId: String): Long? {
+        return try {
+            jdbcTemplate.query(
+                "SELECT project_id FROM chat_sessions WHERE session_id = ?",
+                { rs, _ -> rs.getLong("project_id") },
+                sessionId,
+            ).firstOrNull()
+        } catch (e: Exception) {
+            log.warn("SessionStore.getProjectId({}) не удался: {}", sessionId, e.message)
+            null
+        }
+    }
+
+    /** Заголовок сессии из chat_sessions; null — строки нет или заголовок не задан. */
+    fun titleOf(sessionId: String): String? {
+        return try {
+            jdbcTemplate.query(
+                "SELECT title FROM chat_sessions WHERE session_id = ?",
+                { rs, _ -> rs.getString("title") },
+                sessionId,
+            ).firstOrNull()
+        } catch (e: Exception) {
+            log.warn("SessionStore.titleOf({}) не удался: {}", sessionId, e.message)
+            null
+        }
+    }
+
+    /**
+     * Сессии ПРОЕКТА со сводкой по сообщениям (chat_sessions LEFT JOIN chat_messages):
+     * ПУСТЫЕ сессии тоже входят (messageCount=0, lastActivity = created_at сессии).
+     * Сортировка — по последней активности DESC (самая свежая первой); для одинакового
+     * времени — по session_id ASC (детерминизм). costUsd считается по ТЕКУЩИМ тарифам.
+     */
+    fun listByProject(projectId: Long): List<ProjectSession> {
+        val rows = jdbcTemplate.query(
+            """
+            SELECT s.session_id, s.title, s.created_at AS s_created,
+                   COUNT(m.id) AS cnt,
+                   COALESCE(SUM(m.prompt_tokens), 0) AS p,
+                   COALESCE(SUM(m.completion_tokens), 0) AS c,
+                   COALESCE(MAX(m.created_at), s.created_at) AS last_at,
+                   (SELECT m2.content FROM chat_messages m2
+                    WHERE m2.session_id = s.session_id AND m2.role = 'user'
+                    ORDER BY m2.id LIMIT 1) AS first_user_message
+            FROM chat_sessions s
+            LEFT JOIN chat_messages m ON m.session_id = s.session_id
+            WHERE s.project_id = ?
+            GROUP BY s.session_id, s.title, s.created_at
+            ORDER BY last_at DESC, s.session_id ASC
+            """.trimIndent(),
+            { rs, _ ->
+                ProjectSession(
+                    sessionId = rs.getString("session_id"),
+                    title = rs.getString("title"),
+                    messageCount = rs.getLong("cnt"),
+                    promptTokens = rs.getLong("p"),
+                    completionTokens = rs.getLong("c"),
+                    costUsd = costUsd(rs.getLong("p"), rs.getLong("c")),
+                    lastActivity = rs.getString("last_at"),
+                    firstUserMessage = rs.getString("first_user_message"),
+                    projectId = projectId,
+                )
+            },
+            projectId,
+        )
+        return rows
+    }
+
+    /** (prompt*priceInput + completion*priceOutput) / 1M; с нулевыми токенами — 0.0. */
+    private fun costUsd(promptTokens: Long, completionTokens: Long): Double {
+        val p = promptTokens * llm.priceInputPer1M
+        val c = completionTokens * llm.priceOutputPer1M
+        return (p + c) / 1_000_000.0
+    }
+
+    /**
      * Цепочка сообщений ветки: поднимаемся по parent_id от головы до корня (parent_id IS NULL)
      * и разворачиваем в хронологическом порядке (корень → голова). ВОЗВРАЩАЕТ ВСЕ роли
      * (включая system) — фильтрацию «не-системных» делает вызывающий код (AgentImpl /
@@ -274,23 +400,66 @@ class SessionStore(
 
     /**
      * Агрегаты по токенам для каждой сессии: число сообщений, суммы колонок токенов и
-     * время последней активности. Суммы пустых/нулевых токенов схлопываются в 0;
-     * lastActivity — строка created_at (UTC 'YYYY-MM-DD HH:MM:SS') последнего сообщения;
+     * время последней активности. Источник — обе сущности: сессии из `chat_sessions`
+     * (LEFT JOIN chat_messages — ПУСТЫЕ сессии тоже входят) ПЛЮС «осиротевшие» сессии,
+     * у которых сообщения есть, а строки в chat_sessions нет (легаси/тестовые орфаны).
+     * Суммы пустых/нулевых токенов схлопываются в 0; lastActivity — строка created_at
+     * последнего сообщения (для пустой сессии — created_at самой сессии из chat_sessions);
      * firstUserMessage — содержание первого user-сообщения (сабквери), null, если таких нет.
+     * Сортировка — по последней активности DESC (самая свежая первой), для одинакового
+     * времени — по session_id ASC (детерминизм).
      */
-    fun listSessionAggregates(): List<SessionAggregate> =
-        jdbcTemplate.query(
+    fun listSessionAggregates(): List<SessionAggregate> {
+        // Как только появляется реестр сессий (projects/chat_sessions) — агрегируем ОБЕ
+        // сущности: сессии из chat_sessions (LEFT JOIN — ПУСТЫЕ тоже) + «осиротевшие»
+        // сессии из chat_messages (легаси/тесты). Для старых БД/юнит-схемы без
+        // chat_sessions — прежний путь (только chat_messages).
+        val sql = if (tableExists("chat_sessions")) {
             """
-            SELECT m.session_id, COUNT(*) AS cnt, COALESCE(SUM(m.prompt_tokens),0) AS p,
-                   COALESCE(SUM(m.completion_tokens),0) AS c, MAX(m.created_at) AS last_at,
+            SELECT s.session_id, s.project_id,
+                   COUNT(m.id) AS cnt,
+                   COALESCE(SUM(m.prompt_tokens),0) AS p,
+                   COALESCE(SUM(m.completion_tokens),0) AS c,
+                   COALESCE(MAX(m.created_at), s.created_at) AS last_at,
+                   (SELECT m2.content FROM chat_messages m2
+                    WHERE m2.session_id = s.session_id AND m2.role = 'user'
+                    ORDER BY m2.id LIMIT 1) AS first_user_message
+            FROM chat_sessions s
+            LEFT JOIN chat_messages m ON m.session_id = s.session_id
+            GROUP BY s.session_id, s.project_id
+
+            UNION ALL
+
+            -- «Осиротевшие» сессии: сообщения есть, строки в chat_sessions нет (легаси/тесты).
+            SELECT m3.session_id, -1 AS project_id,
+                   COUNT(*) AS cnt,
+                   COALESCE(SUM(m3.prompt_tokens),0) AS p,
+                   COALESCE(SUM(m3.completion_tokens),0) AS c,
+                   MAX(m3.created_at) AS last_at,
+                   (SELECT m5.content FROM chat_messages m5
+                    WHERE m5.session_id = m3.session_id AND m5.role = 'user'
+                    ORDER BY m5.id LIMIT 1) AS first_user_message
+            FROM chat_messages m3
+            WHERE m3.session_id NOT IN (SELECT session_id FROM chat_sessions)
+            GROUP BY m3.session_id
+
+            ORDER BY last_at DESC, session_id ASC
+            """.trimIndent()
+        } else {
+            """
+            SELECT session_id, -1 AS project_id, COUNT(*) AS cnt,
+                   COALESCE(SUM(prompt_tokens),0) AS p,
+                   COALESCE(SUM(completion_tokens),0) AS c,
+                   MAX(created_at) AS last_at,
                    (SELECT m2.content FROM chat_messages m2
                     WHERE m2.session_id = m.session_id AND m2.role = 'user'
                     ORDER BY m2.id LIMIT 1) AS first_user_message
             FROM chat_messages m
-            GROUP BY m.session_id
-            ORDER BY MAX(m.id) DESC
+            GROUP BY session_id
+            ORDER BY last_at DESC, session_id ASC
             """.trimIndent()
-        ) { rs, _ ->
+        }
+        return jdbcTemplate.query(sql) { rs, _ ->
             SessionAggregate(
                 sessionId = rs.getString("session_id"),
                 messageCount = rs.getLong("cnt"),
@@ -298,9 +467,10 @@ class SessionStore(
                 completionTokens = rs.getLong("c"),
                 lastActivity = rs.getString("last_at"),
                 firstUserMessage = rs.getString("first_user_message"),
+                projectId = rs.getLong("project_id"),
             )
         }
-
+    }
     /**
      * Кумулятивная статистика «за всё время»: число созданных сессий и суммы токенов/стоимости.
      * Счётчики только растут — удаление сессий их не уменьшает.
@@ -331,9 +501,17 @@ class SessionStore(
         jdbcTemplate.update("UPDATE lifetime_stats SET sessions_total = sessions_total + 1 WHERE id = 1")
     }
 
-    /** Удаляет всю историю сессии. */
+    /**
+     * Удаляет всю историю сессии и (при наличии таблицы chat_sessions) саму сессию из
+     * реестра. DELETE /api/sessions/{sessionId}: строка chat_sessions тоже удаляется —
+     * пересоздание сессии возможно только явным createSession. Осиротевшие сообщения
+     * вместе с сессией не остаются.
+     */
     fun delete(sessionId: String) {
         jdbcTemplate.update("DELETE FROM chat_messages WHERE session_id = ?", sessionId)
+        if (tableExists("chat_sessions")) {
+            jdbcTemplate.update("DELETE FROM chat_sessions WHERE session_id = ?", sessionId)
+        }
     }
 
     /**
@@ -365,11 +543,41 @@ class SessionStore(
             )
             """.trimIndent()
         )
+        // Легаси-сессии до появления проектов: сообщения без строки в chat_sessions.
+        // По решению пользователя старые сессии УДАЛЯЮТСЯ — чистим их следы до
+        // бэкафилла lifetime_stats (см. purgeLegacySessions).
+        purgeLegacySessions()
         // Гарантируем наличие одиночной строки-счётчика (id = 1) и бэкафиллим её из
         // уже существующей истории — только пока строка ещё не накопила данные
         // (см. seedLifetimeFromHistory). Повторные рестарты не дублируют счётчики.
         seedLifetimeFromHistory()
     }
+
+    /**
+     * Удаляет «осиротевшие» сообщения chat_messages: строки, чей session_id НЕ ссылается
+     * на chat_sessions (легаси-сессии, созданные неявным append'ом до появления проектов).
+     * По решению пользователя (день 12) такие сессии УДАЛЯЮТСЯ — приложение стартует
+     * «чисто», с проектами, без «Без проекта». Идемпотентно: повторный рестарт ничего
+     * не удаляет (осиротевших строк уже нет). Пропускается, если таблицы chat_sessions
+     * нет (старые БД/юнит-тесты без неё) или при сбое — fail-open.
+     */
+    private fun purgeLegacySessions() {
+        if (!tableExists("chat_sessions")) return
+        try {
+            jdbcTemplate.update(
+                "DELETE FROM chat_messages WHERE session_id NOT IN (SELECT session_id FROM chat_sessions)"
+            )
+        } catch (e: Exception) {
+            log.warn("SessionStore: вычистить легаси-сессии не удалось: {}", e.message)
+        }
+    }
+
+    private fun tableExists(table: String): Boolean =
+        jdbcTemplate.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            { rs, _ -> rs.getString(1) },
+            table,
+        ).isNotEmpty()
 
     /**
      * Бэкафилл lifetime_stats из существующей истории chat_messages. Сначала гарантируем
@@ -422,5 +630,10 @@ class SessionStore(
             is Number -> v.toLong()
             else -> null
         }
+    }
+
+    companion object {
+        /** Fail-open fallback для createSession при сбое записи (см. KDoc метода). */
+        const val SESSION_ID_FALLBACK = "unknown"
     }
 }

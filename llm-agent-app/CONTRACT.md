@@ -8,8 +8,8 @@
 |-------|------|------------------|-------|
 | `POST` | `/api/chat` | `{ "sessionId": string, "message": string }` | `text/event-stream` — поток событий агента (см. ниже) |
 | `GET` | `/api/sessions/{sessionId}/history` | — | `{ "sessionId": string, "messages": [{ "id": number, "role": "user"\|"assistant"\|"system", "content": string, "promptTokens": number\|null, "completionTokens": number\|null }], "totals": { "promptTokens": number, "completionTokens": number, "costUsd": number } \| null }` — см. раздел «История и ветки» ниже |
-| `DELETE` | `/api/sessions/{sessionId}` | — | `{ "deleted": boolean }` — удаляет всю историю сессии и ВСЕ per-session данные (сжатие, настройки LLM, стратегию контекста, факты, ветки); всегда 200 |
-| `GET` | `/api/sessions` | — | `{ "sessions": [{ "sessionId": string, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lastActivity": string, "firstUserMessage": string\|null }] }` — все сессии с агрегатами по токенам, стоимостью и первым user-сообщением |
+| `DELETE` | `/api/sessions/{sessionId}` | — | `{ "deleted": boolean }` — удаляет всю историю сессии и ВСЕ per-session данные (сжатие, настройки LLM, стратегию контекста, факты, ветки); рабочую память ПРОЕКТА (общую для сессий проекта) и глобальную LTM НЕ трогает; всегда 200 |
+| `GET` | `/api/sessions` | — | `{ "sessions": [{ "sessionId": string, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lastActivity": string, "firstUserMessage": string\|null, "projectId": number }] }` — все сессии с агрегатами по токенам, стоимостью и первым user-сообщением (`projectId` — id проекта сессии; `-1` — сессия без строки в `chat_sessions`) |
 | `GET` | `/api/stats` | — | `{ "sessionCount": number, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lifetime": { "sessions": number, "promptTokens": number, "completionTokens": number, "totalTokens": number, "costUsd": number } }` — глобальная статистика по всем сессиям + кумулятивные счётчики «за всё время» (переживают удаление сессий) |
 | `GET` | `/api/llm-settings` | — | применённые настройки LLM — та же структура, что `settings` у `agent_started` (см. ниже) |
 | `PUT` | `/api/llm-settings` | частичное обновление: `{ "model"?: string, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "reasoningEnabled"?: boolean\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number }` | `200` — применённые настройки после обновления (та же структура, что `GET`); `400` — невалидное значение (см. раздел «Динамические настройки LLM») |
@@ -25,6 +25,47 @@
 | `GET` | `/api/sessions/{sessionId}/branches` | — | `200` — `{ "sessionId": string, "activeBranchId": number\|null, "branches": [ { "id": number, "name": string, "headMessageId": number\|null, "createdAt": string } ] }` — ветки диалога; пусто — веток нет |
 | `POST` | `/api/sessions/{sessionId}/branches` | `{ "messageId": number }` | `200` — объект ветки (`{ "id", "name", "headMessageId", "createdAt" }`): ветка создаётся с головой в `messageId` (fork), авто-имя «Ветка N» (N = число веток + 1), становится АКТИВНОЙ; `400` — `messageId` не принадлежит сессии |
 | `PUT` | `/api/sessions/{sessionId}/branches` | `{ "activeBranchId": number }` | `200` — полный GET-shape после переключения активной ветки; `400` — неизвестная ветка |
+| `GET` | `/api/projects` | — | `200` — `[{ "id": number, "name": string, "createdAt": string, "updatedAt": string }]` — все проекты в порядке создания |
+| `POST` | `/api/projects` | `{ "name": string }` | `200` — созданный проект (тот же shape, что у `GET /api/projects`); `400` — пустое/отсутствующее `name` |
+| `PATCH` | `/api/projects/{id}` | `{ "name": string }` | `200` — переименованный проект; `404` — нет проекта; `400` — пустое `name` |
+| `DELETE` | `/api/projects/{id}` | — | `200` — `{ "deleted": true }` — КАСКАДНОЕ удаление: все сессии проекта (история + реестр `chat_sessions`), все per-session данные (сжатие, настройки LLM, стратегия контекста, факты, ветки) и рабочая память ПРОЕКТА; LTM (глобальная) НЕ трогается; `404` — нет проекта |
+| `POST` | `/api/projects/{id}/sessions` | `{ "title"?: string }` | `200` — `{ "sessionId": string, "projectId": number, "title": string\|null }` — создание сессии В проекте (server-side id, UUID); `404` — нет проекта |
+| `GET` | `/api/projects/{id}/sessions` | — | `200` — `[{ "sessionId", "title", "messageCount", "promptTokens", "completionTokens", "costUsd", "lastActivity", "firstUserMessage", "projectId" }]` — сессии проекта (включая пустые), по последней активности DESC; `404` — нет проекта |
+| `GET` | `/api/projects/{projectId}/memory` | — | `200` — `{ "working": { "task": string\|null, "notes": string[] }, "longTerm": [...] }` — память ПРОЕКТА: `working` — ОБЩАЯ для всех сессий проекта (см. «Память агента»), `longTerm` — ГЛОБАЛЬНЫЙ список (все сессии; `sourceSessionId` — сессия-источник); для нового/несуществующего проекта — пустые структуры (НИКОГДА не `404`) |
+| `POST` | `/api/projects/{projectId}/memory/notes` | `{ "note": string }` | `200` — `{ "note": string, "notes": string[] }` — заметка ПОЛЬЗОВАТЕЛЯ добавлена в рабочую память ПРОЕКТА (`note` — добавленный текст, `notes` — полный актуальный список; cap 1000 на заметку); `400` — пустая `note`; `404` — проекта нет. Единственный путь записи WM (только пользователь) |
+| `POST` | `/api/projects/{projectId}/memory/new-task` | — | `200` — рабочая память ПРОЕКТА очищена (`task=null`, `notes=[]` — «новая задача»); `longTerm` не трогает |
+| `POST` | `/api/sessions/{sessionId}/memory/long-term` | `{ "type": "profile"\|"decision"\|"knowledge", "key": string, "value": string }` | `200` — созданная/обновлённая запись (longTerm-shape из `GET .../memory`): upsert по (type, key), `sourceSessionId` = сессия запроса; `400` — невалидный `type` (должен быть `profile`/`decision`/`knowledge`) или пустые `key`/`value` |
+| `DELETE` | `/api/sessions/{sessionId}/memory/long-term/{entryId}` | — | `200` — запись долговременной памяти с `id = entryId` удалена; `404` — такой записи нет |
+
+### Проекты (задача над сессиями)
+
+Иерархия **Проект → Сессии** (день 12): сессии больше не создаются неявно первым сообщением —
+они СОЗДАЮТСЯ ЯВНО внутри проекта (`POST /api/projects/{id}/sessions`, server-side `sessionId` = UUID)
+и хранятся в реестре `chat_sessions` (FK на `projects`). «Без проекта» намеренно нет: старые
+(неявные) сессии и их данные удаляются миграцией при старте — приложение работает «чисто», с проектами.
+
+- **Таблицы SQLite**: `projects (id, name, created_at, updated_at)` + `chat_sessions (session_id
+  TEXT PK, project_id FK → projects, title, created_at)` + индекс по `project_id`. `chat_messages`
+  остаётся таблицей истории; `agent_working_memory` с day-12 ключуется по **`project_id`** (TEXT),
+  а не по сессии.
+- **Рабочая память (WM) = память ПРОЕКТА**: `{ task, notes[] }` — ОБЩАЯ для всех сессий проекта
+  (переключатель сессии внутри проекта переносит ту же WM). Читается агентом по `projectId` (для
+  сессии без строки в `chat_sessions` — fallback на `sessionId`) и ПОДАЁТСЯ модели контекстным
+  блоком; пишется ТОЛЬКО пользователем через `POST /api/projects/{projectId}/memory/notes`.
+  Сброс — `POST /api/projects/{projectId}/memory/new-task`; каскадное удаление — `DELETE /api/projects/{id}`.
+- **LTM (долговременная память) остаётся ГЛОБАЛЬНОЙ** (вне проектов): удаление проекта/сессии её
+  не трогает; `sourceSessionId` записи хранит сессию-источник. Пишется ТОЛЬКО пользователем через
+  `POST /api/sessions/{sessionId}/memory/long-term`.
+- **День 13 — память пишет ТОЛЬКО пользователь**: авто-записи агента (захват `task` на старте run,
+  заметки WM после tool-результатов) и инструмент `memory_save` УДАЛЕНЫ. Агент память больше НЕ
+  пишет — WM/LTM лишь подаются модели как контекстные блоки.
+- **`memory_updated`** (SSE): класс события сохранён для обратной совместимости схемы, НО агент
+  его БОЛЬШЕ НЕ ЭМИТИРУЕТ (авто-записи, на которые эмиссия была завязана, удалены); REST-эндпоинты
+  памяти SSE не отправляют — фронтенд после мутаций делает refetch `GET /api/projects/{projectId}/memory`.
+- **Каскад DELETE /api/projects/{id}**: для каждой сессии проекта удаляются `chat_messages` +
+  строка `chat_sessions` + per-session данные (сжатие, настройки LLM, стратегия контекста, факты,
+  ветки); дополнительно удаляется рабочая память проекта (`agent_working_memory` по project_id).
+  LTM не трогается.
 
 ### Управление сервисом (супервизор, не HTTP-эндпоинт backend)
 
@@ -47,8 +88,9 @@
 
 История диалогов хранится в SQLite-файле (по умолчанию `./data/llm-agent.db` относительно
 каталога запуска backend; путь переопределяется переменной окружения `SQLITE_DB_PATH`) и
-**переживает перезапуск backend**. Схема таблиц `chat_messages`, `lifetime_stats`, `app_settings`
-(динамические настройки LLM), `app_models` (состояние «включена/отключена» моделей каталога),
+**переживает перезапуск backend**. Схема таблиц `chat_messages`, `projects` и `chat_sessions`
+(реестр сессий внутри проектов, day-12), `lifetime_stats`, `app_settings` (динамические настройки LLM),
+`app_models` (состояние «включена/отключена» моделей каталога),
 `session_compression` (per-session настройки сжатия истории), `session_summaries` (свёрнутые
 резюме), `session_llm_settings` (per-session настройки LLM), `session_context_strategy`
 (стратегия контекста + активная ветка), `session_facts` («липкие факты») и `session_branches`
@@ -106,6 +148,8 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
 | `context_summary_started` | `{ "foldCount": number, "prompt": [{ "role": string, "content": string }] }` | `context-summary` | «Сжатие истории» (идёт при сжатии ДО основного цикла); `prompt` — точный промпт вызова резюмирования |
 | `context_summary_finished` | `{ "foldCount": number, "promptTokens": number, "completionTokens": number, "summary": string }` | `context-summary` | — (финализация сжатия); `summary` — дословный текст резюме от LLM |
 | `facts_updated` | `{ "facts": { "ключ": "значение" } }` | `facts` | — (sticky_facts): только что извлечённые «липкие факты» сохранены и применены к контексту текущего run; идёт ДО основного цикла (фиксированный `stepId`, вне нумерации итераций, как `context-summary`); payload минимальный — полей токенов нет |
+| `memory_updated` | `{ "projectId": string, "working": { "task": string\|null, "notes": string[] }, "longTerm": [{ "id": number, "sourceSessionId": string, "type": "profile"\|"decision"\|"knowledge", "key": string, "value": string, "createdAt": string, "updatedAt": string }] }` | `memory` | — (memory): полный снапшот памяти — рабочая память ПРОЕКТА (`working`, общая для сессий проекта) и ГЛОБАЛЬНАЯ долговременная (`longTerm` — все сессии, `sourceSessionId` помнит происхождение); приходит, когда агент записывает рабочую память (task/notes) или когда выполняется tool `memory_save`; фиксированный `stepId`, вне нумерации итераций (как `context-summary`); REST-эндпоинты памяти его НЕ отправляют — UI после них делает refetch (см. «Память агента (memory layers)») |
+| `log` | `{ "text": string }` | `log-<idx>` | — «обычная» строка лога каждого действия агента (тот же текст, что в серверном логе с префиксом `[AGENT]`); служебное событие для панели «Логи» UI, на работу агента не влияет |
 | `error` | `{ "message": string }` | `error-<idx>` | — (только баннер в UI) |
 
 Правила генерации `stepId`:
@@ -402,6 +446,58 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
 
 > **Совместимость:** изменение существующих поведений минимально — `SummaryRequestPrompt` и вся
 > семантика `summary` не тронуты; `agent_started` лишь дополнен полем `settings.contextStrategy`.
+
+### Память агента (memory layers)
+
+Модель памяти агента состоит из двух персистентных слоёв (плюс краткосрочная память — окно
+истории, см. «Стратегии контекста»):
+
+- **Рабочая память (working memory, WM)** — **память ПРОЕКТА** (day-12): `{ task, notes[] }`
+  (текущая задача и заметки), ОБЩАЯ для всех сессий проекта.
+  **День 13 — пишется ТОЛЬКО пользователем**: авто-захват `task` на старте run и авто-заметки
+  после tool-результатов УДАЛЕНЫ. Единственный путь записи — `POST /api/projects/{projectId}/memory/notes`
+  (заметка, cap 1000 на заметку; task поле остаётся в схеме, но агентом/контроллером не
+  устанавливается). Очищается `POST /api/projects/{projectId}/memory/new-task` («новая задача»)
+  и каскадно при `DELETE /api/projects/{id}`; удаление ОТДЕЛЬНОЙ сессии WM ПРОЕКТА не трогает.
+- **Долговременная память (long-term memory, LTM)** — ГЛОБАЛЬНАЯ (общая для всех сессий;
+  `sourceSessionId` у записи помнит сессию-источник): записи `{ id, sourceSessionId, type,
+  key, value, createdAt, updatedAt }`, `type ∈ profile|decision|knowledge`, `value` обрезается
+  до 2000 символов. `DELETE /api/sessions/{sessionId}` LTM **НЕ трогает** — записи переживают
+  удаление сессий. **День 13 — запись только пользователем** (инструмент `memory_save`
+  УДАЛЁН): единственный путь — REST `POST /api/sessions/{sessionId}/memory/long-term`;
+  upsert по (type, key). Агент LTM не пишет.
+
+Агент память НЕ пишет и НЕ модифицирует: WM и LTM лишь ЧИТАЮТСЯ и подаются модели
+контекстными блоками при каждом запросе (см. ниже) — блоки всегда отражают ТОЛЬКО
+пользовательские данные (user-saved), а не продукты работы агента.
+
+Хранение — SQLite-таблицы `agent_working_memory` (по ПРОЕКТУ: `project_id` PK (TEXT), `task`,
+`notes` — JSON-массив строк, `updated_at`; одна строка на проект, память общая для сессий проекта)
+и `agent_long_term_memory` (глобальная: `id` PK
+AUTOINCREMENT, `source_session_id`, `type`, `key`, `value`, `created_at`, `updated_at`,
+`UNIQUE(type, key)`), создаются автоматически, переживают перезапуск backend.
+
+**Сборка контекста (порядок блоков)** — для ВСЕХ стратегий контекста, независимо от их выбора:
+
+```
+SYSTEM_PROMPT
+→ блок рабочей памяти (omit, если пусто)
+→ блок долговременной памяти (omit, если пусто)
+→ факты/стратегия-блок (напр. «Известные факты» при sticky_facts)
+→ окно истории (по разрешённой стратегии)
+```
+
+- **Блок рабочей памяти** — system-сообщение «Текущая задача: <task>» + нумерованный список
+  `notes`; OMIT-ится, если `task == null` И `notes` пуст.
+- **Блок долговременной памяти** — system-сообщение «Долговременная память»: top-20 записей
+  (по `updated_at` DESC, формат `<type> | <key>: <value>` построчно); если записей больше 20 —
+  доп. строка «…и ещё N записей в долговременной памяти»; OMIT-ится, если записей нет.
+- Блоки пустые — молча пропускаются (fail-open: сбой чтения памяти не ломает run — контекст
+  собирается без соответствующего блока).
+
+**`memory_updated`** (SSE): класс события сохранён в схеме для обратной совместимости, НО агент
+его БОЛЬШЕ НЕ ЭМИТИРУЕТ (эмиссии были привязаны к удалённым авто-записям). REST-эндпоинты памяти
+SSE не отправляют вообще — фронтенд после мутаций делает refetch `GET /api/projects/{projectId}/memory`.
 
 ### История и ветки (branching в GET /history)
 

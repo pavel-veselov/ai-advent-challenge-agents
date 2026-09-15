@@ -125,6 +125,17 @@ data class ErrorEvent(val idx: Int, val message: String) : AgentEvent {
 }
 
 /**
+ * Строка «обычного» лога: каждое действие агентского цикла человекочитаемым текстом
+ * (тот же текст, что в серверном логе с префиксом [AGENT]). Событие только для
+ * отображения в панели «Логи» на фронтенде — на работу агента не влияет.
+ */
+data class LogEvent(val idx: Int, val text: String) : AgentEvent {
+    override val type = "log"
+    override val stepId = "log-$idx"
+    override val payload = mapOf("text" to text)
+}
+
+/**
  * Обновление «липких фактов» сессии (strategy=sticky_facts): факты только что извлечены
  * LLM, сохранены и в текущем run подмешаны в контекст. Идёт ДО основного цикла (как
  * контекстные events сжатия), поэтому НЕ входит в нумерацию итераций: stepId фиксирован
@@ -135,4 +146,29 @@ data class FactsUpdated(val facts: Map<String, String>) : AgentEvent {
     override val type = "facts_updated"
     override val stepId = "facts"
     override val payload = mapOf("facts" to facts)
+}
+
+/**
+ * Полный снапшот памяти агента (memory layers): рабочая память ПРОЕКТА (task/notes,
+ * общая для всех сессий проекта) и ГЛОБАЛЬНАЯ долговременная память (все записи всех
+ * сессий, sourceSessionId помнит происхождение).
+ *
+ * Day-13: класс оставлен для обратной совместимости схемы событий, НО больше НЕ
+ * ЭМИТИРУЕТСЯ агентом — память пишется ТОЛЬКО пользователем через REST/UI, а REST
+ * в этом приложении SSE не отправляет (фронтенд после мутаций сам делает refetch
+ * GET /api/projects/{projectId}/memory). Авто-эмиссии были привязаны к удалённым
+ * авто-записям агента (task на старте, заметки после tool-результатов, tool memory_save).
+ */
+data class MemoryUpdated(
+    val projectId: String,
+    val working: WorkingMemory,
+    val longTerm: List<LongTermEntry>,
+) : AgentEvent {
+    override val type = "memory_updated"
+    override val stepId = "memory"
+    override val payload = mapOf(
+        "projectId" to projectId,
+        "working" to working,
+        "longTerm" to longTerm,
+    )
 }

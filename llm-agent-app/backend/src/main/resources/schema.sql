@@ -16,6 +16,29 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages (session_id);
 
+-- Проекты (задача над сессиями, см. ProjectStore): иерархия Проект → Сессии.
+-- Создаются и удаляются ТОЛЬКО явно (POST/DELETE /api/projects); при удалении проекта
+-- каскадно удаляются его сессии (chat_sessions + chat_messages) и рабочая память проекта
+-- (agent_working_memory). Долговременная память (agent_long_term_memory) ГЛОБАЛЬНАЯ —
+-- удаление проектов её не трогает.
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Сессии внутри проектов (см. SessionStore.createSession): session_id генерируется
+-- СЕРВЕРОМ (UUID) при создании, title — заголовок вкладки, project_id — FK на projects.
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id TEXT PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_id ON chat_sessions (project_id);
+
 -- Кумулятивная статистика «за всё время»: одиночная строка (id = 1), счётчики
 -- не уменьшаются при удалении сессий — переживают DELETE /api/sessions/{sessionId}.
 CREATE TABLE IF NOT EXISTS lifetime_stats (
@@ -118,4 +141,31 @@ CREATE TABLE IF NOT EXISTS session_branches (
     name            TEXT NOT NULL,
     head_message_id INTEGER,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Рабочая память агента ПО ПРОЕКТУ (см. WorkingMemoryStore): текущая задача (task,
+-- может быть NULL — задача ещё не поставлена) и заметки (notes — JSON-массив строк,
+-- append через чтение/запись). Одна строка на ПРОЕКТ (project_id — TEXT, чтобы не
+-- плодить касты); память ОБЩАЯ для всех сессий проекта. Старые per-session строки
+-- (session_id-PK) удаляются миграцией при инициализации (по решению пользователя).
+CREATE TABLE IF NOT EXISTS agent_working_memory (
+    project_id TEXT PRIMARY KEY,
+    task       TEXT,
+    notes      TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT
+);
+
+-- Долговременная память агента (см. LongTermMemoryStore): ГЛОБАЛЬНАЯ таблица на все
+-- сессии — записи НЕ скоупятся по сессии, source_session_id лишь фиксирует источник.
+-- UNIQUE(type, key): повторный upsert того же ключа перезаписывает value/updated_at/
+-- source_session_id (INSERT ... ON CONFLICT DO UPDATE, см. LongTermMemoryStore.upsert).
+CREATE TABLE IF NOT EXISTS agent_long_term_memory (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_session_id TEXT NOT NULL,
+    type              TEXT NOT NULL CHECK(type IN ('profile','decision','knowledge')),
+    key               TEXT NOT NULL,
+    value             TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE(type, key)
 );

@@ -37,7 +37,10 @@ class ChatController(
     @PostMapping("/api/chat", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun chat(@RequestBody req: ChatRequest): Flux<ServerSentEvent<String>> {
         val runId = UUID.randomUUID().toString()
-        log.info("chat run={} session={} message={}", runId, req.sessionId, req.message)
+        // Day-12: сессия принадлежит проекту (chat_sessions) — проект достаём здесь для
+        // лога/диагностики; WM агент ключует по projectId сам (см. AgentImpl.run).
+        val projectId = sessionStore.getProjectId(req.sessionId)
+        log.info("chat run={} session={} project={} message={}", runId, req.sessionId, projectId, req.message)
         val sequence = AtomicInteger(0)
         return agent.run(req.sessionId, req.message)
             .map { ev -> sse(ev, runId, sequence.getAndIncrement()) }

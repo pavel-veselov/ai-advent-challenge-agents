@@ -4,12 +4,14 @@ import com.example.llmagent.agent.Agent
 import com.example.llmagent.agent.AgentImpl
 import com.example.llmagent.agent.GpuStackLlmClient
 import com.example.llmagent.agent.LlmClient
+import com.example.llmagent.agent.LongTermMemoryStore
 import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
 import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
 import com.example.llmagent.agent.ToolRegistry
+import com.example.llmagent.agent.WorkingMemoryStore
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -46,9 +48,12 @@ class AppConfig {
         contextStore: SessionContextStore,
         factsStore: SessionFactsStore,
         branchStore: SessionBranchStore,
+        workingMemoryStore: WorkingMemoryStore,
+        longTermMemoryStore: LongTermMemoryStore,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
+        workingMemoryStore, longTermMemoryStore,
     )
 }

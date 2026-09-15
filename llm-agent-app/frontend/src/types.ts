@@ -51,6 +51,8 @@ export type AgentEventType =
   | 'context_summary_started'
   | 'context_summary_finished'
   | 'facts_updated'
+  | 'memory_updated'
+  | 'log'
   | 'error';
 
 export interface BaseEvent<TType extends AgentEventType, TPayload> {
@@ -78,6 +80,7 @@ export type AgentEvent =
   | BaseEvent<'tool_call_started', { toolName: string; args: Record<string, unknown> }>
   | BaseEvent<'tool_call_finished', { result: string; status: 'success' | 'error' }>
   | BaseEvent<'agent_finished', { finalText: string }>
+  | BaseEvent<'log', { text: string }>
   | BaseEvent<'context_summary_started', { foldCount: number; prompt: PromptMessage[] }>
   | BaseEvent<
       'context_summary_finished',
@@ -92,6 +95,7 @@ export type AgentEvent =
       }
     >
   | BaseEvent<'facts_updated', { facts: Record<string, string> }>
+  | BaseEvent<'memory_updated', { projectId: number; working: WorkingMemoryState; longTerm: LongTermEntry[] }>
   | BaseEvent<'error', { message: string }>;
 
 // ---- API ----
@@ -177,6 +181,32 @@ export interface FactsState {
   facts: Record<string, string>;
 }
 
+// ---- Память (GET /api/projects/{projectId}/memory, событие memory_updated) ----
+
+/** Запись долговременной памяти (LTM глобальна; sourceSessionId — сессия-источник записи). */
+export interface LongTermEntry {
+  id: number;
+  sourceSessionId: string;
+  type: 'profile' | 'decision' | 'knowledge';
+  key: string;
+  value: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Рабочая память: текущая задача и заметки к ней. */
+export interface WorkingMemoryState {
+  task: string | null;
+  notes: string[];
+}
+
+/** Ответ GET /api/projects/{projectId}/memory; совпадает с пейлоадом события memory_updated.
+ * Рабочая память (working) — общая для всех сессий проекта; longTerm — глобальна. */
+export interface MemoryState {
+  working: WorkingMemoryState;
+  longTerm: LongTermEntry[];
+}
+
 // ---- Ветки диалога (GET/POST/PUT /api/sessions/{sessionId}/branches) ----
 
 export interface BranchInfo {
@@ -237,9 +267,11 @@ export interface ControlResponse {
   starting?: boolean;
 }
 
-/** Сводка одной сессии из каталога (GET /api/sessions). */
+/** Сводка одной сессии из каталога (GET /api/sessions, GET /api/projects/{id}/sessions). */
 export interface SessionSummary {
   sessionId: string;
+  /** Проект сессии (после day12 сессия всегда принадлежит проекту). */
+  projectId: number;
   messageCount: number;
   promptTokens: number;
   completionTokens: number;
@@ -271,6 +303,26 @@ export interface StatsResponse {
   costUsd: number;
   /** Итоги за всё время; null/undefined — бэкенд ещё не отдаёт lifetime (старый ответ) — показывать агрегаты. */
   lifetime?: LifetimeStats | null;
+}
+
+// ---- Проекты (сущность над сессиями; GET/POST /api/projects и т.д.) ----
+
+/** Проект: контейнер сессий; рабочая память (WM) живёт на проекте, LTM — глобальна. */
+export interface Project {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Число сессий проекта; бэкенд может не отдавать — undefined. */
+  sessionCount?: number;
+}
+
+/** Ответ POST /api/projects/{id}/sessions: сессия создана сервером (UUID) внутри проекта. */
+export interface ProjectSessionCreated {
+  sessionId: string;
+  projectId: number;
+  /** Заголовок, переданный при создании; null — не задан (fallback — id вкладки). */
+  title: string | null;
 }
 
 // ---- Состояние UI ----

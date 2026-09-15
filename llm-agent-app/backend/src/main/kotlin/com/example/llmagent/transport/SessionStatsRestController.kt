@@ -27,6 +27,8 @@ class SessionStatsRestController(
         val costUsd: Double,
         val lastActivity: String,
         val firstUserMessage: String? = null,
+        /** id проекта сессии (day-12); -1 — сессия без строки в chat_sessions (легаси/осиротевшая). */
+        val projectId: Long = -1,
     )
 
     data class StatsResponse(
@@ -84,6 +86,7 @@ class SessionStatsRestController(
             costUsd = costUsd(a.promptTokens, a.completionTokens),
             lastActivity = a.lastActivity,
             firstUserMessage = a.firstUserMessage,
+            projectId = a.projectId,
         )
 
     /** (prompt*priceInput + completion*priceOutput) / 1M; с нулевыми токенами — 0.0. */

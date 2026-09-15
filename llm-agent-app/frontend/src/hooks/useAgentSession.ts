@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  addLongTermMemory as addLongTermMemoryApi,
   createBranch as createBranchApi,
+  createProject as createProjectApi,
+  createSessionInProject as createSessionInProjectApi,
+  deleteProject as deleteProjectApi,
   deleteSession as deleteSessionApi,
   fetchBranches,
   fetchContextStrategy,
@@ -8,7 +12,10 @@ import {
   fetchGlobalStats,
   fetchHistory,
   fetchLlmSettings,
-  fetchSessions,
+  fetchProjectSessions,
+  fetchProjects,
+  renameProject as renameProjectApi,
+  saveWorkingNote as saveWorkingNoteApi,
   setActiveBranch as setActiveBranchApi,
   startBackend as startBackendApi,
   stopBackend as stopBackendApi,
@@ -23,6 +30,7 @@ import type {
   ContextStrategy,
   HistoryMessage,
   HistoryResponse,
+  Project,
   RunSettings,
   SessionContextStrategyPatch,
   StatsResponse,
@@ -32,6 +40,8 @@ import type {
 
 const SESSION_KEY = 'llm-agent-session-id';
 const TABS_KEY = 'llm-agent-tabs';
+/** Активный проект: переживает перезагрузку страницы (id или пусто). */
+const PROJECT_KEY = 'llm-agent-active-project';
 
 /** Дефолтный размер окна последних сообщений (sliding_window/sticky_facts) до ответа GET. */
 const DEFAULT_CONTEXT_WINDOW = 10;
@@ -118,10 +128,10 @@ function persistTabs(ids: string[], activeId: string | null): void {
 }
 
 /**
- * Инициализация вкладок при монтировании:
- * 1. Если есть 'llm-agent-tabs' и он валиден — берём его (ids может быть пустым).
- * 2. Иначе миграция: есть старый 'llm-agent-session-id' — засеиваем им единственную вкладку.
- * 3. Иначе — пустое состояние: сессия появится при первом сообщении или через «+».
+ * Инициализация вкладок при монтировании: восстанавливаем сохранённый список
+ * (валидность id проверит сверка с сессиями активного проекта — syncSessions).
+ * Старый ключ 'llm-agent-session-id' больше не сеет вкладку: с day12 сессии
+ * создаются только на сервере внутри проекта, клиентских UUID больше нет.
  */
 function readTabs(): TabsStateData {
   try {
@@ -137,17 +147,36 @@ function readTabs(): TabsStateData {
         return parsed;
       }
     }
-    const old = localStorage.getItem(SESSION_KEY);
-    if (old) {
-      const seeded: TabsStateData = { ids: [old], activeId: old };
-      persistTabs(seeded.ids, seeded.activeId);
-      return seeded;
-    }
     const empty: TabsStateData = { ids: [], activeId: null };
     persistTabs(empty.ids, empty.activeId);
     return empty;
   } catch {
     return { ids: [], activeId: null };
+  }
+}
+
+/** Читает сохранённый id активного проекта; мусор — null. */
+function readPersistedProjectId(): number | null {
+  try {
+    const raw = localStorage.getItem(PROJECT_KEY);
+    if (raw == null) return null;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Пишет id активного проекта; null — проект не выбран (ключ стирается). */
+function persistActiveProjectId(id: number | null): void {
+  try {
+    if (id != null) {
+      localStorage.setItem(PROJECT_KEY, String(id));
+    } else {
+      localStorage.removeItem(PROJECT_KEY);
+    }
+  } catch {
+    /* localStorage недоступен — изменения живут только в памяти */
   }
 }
 
@@ -178,7 +207,11 @@ export interface AgentSession {
   /** true, пока бэк-сервис запускается (опрос /api/llm-settings в фоне). */
   backendStarting: boolean;
   error: string | null;
-  /** Вкладки сессий (id); может быть пустым — сессия появится по первому сообщению. */
+  /** Проекты (GET /api/projects); null-списка нет — пустой массив означает «ещё не загружены или нет». */
+  projects: Project[];
+  /** id активного проекта; null — проектов нет или ещё не выбран (пустое состояние «Создать проект»). */
+  activeProjectId: number | null;
+  /** Вкладки сессий активного проекта (id); может быть пустым — сессия появится через «+». */
   tabs: string[];
   /** id активной вкладки (== sessionId); null — нет активной сессии. */
   activeId: string | null;
@@ -194,8 +227,35 @@ export interface AgentSession {
   facts: Record<string, string> | null;
   /** Ветки диалога активной сессии (GET /branches); null — не загружены. */
   branches: BranchesState | null;
+  /**
+   * Сохранение сообщения в рабочую память ПРОЕКТА: POST /projects/{id}/memory/notes {note}.
+   * Заметка общая для всех сессий проекта. Ошибка пробрасывается — индикацию у кнопки чата.
+   */
+  saveWorkingNote: (projectId: number, note: string) => Promise<void>;
+  /**
+   * Сохранение сообщения в долговременную память: POST /sessions/{id}/memory/long-term
+   * {type:'knowledge', key, value}; LTM глобальна, sessionId задаёт источник записи.
+   * key — первые 40 символов сообщения. Ошибка пробрасывается — индикацию у кнопки чата.
+   */
+  saveLongTerm: (sessionId: string, note: string) => Promise<void>;
   sendMessage: (text: string) => void;
   stopAgent: () => void;
+  /**
+   * Загрузка каталога проектов (GET /api/projects) с перепроверкой активного:
+   * если активный проект исчез — переключение на первый доступный или в пустое состояние.
+   */
+  loadProjects: () => Promise<void>;
+  /** Выбор активного проекта: перезагружает вкладки сессиями проекта (активной становится первая). */
+  selectProject: (id: number) => void;
+  /** Создание проекта (POST /api/projects {name}); после успеха проект выбирается активным. */
+  createProject: (name: string) => Promise<void>;
+  /** Переименование проекта (PATCH /api/projects/{id} {name}); после успеха перечитывает каталог. */
+  renameProject: (id: number, name: string) => Promise<void>;
+  /**
+   * Удаление проекта (DELETE /api/projects/{id}; каскад сессий и WM на бэкенде).
+   * Если удалили активный — переключение на следующий доступный или в пустое состояние.
+   */
+  deleteProject: (id: number) => Promise<void>;
   /**
    * Смена стратегии контекста сессии: PUT /context-strategy (оптимистично применяется,
    * при ошибке откатывается), затем перечитывает историю (стратегия меняет вид сообщений).
@@ -214,6 +274,7 @@ export interface AgentSession {
   /** Удаление активной сессии: DELETE на бэкенде + закрытие вкладки (синоним closeSession(activeId)). */
   deleteSession: () => void;
   switchSession: (id: string) => void;
+  /** Новая сессия в активном проекте: сервер создаёт сессию (UUID), вкладка открывается сразу. */
   newSession: () => void;
   closeSession: (id: string) => void;
   /** Остановка бэк-сервиса по команде супервизора (POST /system-ctrl/stop). */
@@ -261,6 +322,10 @@ export function useAgentSession(): AgentSession {
   const [facts, setFacts] = useState<Record<string, string> | null>(null);
   /** Ветки диалога активной сессии (зеркало буфера сессии); null — не загружены. */
   const [branches, setBranches] = useState<BranchesState | null>(null);
+  /** Каталог проектов (GET /api/projects); пустой массив — ещё не загружен или проектов нет. */
+  const [projects, setProjects] = useState<Project[]>([]);
+  /** Активный проект (id сохраняется в localStorage — переживает перезагрузку). */
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(readPersistedProjectId);
 
   /** sessionId -> буфер состояния выполнения (сообщения/итоги/стрим каждой сессии). */
   const runStateRef = useRef<Map<string, SessionRunState>>(new Map());
@@ -270,6 +335,8 @@ export function useAgentSession(): AgentSession {
   const [runningCount, setRunningCount] = useState(0);
   /** Актуальный activeId для колбэков фоновых стримов (замыкания не должны читать устаревший). */
   const activeIdRef = useRef<string | null>(activeId);
+  /** Актуальный activeProjectId для колбэков (фоновые стримы, загрузки каталога). */
+  const activeProjectIdRef = useRef<number | null>(activeProjectId);
   /** id -> запись лога; порядок вставки = хронология. */
   const stepsRef = useRef<Map<string, StepLogEntry>>(new Map());
   /**
@@ -287,11 +354,6 @@ export function useAgentSession(): AgentSession {
   const startAbortedRef = useRef(false);
   /** false до первой синхронизации вкладок с бэкендом (на mount). */
   const syncedOnceRef = useRef(false);
-  /**
-   * Сессии, созданные локально перед первой отправкой и ещё не подтверждённые
-   * каталогом бэкенда: для них mount-effect не дёргает историю (её ещё нет).
-   */
-  const localOnlyRef = useRef<Set<string>>(new Set());
 
   /** Буфер состояния выполнения сессии (создаёт запись при первом обращении). */
   const getRunState = (sid: string): SessionRunState => {
@@ -404,8 +466,9 @@ export function useAgentSession(): AgentSession {
   }, []);
 
   /**
-   * Загружает стратегию контекста, факты и ветки сессии (всё вместе с первичной загрузкой
-   * истории). isStale — предикат отмены (unmount/смена сессии): если вернул true, ответ
+   * Загружает стратегию контекста, факты и ветки сессии (вместе с первичной загрузкой
+   * истории). Память здесь НЕ грузится: она проектная — живёт в эффекте activeProjectId.
+   * isStale — предикат отмены (unmount/смена сессии): если вернул true, ответ
    * отбрасывается (защита от гонок при быстром переключении вкладок).
    */
   const loadPerSessionExtras = (sid: string, isStale: () => boolean = () => false) => {
@@ -513,6 +576,28 @@ export function useAgentSession(): AgentSession {
     },
     [refreshBranches, refreshSessionHistory],
   );
+
+  /**
+   * Сохранение сообщения в рабочую память ПРОЕКТА pid: POST /projects/{id}/memory/notes {note}.
+   * Ошибку пробрасываем — результат показывает индикация у кнопки в чате.
+   */
+  const saveWorkingNote = useCallback(async (pid: number, note: string): Promise<void> => {
+    await saveWorkingNoteApi(pid, note);
+  }, []);
+
+  /**
+   * Сохранение сообщения в долговременную память: POST /sessions/{id}/memory/long-term
+   * {type:'knowledge', key, value}. LTM глобальна, sessionId задаёт источник записи;
+   * key — первые 40 символов сообщения (короткий заголовок записи).
+   */
+  const saveLongTerm = useCallback(async (sid: string, note: string): Promise<void> => {
+    const trimmed = note.trim();
+    await addLongTermMemoryApi(sid, {
+      type: 'knowledge',
+      key: trimmed.slice(0, 40),
+      value: trimmed,
+    });
+  }, []);
 
   /** Меняет лог шагов сессии: активной — сразу в живой вид, фоновой — в её кэш шагов. */
   const mutateSessionSteps = (sid: string, mutate: (map: Map<string, StepLogEntry>) => void) => {
@@ -643,27 +728,33 @@ export function useAgentSession(): AgentSession {
   };
 
   /**
-   * Сверка вкладок с каталогом бэкенда (GET /api/sessions) — fire-and-forget.
-   * При монтировании вычищаем ВСЕ вкладки, отсутствующие на бэкенде; если вкладок
-   * не осталось — НЕ создаём новую (пустое состояние легально). При последующих
-   * обновлениях убираем вкладку T, только если её нет на бэкенде И она не активна
-   * И в её кэше шагов нет записей. Во время генерации чистка пропускается.
+   * Сверка вкладок с сессиями АКТИВНОГО ПРОЕКТА (GET /api/projects/{id}/sessions) —
+   * fire-and-forget. При монтировании вычищаем ВСЕ вкладки, отсутствующие в проекте;
+   * если вкладок не осталось — НЕ создаём новую (пустое состояние проекта легально).
+   * При последующих обновлениях убираем вкладку T, только если её нет в проекте И она
+   * не активна И в её кэше шагов нет записей. Во время генерации чистка пропускается.
    * Заодно обновляет заголовки вкладок из первого сообщения сессий.
    */
   const syncSessions = useCallback(() => {
     // Пока выполняется хоть один стрим (любой вкладки) — чистка вкладок пропускается:
     // незавершённую сессию каталог мог ещё не подтвердить.
     if (runningCount > 0) return;
-    fetchSessions()
-      .then((res) => {
-        const known = new Set(res.sessions.map((s) => s.sessionId));
-        // Снимаем флаг «создана локально» для подтверждённых бэкендом сессий.
-        for (const sid of Array.from(localOnlyRef.current)) {
-          if (known.has(sid)) localOnlyRef.current.delete(sid);
-        }
+    const pid = activeProjectIdRef.current;
+    if (pid == null) {
+      // Нет активного проекта — вкладок быть не должно.
+      if (tabs.length > 0 || activeId != null) {
+        setTabsState({ ids: [], activeId: null });
+        persistTabs([], null);
+      }
+      syncedOnceRef.current = true;
+      return;
+    }
+    fetchProjectSessions(pid)
+      .then((sessions) => {
+        const known = new Set(sessions.map((s) => s.sessionId));
         // Заголовки вкладок из каталога: первое сообщение пользователя.
         const titleUpdates: Record<string, string> = {};
-        for (const s of res.sessions) {
+        for (const s of sessions) {
           const t = s.firstUserMessage;
           if (t && t.trim() !== '') titleUpdates[s.sessionId] = t.trim();
         }
@@ -693,7 +784,7 @@ export function useAgentSession(): AgentSession {
         }
         let nextActive = activeId;
         if (ids.length === 0) {
-          // Нет вкладок — пустое состояние (сессия появится по первому сообщению).
+          // Нет вкладок — пустое состояние проекта (сессия появится через «+»).
           nextActive = null;
         } else if (nextActive == null || !ids.includes(nextActive)) {
           nextActive = ids[0];
@@ -734,6 +825,11 @@ export function useAgentSession(): AgentSession {
   const handleEvent = useCallback((e: AgentEvent, sid: string) => {
     const key = `${e.runId}:${e.stepId}`;
     switch (e.type) {
+      case 'log': {
+        // «Обычная» строка лога действия агента — служебная запись без раскрытия.
+        pushSystemEvent(e.payload.text);
+        break;
+      }
       case 'agent_started': {
         setRunSettings(e.payload.settings);
         runSettingsRef.current = e.payload.settings;
@@ -1004,26 +1100,12 @@ export function useAgentSession(): AgentSession {
     [handleEvent],
   );
 
-  const sendMessage = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || isRunning) return;
-      // Ленивое создание сессии при первом сообщении: активной ещё нет.
-      const sid = sessionId ?? newId();
-      if (sessionId == null) {
-        localOnlyRef.current.add(sid);
-        setTabsState((prev) => {
-          const ids = [...prev.ids, sid];
-          persistTabs(ids, sid);
-          return { ids, activeId: sid };
-        });
-        // Заголовок вкладки — первое сообщение пользователя.
-        setTitles((prev) => ({ ...prev, [sid]: trimmed }));
-        activeIdRef.current = sid;
-      }
+  /** Фактический запуск стрима: сообщение + заглушка ассистента кладутся в буфер сессии sid. */
+  const runSend = useCallback(
+    (sid: string, trimmed: string) => {
       setError(null);
-      // Сообщение и заглушка ассистента кладутся в буфер СВОЕЙ сессии; если она активна —
-      // сразу отражаются в живом виде.
+      // Заголовок вкладки — первое сообщение пользователя (если ещё не задан каталогом).
+      setTitles((prev) => (prev[sid]?.trim() ? prev : { ...prev, [sid]: trimmed }));
       const st = getRunState(sid);
       const assistantId = newId();
       st.assistantId = assistantId;
@@ -1039,7 +1121,39 @@ export function useAgentSession(): AgentSession {
       }
       void run(sid, trimmed, false);
     },
-    [isRunning, sessionId, run],
+    [run],
+  );
+
+  const sendMessage = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || isRunning) return;
+      if (sessionId != null) {
+        runSend(sessionId, trimmed);
+        return;
+      }
+      // Ленивое создание: сессию создаёт сервер внутри активного проекта (client UUID больше
+      // не существует). Нет активного проекта — отправка невозможна (пустое состояние «Создать проект»).
+      const pid = activeProjectIdRef.current;
+      if (pid == null) return;
+      createSessionInProjectApi(pid)
+        .then((created) => {
+          if (activeProjectIdRef.current !== pid) return;
+          activeIdRef.current = created.sessionId;
+          const t = created.title;
+          if (t != null && t.trim() !== '') {
+            setTitles((prev) => ({ ...prev, [created.sessionId]: t }));
+          }
+          setTabsState((prev) => {
+            const ids = [...prev.ids, created.sessionId];
+            persistTabs(ids, created.sessionId);
+            return { ids, activeId: created.sessionId };
+          });
+          runSend(created.sessionId, trimmed);
+        })
+        .catch(() => setError('Не удалось создать сессию'));
+    },
+    [isRunning, sessionId, runSend],
   );
 
   /** Останавливает стрим Активной сессии (только её — чужие запуски не трогаем). */
@@ -1091,25 +1205,36 @@ export function useAgentSession(): AgentSession {
     [activeId, backendStopped, backendStarting],
   );
 
-  /** Новая сессия: добавляет вкладку справа и переключает на неё (в любой момент, даже при чужих запусках). */
+  /**
+   * Новая сессия: сервер создаёт сессию внутри активного проекта (POST /projects/{id}/sessions,
+   * UUID генерирует бэкенд), вкладка добавляется справа и сразу становится активной —
+   * в любой момент, даже при чужих запусках. Нет активного проекта — no-op
+   * (пустое состояние показывает «Создать проект»).
+   */
   const newSession = useCallback(() => {
     if (backendStopped || backendStarting) return;
-    const fresh = newId();
-    if (activeId != null) {
-      stepsCacheRef.current.set(activeId, Array.from(stepsRef.current.values()));
-    }
-    // Новая вкладка ещё не существует на бэкенде — помечаем её как локально созданную,
-    // чтобы эффект sessionId не дёргал историю впустую (см. localOnlyRef).
-    localOnlyRef.current.add(fresh);
-    // Итоги токенов пер-сессионны: новая сессия стартует с нуля, а не с суммы предыдущей.
-    resetSessionView();
-    activeIdRef.current = fresh;
-    setTabsState((prev) => {
-      const ids = [...prev.ids, fresh];
-      persistTabs(ids, fresh);
-      return { ids, activeId: fresh };
-    });
-    pushSystemEvent('Начата новая сессия');
+    const pid = activeProjectIdRef.current;
+    if (pid == null) return;
+    void (async () => {
+      try {
+        const created = await createSessionInProjectApi(pid);
+        if (activeProjectIdRef.current !== pid) return;
+        if (activeId != null) {
+          stepsCacheRef.current.set(activeId, Array.from(stepsRef.current.values()));
+        }
+        // Итоги токенов пер-сессионны: новая сессия стартует с нуля, а не с суммы предыдущей.
+        resetSessionView();
+        activeIdRef.current = created.sessionId;
+        setTabsState((prev) => {
+          const ids = [...prev.ids, created.sessionId];
+          persistTabs(ids, created.sessionId);
+          return { ids, activeId: created.sessionId };
+        });
+        pushSystemEvent('Начата новая сессия');
+      } catch {
+        setError('Не удалось создать сессию');
+      }
+    })();
   }, [activeId, backendStopped, backendStarting, pushSystemEvent]);
 
   /**
@@ -1136,7 +1261,6 @@ export function useAgentSession(): AgentSession {
         }
         if (!tabs.includes(id)) return;
         stepsCacheRef.current.delete(id);
-        localOnlyRef.current.delete(id);
         const ids = tabs.filter((x) => x !== id);
         let nextActive = activeId;
         if (wasActive) {
@@ -1180,6 +1304,191 @@ export function useAgentSession(): AgentSession {
     if (activeId == null) return;
     closeSession(activeId);
   }, [activeId, closeSession]);
+
+  /**
+   * Загружает сессии проекта pid в вкладки: активной становится первая сессия проекта
+   * (или пустое состояние, если сессий нет). Ошибки каталога молча игнорируются.
+   */
+  const loadProjectTabs = useCallback((pid: number) => {
+    void (async () => {
+      try {
+        const sessions = await fetchProjectSessions(pid);
+        if (activeProjectIdRef.current !== pid) return; // проект уже сменили — ответ устарел
+        const ids = sessions.map((s) => s.sessionId);
+        setTitles((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const s of sessions) {
+            const t = s.firstUserMessage;
+            if (t && t.trim() !== '' && next[s.sessionId] !== t.trim()) {
+              next[s.sessionId] = t.trim();
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+        const nextActive = ids[0] ?? null;
+        if (nextActive == null) {
+          resetSessionView();
+          activeIdRef.current = null;
+          setTabsState({ ids, activeId: null });
+          persistTabs(ids, null);
+          return;
+        }
+        // Показываем буфер активируемой сессии; историю догрузит эффект sessionId.
+        const st = getRunState(nextActive);
+        setMessages(st.messages);
+        setTokenTotals(st.tokenTotals);
+        setLastPromptTokens(st.lastPromptTokens);
+        setIsRunning(st.isRunning);
+        restoreSteps(nextActive);
+        activeIdRef.current = nextActive;
+        setTabsState({ ids, activeId: nextActive });
+        persistTabs(ids, nextActive);
+      } catch {
+        /* каталог сессий недоступен — вкладки остаются как есть */
+      }
+    })();
+  }, []);
+
+  /**
+   * Выбор активного проекта: запоминаем id (+localStorage), сбрасываем вид текущей
+   * сессии и перезагружаем вкладки сессиями выбранного проекта. Память проекта
+   * подхватит эффект activeProjectId.
+   */
+  const selectProject = useCallback(
+    (id: number) => {
+      if (backendStopped || backendStarting) return;
+      if (id === activeProjectIdRef.current) return;
+      // Сохраняем лог шагов уходящей сессии — возврат на проект должен его восстановить.
+      if (activeId != null) {
+        stepsCacheRef.current.set(activeId, Array.from(stepsRef.current.values()));
+      }
+      persistActiveProjectId(id);
+      activeProjectIdRef.current = id;
+      setActiveProjectId(id);
+      activeIdRef.current = null;
+      resetSessionView();
+      setTabsState({ ids: [], activeId: null });
+      loadProjectTabs(id);
+    },
+    [activeId, backendStopped, backendStarting, loadProjectTabs],
+  );
+
+  /** Каталог проектов: GET /api/projects + перепроверка активного (исчез — переключаемся). */
+  const loadProjects = useCallback(async (): Promise<void> => {
+    let list: Project[];
+    try {
+      list = await fetchProjects();
+    } catch {
+      /* сервис недоступен — каталог проектов остаётся прежним */
+      return;
+    }
+    setProjects(list);
+    const current = activeProjectIdRef.current;
+    if (current != null && list.some((p) => p.id === current)) return;
+    const next = list[0]?.id ?? null;
+    if (next != null) {
+      persistActiveProjectId(next);
+      activeProjectIdRef.current = next;
+      setActiveProjectId(next);
+      loadProjectTabs(next);
+    } else if (current != null) {
+      // Проектов не осталось — пустое состояние «Создать проект».
+      persistActiveProjectId(null);
+      activeProjectIdRef.current = null;
+      setActiveProjectId(null);
+      activeIdRef.current = null;
+      resetSessionView();
+      setTabsState({ ids: [], activeId: null });
+      persistTabs([], null);
+    }
+  }, [loadProjectTabs]);
+
+  /** Создание проекта: POST + перечитывание каталога + выбор созданного активным. */
+  const createProject = useCallback(
+    async (name: string): Promise<void> => {
+      const trimmed = name.trim();
+      if (trimmed === '') return;
+      try {
+        const created = await createProjectApi(trimmed);
+        pushSystemEvent(`Создан проект «${created.name}»`);
+        await loadProjects();
+        // loadProjects сохранит уже активный; выбираем созданный явно.
+        if (activeProjectIdRef.current !== created.id) {
+          if (backendStopped || backendStarting) return;
+          persistActiveProjectId(created.id);
+          activeProjectIdRef.current = created.id;
+          setActiveProjectId(created.id);
+          activeIdRef.current = null;
+          resetSessionView();
+          setTabsState({ ids: [], activeId: null });
+          loadProjectTabs(created.id);
+        }
+      } catch {
+        pushSystemEvent('Не удалось создать проект');
+      }
+    },
+    [backendStopped, backendStarting, loadProjects, loadProjectTabs, pushSystemEvent],
+  );
+
+  /** Переименование проекта: PATCH + перечитывание каталога (имя обновится в панели). */
+  const renameProject = useCallback(
+    async (id: number, name: string): Promise<void> => {
+      const trimmed = name.trim();
+      if (trimmed === '') return;
+      await renameProjectApi(id, trimmed);
+      await loadProjects();
+    },
+    [loadProjects],
+  );
+
+  /**
+   * Удаление проекта: DELETE (бэкенд каскадом стирает сессии проекта и его рабочую
+   * память; LTM не трогается) + перечитывание каталога. Если удалили активный проект —
+   * переключение на следующий доступный или в пустое состояние.
+   */
+  const deleteProject = useCallback(
+    async (id: number): Promise<void> => {
+      try {
+        await deleteProjectApi(id);
+      } catch {
+        pushSystemEvent('Не удалось удалить проект');
+        return;
+      }
+      pushSystemEvent('Проект удалён (сессии и рабочая память стёрты каскадом)');
+      const wasActive = id === activeProjectIdRef.current;
+      let list: Project[] = [];
+      try {
+        list = await fetchProjects();
+      } catch {
+        /* каталог недоступен — уберём проект локально */
+        list = projects.filter((p) => p.id !== id);
+      }
+      setProjects(list);
+      if (!wasActive) return;
+      const next = list[0]?.id ?? null;
+      if (next != null && next !== id) {
+        persistActiveProjectId(next);
+        activeProjectIdRef.current = next;
+        setActiveProjectId(next);
+        activeIdRef.current = null;
+        resetSessionView();
+        setTabsState({ ids: [], activeId: null });
+        loadProjectTabs(next);
+      } else {
+        persistActiveProjectId(null);
+        activeProjectIdRef.current = null;
+        setActiveProjectId(null);
+        activeIdRef.current = null;
+        resetSessionView();
+        setTabsState({ ids: [], activeId: null });
+        persistTabs([], null);
+      }
+      refreshGlobalStats();
+    },
+    [projects, loadProjectTabs, pushSystemEvent, refreshGlobalStats],
+  );
 
   /**
    * Остановка бэк-сервиса: POST /system-ctrl/stop по команде супервизору.
@@ -1308,47 +1617,41 @@ export function useAgentSession(): AgentSession {
   }, [pushSystemEvent]);
 
   // восстановление истории активной сессии при монтировании (и при смене sessionId)
-  // восстановление истории активной сессии при монтировании (и при смене sessionId)
   useEffect(() => {
     if (sessionId == null) return;
     let cancelled = false;
-    // Сессия, созданная локально перед первой отправкой: истории на бэкенде ещё нет,
-    // запрос пропускаем (иначе пустой ответ затёр бы только что добавленное сообщение).
-    const localOnly = localOnlyRef.current.has(sessionId);
-    if (!localOnly) {
-      fetchHistory(sessionId)
-        .then((h) => {
-          if (cancelled) return;
-          // Сессия с активным стримом уже наполнила свой буфер свежими сообщениями:
-          // серверная история на этот момент устарела — живому буферу отдаём приоритет,
-          // чтобы возврат на вкладку не «откатил» только что накопленные токены.
-          const live = runStateRef.current.get(sessionId);
-          if (runningSidsRef.current.has(sessionId) && live && live.messages.length > 0) return;
-          // Сообщения, накопительные итоги токенов и размер контекста — общей функцией
-          // наложения истории на буфер сессии (используется и при смене ветки/стратегии).
-          applyHistoryToRunState(sessionId, h);
-          // Fallback заголовка вкладки: первое сообщение пользователя из истории.
-          const firstUser = h.messages.find((m) => m.role === 'user');
-          if (firstUser && firstUser.content.trim() !== '') {
-            setTitles((prev) => {
-              const t = firstUser.content.trim();
-              if (prev[sessionId] && prev[sessionId].trim() !== '') return prev;
-              return { ...prev, [sessionId]: t };
-            });
-          }
-          pushSystemEvent(
-            h.messages.length > 0
-              ? `История диалога загружена (${h.messages.length} сообщений)`
-              : 'История диалога пуста',
-          );
-        })
-        .catch(() => {
-          /* история недоступна — стартуем пустыми */
-        });
-      // Стратегия контекста, факты и ветки сессии — вместе с первичной загрузкой истории
-      // (isStale отбрасывает ответы, пришедшие после переключения вкладки/размонтирования).
-      loadPerSessionExtras(sessionId, () => cancelled);
-    }
+    fetchHistory(sessionId)
+      .then((h) => {
+        if (cancelled) return;
+        // Сессия с активным стримом уже наполнила свой буфер свежими сообщениями:
+        // серверная история на этот момент устарела — живому буферу отдаём приоритет,
+        // чтобы возврат на вкладку не «откатил» только что накопленные токены.
+        const live = runStateRef.current.get(sessionId);
+        if (runningSidsRef.current.has(sessionId) && live && live.messages.length > 0) return;
+        // Сообщения, накопительные итоги токенов и размер контекста — общей функцией
+        // наложения истории на буфер сессии (используется и при смене ветки/стратегии).
+        applyHistoryToRunState(sessionId, h);
+        // Fallback заголовка вкладки: первое сообщение пользователя из истории.
+        const firstUser = h.messages.find((m) => m.role === 'user');
+        if (firstUser && firstUser.content.trim() !== '') {
+          setTitles((prev) => {
+            const t = firstUser.content.trim();
+            if (prev[sessionId] && prev[sessionId].trim() !== '') return prev;
+            return { ...prev, [sessionId]: t };
+          });
+        }
+        pushSystemEvent(
+          h.messages.length > 0
+            ? `История диалога загружена (${h.messages.length} сообщений)`
+            : 'История диалога пуста',
+        );
+      })
+      .catch(() => {
+        /* история недоступна — стартуем пустыми */
+      });
+    // Стратегия контекста, факты и ветки сессии — вместе с первичной загрузкой истории
+    // (isStale отбрасывает ответы, пришедшие после переключения вкладки/размонтирования).
+    loadPerSessionExtras(sessionId, () => cancelled);
     return () => {
       cancelled = true;
       startAbortedRef.current = true;
@@ -1388,6 +1691,20 @@ export function useAgentSession(): AgentSession {
     activeIdRef.current = activeId;
   }, [activeId]);
 
+  // Зеркало активного проекта для колбэков (фоновые стримы, загрузки каталога).
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
+
+  // Каталог проектов при монтировании: восстановление активного проекта из localStorage
+  // (или первый доступный), затем вкладки сессий выбранного проекта (loadProjectTabs).
+  const projectsBootedRef = useRef(false);
+  useEffect(() => {
+    if (projectsBootedRef.current) return;
+    projectsBootedRef.current = true;
+    void loadProjects();
+  }, [loadProjects]);
+
   return {
     sessionId,
     messages,
@@ -1399,6 +1716,8 @@ export function useAgentSession(): AgentSession {
     backendStopped,
     backendStarting,
     error,
+    projects,
+    activeProjectId,
     tabs,
     activeId,
     titles,
@@ -1407,8 +1726,15 @@ export function useAgentSession(): AgentSession {
     windowSize,
     facts,
     branches,
+    saveWorkingNote,
+    saveLongTerm,
     sendMessage,
     stopAgent,
+    loadProjects,
+    selectProject,
+    createProject,
+    renameProject,
+    deleteProject,
     changeContextStrategy,
     forkBranch,
     switchBranch,

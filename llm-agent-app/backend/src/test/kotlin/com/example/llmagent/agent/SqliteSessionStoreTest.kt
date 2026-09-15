@@ -100,25 +100,32 @@ class SqliteSessionStoreTest {
 
     @Test
     fun `listSessionAggregates returns per-session token aggregates ordered by most recent`() {
-        val store = SqliteTestSupport.store(tmpDir.resolve("aggregates.db"))
-        store.append("sess-a", "user", "запрос", 10, null)
-        store.append("sess-a", "assistant", "ответ", 8, 20)
-        store.append("sess-b", "user", "другой запрос", 3, null)
+        val dbFile = tmpDir.resolve("aggregates.db")
+        val jdbc = projSchemaJdbc(dbFile)
+        jdbc.update("INSERT INTO projects (id, name) VALUES (1, 'проект')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('sess-a', 1, 'A')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('sess-b', 1, 'B')")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens, created_at) VALUES ('sess-a','user','запрос',10,NULL,'2026-09-01 10:00:00')")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens, created_at) VALUES ('sess-a','assistant','ответ',8,20,'2026-09-01 10:00:01')")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens, created_at) VALUES ('sess-b','user','другой запрос',3,NULL,'2026-09-02 10:00:00')")
 
+        val store = SessionStore(jdbc)
         val aggregates = store.listSessionAggregates()
 
         assertEquals(2, aggregates.size)
-        // последняя созданная сессия — первая (ORDER BY MAX(id) DESC)
+        // самая свежая последняя активность — первой (ORDER BY lastActivity DESC)
         assertEquals("sess-b", aggregates[0].sessionId)
         assertEquals(1L, aggregates[0].messageCount)
         assertEquals(3L, aggregates[0].promptTokens)
         assertEquals(0L, aggregates[0].completionTokens)
+        assertEquals(1L, aggregates[0].projectId)
 
         assertEquals("sess-a", aggregates[1].sessionId)
         assertEquals(2L, aggregates[1].messageCount)
         assertEquals(18L, aggregates[1].promptTokens)
         assertEquals(20L, aggregates[1].completionTokens)
         assertTrue(aggregates[1].lastActivity.isNotBlank(), "lastActivity не должна быть пустой")
+        assertEquals(1L, aggregates[1].projectId)
     }
 
     @Test
@@ -148,6 +155,98 @@ class SqliteSessionStoreTest {
         val aggregate = store.listSessionAggregates().single()
 
         assertEquals(null, aggregate.firstUserMessage)
+    }
+
+    // ------------------------------------------------------------------
+    // Day-12: реестр сессий (chat_sessions) поверх проектов
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `createSession returns a server id and stores project and title`() {
+        val dbFile = tmpDir.resolve("create-session.db")
+        val jdbc = projSchemaJdbc(dbFile)
+        jdbc.update("INSERT INTO projects (id, name) VALUES (1, 'проект')")
+        val store = SessionStore(jdbc)
+
+        val sessionId = store.createSession(1L, "первый чат")
+        assertTrue(sessionId.isNotBlank() && sessionId != "unknown", "id должен генерироваться сервером")
+
+        assertEquals(1L, store.getProjectId(sessionId))
+        assertEquals("первый чат", store.titleOf(sessionId))
+    }
+
+    @Test
+    fun `getProjectId and titleOf return null for unknown session`() {
+        val store = SqliteTestSupport.store(tmpDir.resolve("unknown-session.db"))
+        // без chat_sessions (юнит-схема) и без строки — fail-open null, не исключение
+        assertEquals(null, store.getProjectId("never-existed"))
+        assertEquals(null, store.titleOf("never-existed"))
+    }
+
+    @Test
+    fun `listByProject returns only project sessions with aggregates and empty sessions`() {
+        val dbFile = tmpDir.resolve("list-by-project.db")
+        val jdbc = projSchemaJdbc(dbFile)
+        jdbc.update("INSERT INTO projects (id, name) VALUES (1, 'проект-1')")
+        jdbc.update("INSERT INTO projects (id, name) VALUES (2, 'проект-2')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('p1-empty', 1, 'пустая')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('p1-active', 1, 'активная')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('p2-s', 2, 'другой проект')")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens) VALUES ('p1-active','user','запрос',10,NULL)")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content, prompt_tokens, completion_tokens) VALUES ('p1-active','assistant','ответ',8,20)")
+        val store = SessionStore(jdbc)
+
+        val sessions = store.listByProject(1L)
+
+        assertEquals(2, sessions.size, "в проект-1 входят и пустая, и активная сессии")
+        // активная свежее (последнее сообщение) — первой
+        assertEquals("p1-active", sessions[0].sessionId)
+        assertEquals("активная", sessions[0].title)
+        assertEquals(2L, sessions[0].messageCount)
+        assertEquals(18L, sessions[0].promptTokens)
+        assertEquals(20L, sessions[0].completionTokens)
+        assertEquals("запрос", sessions[0].firstUserMessage)
+        assertEquals(1L, sessions[0].projectId)
+        // пустая сессия — messageCount 0, проект тот же
+        assertEquals("p1-empty", sessions[1].sessionId)
+        assertEquals(0L, sessions[1].messageCount)
+        assertEquals(1L, sessions[1].projectId)
+        // чужая сессия проекта-2 в список не входит
+        assertTrue(sessions.none { it.sessionId == "p2-s" })
+        assertEquals(0, store.listByProject(42L).size, "несуществующий проект — пустой список")
+    }
+
+    @Test
+    fun `listSessionAggregates includes empty sessions from chat_sessions`() {
+        val dbFile = tmpDir.resolve("agg-empty.db")
+        val jdbc = projSchemaJdbc(dbFile)
+        jdbc.update("INSERT INTO projects (id, name) VALUES (1, 'проект')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('empty-1', 1, '')")
+        jdbc.update("INSERT INTO chat_sessions (session_id, project_id, title) VALUES ('active-1', 1, '')")
+        jdbc.update("INSERT INTO chat_messages (session_id, role, content) VALUES ('active-1','user','привет')")
+        val store = SessionStore(jdbc)
+
+        val aggregates = store.listSessionAggregates()
+
+        assertEquals(2, aggregates.size)
+        val empty = aggregates.first { it.sessionId == "empty-1" }
+        assertEquals(0L, empty.messageCount, "пустая сессия из chat_sessions видна с messageCount=0")
+        assertEquals(1L, empty.projectId)
+    }
+
+    @Test
+    fun `delete removes chat_sessions row as well as messages`() {
+        val dbFile = tmpDir.resolve("delete-session-row.db")
+        val jdbc = projSchemaJdbc(dbFile)
+        jdbc.update("INSERT INTO projects (id, name) VALUES (1, 'проект')")
+        val store = SessionStore(jdbc)
+        val sessionId = store.createSession(1L, "сессия")
+        store.append(sessionId, "user", "привет")
+
+        store.delete(sessionId)
+
+        assertEquals(null, store.getProjectId(sessionId), "строка chat_sessions удалена вместе с историей")
+        assertTrue(store.get(sessionId).isEmpty())
     }
 
     @Test
@@ -260,6 +359,52 @@ class SqliteSessionStoreTest {
         assertEquals(396000L, lifetime.promptTokensTotal)
         assertEquals(5000L, lifetime.completionTokensTotal)
         assertTrue(lifetime.costUsdTotal > 0.0, "стоимость должна быть посчитана из токенов")
+    }
+
+    /**
+     * JDBC поверх «проектной» схемы: chat_messages (с токенами/parent_id) + projects +
+     * chat_sessions — та же форма, что schema.sql.
+     */
+    private fun projSchemaJdbc(dbFile: Path): JdbcTemplate {
+        val ds = DriverManagerDataSource()
+        ds.setDriverClassName("org.sqlite.JDBC")
+        ds.url = "jdbc:sqlite:${dbFile.toAbsolutePath().toString().replace('\\', '/')}"
+        val jdbc = JdbcTemplate(ds)
+        jdbc.execute(
+            """
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                parent_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """.trimIndent()
+        )
+        jdbc.execute(
+            """
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """.trimIndent()
+        )
+        jdbc.execute(
+            """
+            CREATE TABLE chat_sessions (
+                session_id TEXT PRIMARY KEY,
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                title TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """.trimIndent()
+        )
+        return jdbc
     }
 
     /** JDBC поверх «старой» схемы: только chat_messages с токенами, без lifetime_stats. */
