@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { StepLogEntry } from '../types';
 
 interface StepsLogProps {
@@ -12,32 +12,8 @@ interface StepsLogProps {
 }
 
 /**
- * Пояснение «для чайников» по типу шага — дополняет explanation из useAgentSession
- * (та заполнена не для всех случаев; здесь — человекочитаемые подсказки карточек шагов).
+ * Пояснения служебных строк (kind = system): события жизненного цикла сервиса/сессии.
  */
-function explainByKind(step: StepLogEntry): string | null {
-  switch (step.kind) {
-    case 'user':
-      return 'Пользователь написал сообщение — агент принял его в работу.';
-    case 'llm':
-      return step.title.startsWith('Сжатие контекста')
-        ? 'Старые сообщения диалога сворачиваются в краткое резюме, чтобы уложиться в лимит контекста.'
-        : 'Агент отправляет диалог модели и ждёт: она ответит текстом или попросит инструмент.';
-    case 'tool':
-      if (step.status === 'running') return 'Агент вызывает инструмент, который попросила модель…';
-      return step.status === 'error'
-        ? 'Инструмент завершился ошибкой — агент сообщит о ней модели.'
-        : 'Инструмент что-то вычислил и вернул результат агенту.';
-    case 'answer':
-      return 'Ответ завершён — финальный текст доставлен в чат.';
-    case 'error':
-      return 'Что-то пошло не так — работа агента остановлена.';
-    default:
-      return null;
-  }
-}
-
-/** Пояснения служебных строк (kind = system): события жизненного цикла сервиса/сессии. */
 const SYSTEM_EXPLANATIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^Остановка бэк-сервиса/, 'Оператор остановил сервис — идущие генерации будут прерваны.'],
   [/^Бэк-сервис остановлен/, 'Сервис остановлен: чат заблокирован до запуска.'],
@@ -63,17 +39,60 @@ function explainSystem(step: StepLogEntry): string | null {
   return null;
 }
 
-/** Карточка шага агента: точка статуса + время + название + пояснение «для чайников». */
-function StepCard({ step }: { step: StepLogEntry }) {
-  const explanation = step.explanation ?? explainByKind(step);
+/** Строка лога шага агента: время + простой текст; для запросов к LLM — ссылка «Детализация». */
+function StepLine({
+  step,
+  onDetail,
+}: {
+  step: StepLogEntry;
+  onDetail: (step: StepLogEntry) => void;
+}) {
   return (
-    <div className={`step-row status-${step.status}`}>
-      <div className="step-head">
-        <span className={`step-dot ${step.status}`} />
-        <span className="step-time">{step.time}</span>
-        <span className="step-title">{step.title}</span>
+    <div className={`step-line status-${step.status}`}>
+      <span className="step-time">{step.time}</span>
+      <span className="step-line-text">{step.title}</span>
+      {step.prompt && step.prompt.length > 0 ? (
+        <button
+          type="button"
+          className="step-detail"
+          title="Показать фактический запрос, отправленный в LLM API"
+          onClick={() => onDetail(step)}
+        >
+          Детализация
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Диалог «Детализация»: фактический промпт, отправленный в LLM API (роли + содержимое). */
+function DetailModal({ step, onClose }: { step: StepLogEntry; onClose: () => void }) {
+  // ESC закрывает диалог наравне с кнопкой «Закрыть» и кликом по затемнению.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="detail-backdrop" onClick={onClose}>
+      <div className="detail-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="detail-title">Детализация: фактический запрос в LLM</div>
+        <div className="detail-subtitle">{step.title} — сообщения, отправленные в API модели</div>
+        {step.prompt?.map((m, i) => (
+          <div className="detail-msg" key={`${i}-${m.role}`}>
+            <div className="detail-role">{m.role}</div>
+            <pre className="detail-code">{m.content}</pre>
+          </div>
+        ))}
+        <div className="detail-actions">
+          <button type="button" className="detail-close" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
       </div>
-      {explanation ? <div className="step-explanation">{explanation}</div> : null}
     </div>
   );
 }
@@ -100,6 +119,8 @@ export default function StepsLog({
   onStart,
 }: StepsLogProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  /** Шаг, для которого открыт диалог «Детализация» (запрос в LLM). */
+  const [detail, setDetail] = useState<StepLogEntry | null>(null);
 
   // Автопрокрутка к последнему шагу
   useEffect(() => {
@@ -137,12 +158,17 @@ export default function StepsLog({
         {steps.length === 0 ? (
           <div className="steps-empty">Пока нет шагов — начните диалог.</div>
         ) : (
-          // Полный хронологический лог: карточки шагов агента + служебные строки.
+          // Полный хронологический лог: простые текстовые строки шагов + служебные строки.
           steps.map((s) =>
-            s.kind === 'system' ? <SystemRow key={s.id} step={s} /> : <StepCard key={s.id} step={s} />,
+            s.kind === 'system' ? (
+              <SystemRow key={s.id} step={s} />
+            ) : (
+              <StepLine key={s.id} step={s} onDetail={setDetail} />
+            ),
           )
         )}
       </div>
+      {detail ? <DetailModal step={detail} onClose={() => setDetail(null)} /> : null}
     </section>
   );
 }

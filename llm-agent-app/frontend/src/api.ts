@@ -1,4 +1,5 @@
 ﻿import type {
+  ActiveProfileResponse,
   AgentEvent,
   BranchInfo,
   BranchesState,
@@ -8,6 +9,8 @@
   FactsState,
   HistoryResponse,
   MemoryState,
+  Profile,
+  ProfileRequest,
   Project,
   ProjectSessionCreated,
   RunSettings,
@@ -405,4 +408,73 @@ export async function streamChat(
       if (ev) onEvent(ev);
     }
   }
+}
+
+// ---- Профили пользователя (персонализация агента; глобальный справочник) ----
+
+/** Справочник профилей пользователя: GET /api/profiles (глобальный, вне проектов/сессий). */
+export async function fetchProfiles(): Promise<Profile[]> {
+  const res = await fetch('/api/profiles');
+  if (!res.ok) throw new Error(`profiles http ${res.status}`);
+  return (await res.json()) as Profile[];
+}
+
+/** Активный профиль — ГЛОБАЛЬНАЯ настройка приложения: GET /api/profiles/active. */
+export async function fetchActiveProfile(): Promise<ActiveProfileResponse> {
+  const res = await fetch('/api/profiles/active');
+  if (!res.ok) throw new Error(`profiles active http ${res.status}`);
+  return (await res.json()) as ActiveProfileResponse;
+}
+
+/**
+ * Создание профиля: POST /api/profiles {name, position?, responseFormat?, preferences?, constraints?}.
+ * 400 — пустое имя, 409 — имя уже занято; при ошибке бросает (UI показывает сообщение в диалоге).
+ */
+export async function createProfile(body: ProfileRequest): Promise<Profile> {
+  const res = await fetch('/api/profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`profiles POST http ${res.status}`);
+  return (await res.json()) as Profile;
+}
+
+/**
+ * Обновление профиля: PUT /api/profiles/{id} {name, position?, responseFormat?, preferences?, constraints?}.
+ * 404 — нет профиля, 400 — пустое имя, 409 — новое имя занято другим профилем;
+ * при ошибке бросает (UI показывает сообщение в диалоге).
+ */
+export async function updateProfile(id: number, body: ProfileRequest): Promise<Profile> {
+  const res = await fetch(`/api/profiles/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`profiles PUT http ${res.status}`);
+  return (await res.json()) as Profile;
+}
+
+/**
+ * Удаление профиля: DELETE /api/profiles/{id}. Если удаляемый был активным, бэкенд
+ * сбрасывает глобальную активную ссылку на «Без профиля».
+ */
+export async function deleteProfile(id: number): Promise<DeleteResponse> {
+  const res = await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`profiles DELETE http ${res.status}`);
+  return (await res.json()) as DeleteResponse;
+}
+
+/**
+ * Выбор активного профиля: PUT /api/profiles/active {profileId: number | null}.
+ * null — «Без профиля»; 404 — профиль не существует. Возвращает эхо activeProfileId.
+ */
+export async function setActiveProfile(profileId: number | null): Promise<ActiveProfileResponse> {
+  const res = await fetch('/api/profiles/active', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profileId }),
+  });
+  if (!res.ok) throw new Error(`profiles active PUT http ${res.status}`);
+  return (await res.json()) as ActiveProfileResponse;
 }

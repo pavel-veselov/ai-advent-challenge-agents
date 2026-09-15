@@ -169,3 +169,19 @@ CREATE TABLE IF NOT EXISTS agent_long_term_memory (
     updated_at        TEXT NOT NULL,
     UNIQUE(type, key)
 );
+
+-- Профили пользователя (см. ProfileStore): ГЛОБАЛЬНЫЙ справочник персонализации агента
+-- (должность, формат ответа, предпочтения, ограничения) — не скоупится по проекту/сессии.
+-- name UNIQUE: повторное создание того же имени не удается (id = -1, fail-open).
+-- АКТИВНЫЙ профиль хранится ОТДЕЛЬНО в app_settings (ключ `profile.active` = id или "null",
+-- см. ProfileController) — флага на строке профиля НЕТ.
+CREATE TABLE IF NOT EXISTS agent_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL UNIQUE,
+    position        TEXT,
+    response_format TEXT,
+    preferences     TEXT,
+    constraints     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);

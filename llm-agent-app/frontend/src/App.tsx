@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import ChatPanel from './components/ChatPanel';
 import LlmSettings from './components/LlmSettings';
+import ProfileSelect from './components/ProfileSelect';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
-import { fetchProjectMemory } from './api';
+import { fetchActiveProfile, fetchProfiles, fetchProjectMemory } from './api';
 import { useAgentSession } from './hooks/useAgentSession';
-import type { MemoryState } from './types';
+import type { MemoryState, Profile } from './types';
 
 /** Дефолтная ширина правой колонки — настройки LLM + лог шагов (px). */
 const DEFAULT_STEPS_WIDTH = 320;
@@ -74,6 +75,47 @@ export default function App() {
   const handleMemoryCleared = () => {
     if (activeProjectId == null) return;
     fetchProjectMemory(activeProjectId).then(setMemory).catch(() => {});
+  };
+
+  // Профили пользователя (персонализация агента): глобальный справочник + глобальный
+  // активный профиль (вне проектов/сессий). Грузим один раз при монтировании; после
+  // создания/удаления/смены в ProfileSelect перечитываем через handleProfilesRefresh.
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchProfiles()
+      .then((list) => {
+        if (!cancelled) setProfiles(list);
+      })
+      .catch(() => {
+        /* сервис недоступен — справочник остаётся пустым до перечитывания */
+      });
+    fetchActiveProfile()
+      .then((a) => {
+        if (!cancelled) setActiveProfileId(a.activeProfileId);
+      })
+      .catch(() => {
+        /* сервис недоступен — остаёмся на «Без профиля» */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Перечитать справочник и активный профиль после CRUD в ProfileSelect. */
+  const handleProfilesRefresh = () => {
+    fetchProfiles()
+      .then(setProfiles)
+      .catch(() => {
+        /* перечитывание фоновое — прежний список остаётся до следующей попытки */
+      });
+    fetchActiveProfile()
+      .then((a) => setActiveProfileId(a.activeProfileId))
+      .catch(() => {
+        /* перечитывание фоновое — прежнее значение остаётся */
+      });
   };
 
   // Вкладки блокируем только при неработающем/запускающемся бэкенде: переключение и
@@ -158,6 +200,12 @@ export default function App() {
         onPointerCancel={handleResizeEnd}
       />
       <div className="sidebar-column" style={{ width: stepsWidth }}>
+        {/* Профиль пользователя (персонализация агента) — над настройками LLM, глобальный. */}
+        <ProfileSelect
+          profiles={profiles}
+          activeProfileId={activeProfileId}
+          onRefresh={handleProfilesRefresh}
+        />
         <LlmSettings
           settings={session.runSettings}
           sessionId={session.sessionId}

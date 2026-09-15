@@ -1,6 +1,7 @@
 package com.example.llmagent.agent
 
 import com.example.llmagent.config.AgentProperties
+import com.example.llmagent.config.AppSettingsStore
 import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -52,6 +53,12 @@ class AgentImpl(
      *  (тот же fail-open: блок контекста и снапшоты пропускаются). Пишется ТОЛЬКО
      *  пользователем (REST/UI). */
     private val longTermMemoryStore: LongTermMemoryStore? = null,
+    /** Справочник профилей пользователя (персонализация); null — блок профиля отключён
+     *  (юнит-тесты/старая обвязка): контекстный блок молча пропускается (fail-open). */
+    private val profileStore: ProfileStore? = null,
+    /** Глобальные настройки приложения (app_settings): активный профиль — ключ
+     *  `profile.active`; null — активный профиль не подключён (тот же fail-open). */
+    private val appSettingsStore: AppSettingsStore? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -176,8 +183,8 @@ class AgentImpl(
                             "Контекст: $contextBefore → $contextAfter токенов.",
                     )
                     logStep(
-                        "История стала длинной — сворачиваю ${foldable.size} старых сообщений в краткое резюме: " +
-                            "контекст ужался с $contextBefore до $contextAfter токенов. Резюме сохранено в сессии.",
+                        "История стала длинной — сворачиваю ${foldable.size} старых сообщений в краткое резюме. " +
+                            "Резюме сохранено в сессии: в следующих запросах оно заменит старые сообщения в контексте.",
                     )
                     contextSummary = result.text
                     compressionActive = true
@@ -237,7 +244,49 @@ class AgentImpl(
         // В историю чата НЕ пишутся — только в контекст текущего запроса. Fail-open:
         // нет store / сбой чтения — блок молча пропускается, run не ломается.
         try {
+            // Персонализация (профиль пользователя): активный профиль — ГЛОБАЛЬНАЯ настройка
+            // (app_settings: `profile.active` = id или "null"). Системный блок «=== ПРОФИЛЬ
+            // ПОЛЬЗОВАТЕЛЯ ===» идёт сразу после SYSTEM_PROMPT, ДО блоков памяти — для ВСЕХ
+            // стратегий контекста. Нет профиля («Без профиля»)/нет store/сбой чтения — блок
+            // молча пропускается (fail-open), run не ломается.
+            val activeProfileId = appSettingsStore?.get(PROFILE_ACTIVE_KEY)
+                ?.trim()?.takeIf { it != PROFILE_ACTIVE_NONE }?.toLongOrNull()
+            if (appSettingsStore == null) {
+                logStep("Профиль пользователя: хранилище настроек не подключено — блок профиля пропускается.")
+            } else if (activeProfileId == null) {
+                logStep("Профиль пользователя: не выбран («Без профиля») — системный блок профиля в контекст не добавляется.")
+            } else {
+                val profile = profileStore?.findById(activeProfileId)
+                if (profile != null) {
+                    messages += LlmMessage("system", buildProfileSystem(profile))
+                    logStep(
+                        "Профиль пользователя: применяю активный профиль «${profile.name}» (прочитан из app_settings, ключ «profile.active»). " +
+                            "Блок «=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===» добавлен в контекст сразу после системного промпта: " +
+                            "Стиль: ${profile.position ?: "—"}; Формат ответа: ${profile.responseFormat ?: "—"}; " +
+                            "Предпочтения: ${profile.preferences ?: "—"}; Ограничения: ${profile.constraints ?: "—"}.",
+                    )
+                } else {
+                    logStep(
+                        "Профиль пользователя: активный профиль с id=$activeProfileId не найден в справочнике — " +
+                            "блок профиля пропускается (fail-open), run продолжается без персонализации.",
+                    )
+                }
+            }
+
             val wm = workingMemoryStore?.get(wmKey) ?: WorkingMemory(task = null, notes = emptyList())
+            if (workingMemoryStore == null) {
+                logStep("Рабочая память: хранилище не подключено — блок рабочей памяти пропускается.")
+            } else {
+                val wmTaskLine =
+                    wm.task?.takeIf { it.isNotBlank() }?.let { "текущая задача — «$it»" } ?: "текущая задача не задана"
+                val wmNotesLine =
+                    if (wm.notes.isEmpty()) "заметок нет"
+                    else "заметки: " + wm.notes.mapIndexed { index, note -> "${index + 1}. $note" }.joinToString("; ")
+                logStep(
+                    "Рабочая память проекта (общая для всех сессий проекта, ключ «$wmKey»): $wmTaskLine, $wmNotesLine. " +
+                        "Заметки пользователь добавляет сам (REST/UI) — они уйдут модели системным блоком «=== РАБОЧАЯ ПАМЯТЬ ===».",
+                )
+            }
             val wmSections = mutableListOf<String>()
             if (!wm.task.isNullOrBlank()) wmSections += "Текущая задача: ${wm.task}"
             if (wm.notes.isNotEmpty()) {
@@ -249,6 +298,20 @@ class AgentImpl(
             }
 
             val longTerm = longTermMemoryStore?.listAll() ?: emptyList()
+            if (longTermMemoryStore == null) {
+                logStep("Долговременная память: хранилище не подключено — блок долговременной памяти пропускается.")
+            } else if (longTerm.isEmpty()) {
+                logStep("Долговременная память (глобальная, общая для всех сессий): записей нет — блок в контекст не добавляется.")
+            } else {
+                val shownLtm = longTerm.take(20)
+                logStep(
+                    "Долговременная память (глобальная, общая для всех сессий): загружено ${longTerm.size} записей, " +
+                        "в контекст пойдёт ${shownLtm.size}: " +
+                        shownLtm.joinToString("; ") { "${it.type} «${it.key}»" } +
+                        (if (longTerm.size > 20) "; …и ещё ${longTerm.size - 20}" else "") + ". " +
+                            "Записи пользователь добавляет сам (REST/UI); они уйдут модели системным блоком «=== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===».",
+                )
+            }
             if (longTerm.isNotEmpty()) {
                 val shown = longTerm.take(20)
                 val lines = shown.map { "${it.type} | ${it.key}: ${it.value}" }.toMutableList()
@@ -267,6 +330,9 @@ class AgentImpl(
             // Сжатый контекст (strategy=summary): [резюме как сообщение] + последние keepLast
             // сообщений «как есть» + новый вопрос (поведение сжатия не изменилось).
             compressionActive -> {
+                logStep(
+                    "Стратегия «summary»: контекст = резюме прежней истории + последние ${compression.keepLast} сообщений «как есть» + новый вопрос.",
+                )
                 if (contextSummary != null) {
                     messages += LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX$contextSummary")
                 }
@@ -289,11 +355,16 @@ class AgentImpl(
                         "system",
                         "Известные факты:\n" + facts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" },
                     )
+                    logStep("Добавляю в контекст известные факты диалога (${facts.size} шт.) перед окном сообщений.")
                 }
-                sessionStore.getStored(sessionId)
+                val window = sessionStore.getStored(sessionId)
                     .filter { it.role != "system" }
                     .takeLast(strategyWindowSize)
-                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                window.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                logStep(
+                    "Стратегия «$contextStrategy»: беру окно последних $strategyWindowSize сообщений истории " +
+                        "(в окно попало ${window.size}, включая новый вопрос).",
+                )
             }
             // Цепочка активной ветки (strategy=branching): корень → … → вопрос (после append
             // вопрос — голова активной ветки); системные заметки фильтруются, порядок
@@ -303,20 +374,25 @@ class AgentImpl(
                 val branchMessages = branch?.headMessageId
                     ?.let { sessionStore.getBranchChain(sessionId, it) }
                     ?: emptyList()
-                branchMessages
+                val branchChain = branchMessages
                     .filter { it.role != "system" }
-                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                branchChain.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                logStep(
+                    "Стратегия «branching»: контекст = цепочка сообщений активной ветки " +
+                        "(${branchChain.size} сообщений, от корня ветки к текущему вопросу).",
+                )
             }
             // Вся история целиком (strategy=none и любой непокрытый выше случай).
             else -> {
-                sessionStore.getStored(sessionId)
+                val storedAll = sessionStore.getStored(sessionId)
                     .filter { it.role != "system" }
-                    .forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                storedAll.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
+                logStep("Стратегия «$contextStrategy»: отправляю историю диалога целиком — ${storedAll.size} сообщений.")
             }
         }
         logStep(
-            "Контекст для LLM готов: ${messages.size} сообщений, примерно ${estimateTokens(messages)} токенов (стратегия=$contextStrategy). " +
-                "Это всё, что модель увидит из истории диалога.",
+            "Контекст для LLM готов: ${messages.size} сообщений (стратегия=$contextStrategy). " +
+                "Это всё, что модель увидит: системный промпт, профиль и память — системными блоками, далее история диалога.",
         )
 
         try {
@@ -332,7 +408,10 @@ class AgentImpl(
 
                 // Локальных оценок до отправки в LLM нет: переполнение контекста выявляет сам
                 // апстрим (обычно 400), его ответ пробрасывается дословно через error-событие.
-                logStep("Шаг $iteration: отправляю запрос в LLM. Модель сама решит — ответить текстом или попросить вызвать инструмент.")
+                logStep(
+                    "Шаг $iteration: отправляю запрос в LLM (контекст: ${messages.size} сообщений). " +
+                        "Модель сама решит — ответить текстом или попросить вызвать инструмент.",
+                )
                 send(LlmRequestStarted(iteration, promptSnapshot(messages)))
                 val text = StringBuilder()
                 var toolCalls: List<LlmToolCall> = emptyList()
@@ -361,9 +440,12 @@ class AgentImpl(
                 }
                 send(LlmResponseFinished(iteration, finishReason, usage, costUsd = costUsd))
                 logStep(
-                    "Шаг $iteration: модель ответила (finishReason=$finishReason). " +
-                        "Токены: прочитано ${usage?.inputTokens ?: 0}, сгенерировано ${usage?.outputTokens ?: 0}, " +
-                        "стоимость ≈ ${costUsd ?: 0.0} USD.",
+                    "Шаг $iteration: модель ответила (finishReason=$finishReason)." +
+                        when (finishReason) {
+                            "tool_calls" -> " Для ответа не хватает данных — модель запросила инструмент(ы)."
+                            "stop" -> " Данных достаточно — модель готова дать финальный ответ."
+                            else -> ""
+                        },
                 )
 
                 if (finishReason == "tool_calls" && toolCalls.isNotEmpty()) {
@@ -468,6 +550,21 @@ class AgentImpl(
             cur = cur.cause
         }
         return null
+    }
+
+    /**
+     * Системный блок активного профиля пользователя («=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===»):
+     * имя профиля + только НЕпустые поля (стиль, формат ответа, предпочтения,
+     * ограничения), каждое с русской подписью. Блок подаётся моделью как system-сообщение
+     * (после SYSTEM_PROMPT, до блоков памяти) — действует для всех стратегий контекста.
+     */
+    private fun buildProfileSystem(profile: Profile): String {
+        val lines = mutableListOf("Профиль: ${profile.name}")
+        if (!profile.position.isNullOrBlank()) lines += "Стиль: ${profile.position}"
+        if (!profile.responseFormat.isNullOrBlank()) lines += "Формат ответа: ${profile.responseFormat}"
+        if (!profile.preferences.isNullOrBlank()) lines += "Предпочтения: ${profile.preferences}"
+        if (!profile.constraints.isNullOrBlank()) lines += "Ограничения: ${profile.constraints}"
+        return "=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===\n" + lines.joinToString("\n")
     }
 
     /** Снимок промпта для события llm_request_started: точный список сообщений, ушедший в LLM. */
@@ -667,6 +764,12 @@ class AgentImpl(
 
         /** Префикс сообщения-резюме в сжатом контексте (system-роль). */
         const val SUMMARY_CONTEXT_PREFIX = "Резюме ранее: "
+
+        /** Ключ активного профиля пользователя в app_settings (значение — id или "null"). */
+        const val PROFILE_ACTIVE_KEY = "profile.active"
+
+        /** Значение app_settings для «Без профиля» (активный профиль не выбран). */
+        const val PROFILE_ACTIVE_NONE = "null"
 
         /**
          * Фактический подсчёт токенов в списке сообщений BPE-токенизатором o200k_base

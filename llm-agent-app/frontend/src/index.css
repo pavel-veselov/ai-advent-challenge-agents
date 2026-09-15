@@ -1820,6 +1820,27 @@ button:disabled {
   color: var(--text-dim);
 }
 
+/* Простая текстовая строка лога шага (без карточки/точки/пояснений): время + текст */
+.step-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 4px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.step-line-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.step-line.status-error .step-line-text {
+  color: var(--red-bright);
+}
+
 /* Служебная строка лога (kind = system): текст + пояснение «для чайников» под ним */
 .step-system {
   display: flex;
@@ -1848,6 +1869,125 @@ button:disabled {
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-dim);
+}
+
+/* Ссылка «Детализация» в строке запроса к LLM: открывает диалог с фактическим промптом */
+.step-detail {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.step-detail:hover {
+  color: color-mix(in srgb, var(--accent) 70%, white);
+  text-decoration-style: solid;
+}
+
+/* ---------- Диалог «Детализация»: фактический запрос в LLM API ---------- */
+
+/* Затемнение поверх всего приложения; клик по нему закрывает диалог (стандартный модал). */
+.detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 12, 8, 0.6);
+}
+
+.detail-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  background-color: #20332a;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 12px 40px rgba(5, 12, 8, 0.6),
+    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28);
+}
+
+.detail-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent);
+}
+
+.detail-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.detail-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.detail-role {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+/* Содержимое сообщения промпта: моноширинный блок, длинные строки переносятся */
+.detail-code {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.detail-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.detail-close {
+  padding: 4px 12px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.detail-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ---------- Служебное ---------- */
@@ -2253,4 +2393,183 @@ button:disabled {
   font-size: 11px;
   line-height: 1.4;
   word-break: break-word;
+}
+
+/* ===== Профиль пользователя: выпадашка над настройками LLM + диалог создания (day14) ===== */
+
+/* Блок «Профиль пользователя» — приборная панель в стиле .llm-settings-block */
+.profile-select-block {
+  flex-shrink: 0;
+  background-color: #20332a;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
+  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28),
+    inset 1px 1px 0 rgba(242, 232, 213, 0.06),
+    inset -1px -1px 0 rgba(5, 12, 8, 0.45);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Выпадашка + кнопка удаления активного профиля */
+.profile-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.profile-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.profile-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.profile-select option {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* Компактная кнопка удаления активного профиля (в стиле project-chip-del) */
+.profile-del {
+  flex: none;
+  padding: 4px 10px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--red-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.profile-del:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 60%, var(--border));
+}
+
+/* Компактная кнопка редактирования активного профиля (стиль .profile-del, но акцентный) */
+.profile-edit {
+  flex: none;
+  padding: 4px 10px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.profile-edit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+/* Диалог «Новый профиль»: затемнение поверх всего приложения + панель */
+.profile-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 12, 8, 0.6);
+}
+
+.profile-modal {
+  width: min(420px, calc(100vw - 32px));
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  background-color: #20332a;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 12px 40px rgba(5, 12, 8, 0.6),
+    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28);
+}
+
+.profile-modal-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent);
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.profile-field-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+/* Поля ввода профиля: утопленное «стекло» приборов, как .mem-input */
+.profile-input,
+.profile-textarea {
+  padding: 4px 8px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.profile-input::placeholder,
+.profile-textarea::placeholder {
+  color: color-mix(in srgb, var(--text-dim) 60%, transparent);
+}
+
+.profile-input:focus,
+.profile-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.profile-textarea {
+  resize: vertical;
+  min-height: 44px;
+}
+
+.profile-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }

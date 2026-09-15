@@ -659,7 +659,6 @@ export function useAgentSession(): AgentSession {
           result: patch.result,
           detail: patch.detail,
           explanation: patch.explanation,
-          content: patch.content,
         });
       } else {
         map.set(id, { ...existing, ...patch });
@@ -831,16 +830,10 @@ export function useAgentSession(): AgentSession {
         break;
       }
       case 'agent_started': {
+        // Сообщение пользователя видно в чате — в лог его не дублируем.
+        // Лог сфокусирован на потоке запросов в LLM (детализация — по кнопке у строки).
         setRunSettings(e.payload.settings);
         runSettingsRef.current = e.payload.settings;
-        touchStep(sid, `${e.runId}:user`, e.timestamp, {
-          kind: 'user',
-          title: 'Запрос пользователя',
-          status: 'success',
-          result: e.payload.userMessage,
-          explanation:
-            'Агент принял сообщение и запускает цикл: LLM → (если нужно) инструменты → финальный ответ.',
-        });
         return;
       }
       case 'llm_request_started': {
@@ -855,32 +848,24 @@ export function useAgentSession(): AgentSession {
             estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
           },
           status: 'running',
-          explanation: `Итерация ${it}: агент отправляет в LLM всю историю диалога (раскройте «Контекст запроса в LLM»). Модель решает — ответить текстом или запросить инструмент.`,
         });
         return;
       }
       case 'llm_response_finished': {
         const ok = e.payload.finishReason === 'stop' || e.payload.finishReason === 'tool_calls';
         const u = e.payload.usage;
-        const tokens = u ? ` · токены: вход ${u.inputTokens} · выход ${u.outputTokens}` : '';
         touchStep(sid, key, e.timestamp, {
           status: ok ? 'success' : 'error',
-          detail: `finish_reason: ${e.payload.finishReason}${tokens}`,
-          // Данные о токенах храним структурно (строку detail выше оставляем для читаемости).
+          // Токены/стоимость в текст лога не дублируем: только служебный finish_reason,
+          // численные значения остаются в tokenUsage для сводки по сессии.
+          detail: `finish_reason: ${e.payload.finishReason}`,
+          // Данные о токенах храним структурно (для итогов токенов сессии).
           tokenUsage: {
             inputTokens: u?.inputTokens ?? null,
             outputTokens: u?.outputTokens ?? null,
             estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
             costUsd: e.payload.costUsd ?? null,
           },
-          explanation:
-            e.payload.finishReason === 'stop'
-              ? 'LLM решила, что данных достаточно, и дала финальный ответ — цикл агента завершается.'
-              : e.payload.finishReason === 'tool_calls'
-                ? 'LLM решила, что данных не хватает, и запросила инструмент — следующим шагом агент его выполнит.'
-                : e.payload.finishReason === 'length'
-                  ? 'Ответ обрезан: достигнут лимит токенов на один ответ модели.'
-                  : 'LLM вернула ошибку вместо ответа — цикл прерван.',
         });
         // Накопительные итоги диалога сессии: суммируем usage и стоимость каждого ответа LLM.
         const st = runStateRef.current.get(sid);
@@ -907,29 +892,28 @@ export function useAgentSession(): AgentSession {
           toolName: tool ? tool[1] : undefined,
           args: e.payload.args,
           status: 'running',
-          explanation:
-            'LLM попросила этот инструмент — агент вызывает его с аргументами, которые сгенерировала модель.',
         });
         return;
       }
       case 'tool_call_finished': {
+        // Имя инструмента восстанавливаем из stepId (tool-<name>-<idx>), чтобы
+        // строка лога была самодостаточной: «Инструмент: calculator — готово».
+        const tool = /^tool-(.+)-\d+$/.exec(e.stepId);
+        const toolLabel = tool ? tool[1] : e.stepId;
         touchStep(sid, key, e.timestamp, {
+          title: `Инструмент: ${toolLabel} — ${e.payload.status === 'success' ? 'готово' : 'ошибка'}`,
           result: e.payload.result,
           status: e.payload.status === 'success' ? 'success' : 'error',
-          explanation:
-            e.payload.status === 'success'
-              ? 'Инструмент вернул результат — на следующей итерации агент передаст его в LLM.'
-              : 'Инструмент завершился ошибкой — текст ошибки уйдёт в LLM, чтобы она скорректировала запрос.',
         });
         return;
       }
       case 'agent_finished': {
+        // Финальный ответ виден в чате — в лог пишем только маркер завершения,
+        // без текста ответа (см. также kind 'answer' в StepLogEntry).
         touchStep(sid, key, e.timestamp, {
           kind: 'answer',
-          title: 'Ответ',
+          title: 'Готово',
           status: 'success',
-          content: e.payload.finalText,
-          explanation: 'Цикл завершён — финальный ответ доставлен пользователю.',
         });
         refreshGlobalStats();
         syncSessions();
@@ -943,30 +927,26 @@ export function useAgentSession(): AgentSession {
           title: `Сжатие контекста: сворачиваю ${e.payload.foldCount} сообщений…`,
           status: 'running',
           prompt: e.payload.prompt,
-          explanation:
-            'Старые сообщения диалога сворачиваются в краткое summary: LLM получает прежнее резюме (если было), сами сообщения и в конце простой запрос «Сожми историю нашего диалога.» (с пометкой, что это служебное сообщение и запоминать его не нужно). Раскройте «Контекст запроса в LLM», чтобы увидеть точный промпт.',
         });
         return;
       }
       case 'context_summary_finished': {
         touchStep(sid, key, e.timestamp, {
           kind: 'llm',
-          title: `Сжатие контекста выполнено: ${e.payload.foldCount} сообщений → summary (LLM: вход ${e.payload.promptTokens} · выход ${e.payload.completionTokens} токенов)`,
+          // Токены в текст лога не выносим — только факт свёртки истории.
+          title: `Сжатие контекста выполнено: ${e.payload.foldCount} сообщений → резюме`,
           status: 'success',
           // Ответ LLM на запрос резюмирования — это и есть новое summary сессии.
           result: e.payload.summary,
-          explanation:
-            'История свернута в summary («Результат» — дословный ответ LLM): следующий запрос к LLM уйдёт со сжатым контекстом вместо полных сообщений.',
         });
         return;
       }
       case 'error': {
         touchStep(sid, `${e.runId}:error`, e.timestamp, {
           kind: 'error',
-          title: 'Ошибка',
+          title: `Ошибка: ${e.payload.message}`,
           status: 'error',
           result: e.payload.message,
-          explanation: 'Непредвиденная ошибка — работа агента остановлена.',
         });
         return;
       }

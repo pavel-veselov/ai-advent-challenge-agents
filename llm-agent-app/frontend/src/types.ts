@@ -325,6 +325,37 @@ export interface ProjectSessionCreated {
   title: string | null;
 }
 
+// ---- Профили пользователя (персонализация агента; глобальный справочник) ----
+
+/**
+ * Профиль пользователя (GET/POST /api/profiles): ГЛОБАЛЬНАЯ сущность — вне проектов
+ * и сессий. Опциональные поля null, когда не заданы (или пустые на бэкенде — нормализуются в null).
+ */
+export interface Profile {
+  id: number;
+  name: string;
+  position: string | null;
+  responseFormat: string | null;
+  preferences: string | null;
+  constraints: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Тело POST /api/profiles и PUT /api/profiles/{id}: name обязателен, остальное опционально. */
+export interface ProfileRequest {
+  name: string;
+  position?: string | null;
+  responseFormat?: string | null;
+  preferences?: string | null;
+  constraints?: string | null;
+}
+
+/** Ответ GET/PUT /api/profiles/active: id активного профиля; null — «Без профиля». */
+export interface ActiveProfileResponse {
+  activeProfileId: number | null;
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */
@@ -359,8 +390,6 @@ export interface StepLogEntry {
   };
   /** Человеческое пояснение шага: что происходит и зачем (обучающий слой UI). */
   explanation?: string;
-  /** Финальный ответ агента (событие agent_finished). */
-  content?: string;
 }
 
 export interface ChatMessage {

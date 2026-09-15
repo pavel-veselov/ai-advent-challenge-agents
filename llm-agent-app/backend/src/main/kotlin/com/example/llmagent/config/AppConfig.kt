@@ -5,6 +5,7 @@ import com.example.llmagent.agent.AgentImpl
 import com.example.llmagent.agent.GpuStackLlmClient
 import com.example.llmagent.agent.LlmClient
 import com.example.llmagent.agent.LongTermMemoryStore
+import com.example.llmagent.agent.ProfileStore
 import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
@@ -50,10 +51,12 @@ class AppConfig {
         branchStore: SessionBranchStore,
         workingMemoryStore: WorkingMemoryStore,
         longTermMemoryStore: LongTermMemoryStore,
+        profileStore: ProfileStore,
+        appSettingsStore: AppSettingsStore,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
-        workingMemoryStore, longTermMemoryStore,
+        workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore,
     )
 }
