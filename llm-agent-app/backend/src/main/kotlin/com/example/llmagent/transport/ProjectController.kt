@@ -3,6 +3,7 @@ package com.example.llmagent.transport
 import com.example.llmagent.agent.Project
 import com.example.llmagent.agent.ProjectSession
 import com.example.llmagent.agent.ProjectStore
+import com.example.llmagent.agent.InvariantsStore
 import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
@@ -29,7 +30,8 @@ import org.springframework.web.server.ResponseStatusException
  * PATCH  /api/projects/{id}           — переименование, тело `{name}` → 200 с проектом; 404 — нет; 400 — пустое имя.
  * DELETE /api/projects/{id}           — КАСКАДНОЕ удаление: все сессии проекта (chat_messages + chat_sessions),
  *                                       ВСЕ per-session данные (сжатие, настройки LLM, стратегия контекста, факты,
- *                                       ветки) и рабочая память ПРОЕКТА (agent_working_memory по project_id) →
+ *                                       ветки), рабочая память ПРОЕКТА (agent_working_memory по project_id) и
+ *                                       инварианты проекта (agent_invariants по project_id) →
  *                                       `{deleted:true}`; 404 — нет. Долговременная память (LTM) ГЛОБАЛЬНАЯ —
  *                                       удаление проекта её НЕ трогает.
  * POST   /api/projects/{id}/sessions  — создание сессии В проекте (server-side id), тело `{title?}` →
@@ -49,6 +51,7 @@ class ProjectController(
     private val branchStore: SessionBranchStore,
     private val workingMemoryStore: WorkingMemoryStore,
     private val taskStateStore: TaskStateStore,
+    private val invariantsStore: InvariantsStore,
 ) {
 
     data class ProjectRequest(val name: String?)
@@ -94,7 +97,8 @@ class ProjectController(
     /**
      * Каскадное удаление проекта: как DELETE /api/sessions/{sessionId} (HistoryController)
      * для КАЖДОЙ сессии проекта (sessionStore.delete + все per-session store'ы) ПЛЮС
-     * рабочая память проекта (agent_working_memory по project_id) и сам проект.
+     * рабочая память проекта (agent_working_memory по project_id), инварианты проекта
+     * (agent_invariants по project_id) и сам проект.
      * LTM (agent_long_term_memory) ГЛОБАЛЬНАЯ — записи переживают удаление проектов.
      */
     @DeleteMapping("/api/projects/{id}")
@@ -112,6 +116,7 @@ class ProjectController(
             taskStateStore.remove(s.sessionId)
         }
         workingMemoryStore.deleteByProject(id.toString())
+        invariantsStore.deleteByProject(id.toString())
         if (!projectStore.delete(id)) {
             throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Не удалось удалить проект")
         }

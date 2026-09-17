@@ -69,6 +69,10 @@ class AgentImpl(
      *  null — воркфлоу выключен (юнит-тесты/старая обвязка): агент ведёт себя как
      *  сегодня, без гейтинга этапов (fail-open). */
     private val workflowSettings: WorkflowSettings? = null,
+    /** Инварианты проекта (Day-14): обязательные ограничения, которые ассистент не
+     *  имеет права нарушать; null — инварианты не подключены (юнит-тесты/старая
+     *  обвязка): блок «=== ИНВАРИАНТЫ ===» молча пропускается (fail-open). */
+    private val invariantsStore: InvariantsStore? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -352,6 +356,26 @@ class AgentImpl(
                     lines += "…и ещё ${longTerm.size - 20} записей в долговременной памяти"
                 }
                 messages += LlmMessage("system", "=== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===\n" + lines.joinToString("\n"))
+            }
+
+            // Инварианты проекта (Day-14): обязательные ограничения (архитектура, технические
+            // решения, стек, бизнес-правила), которые ассистент НЕ имеет права нарушать.
+            // Хранятся ОТДЕЛЬНО от диалога, скоупятся ПО ПРОЕКТУ (wmKey) — общая для всех
+            // сессий проекта. Системный блок «=== ИНВАРИАНТЫ ===» подаётся модели сразу после
+            // памяти, для ВСЕХ стратегий контекста. Нет store / нет инвариантов / сбой чтения —
+            // блок молча пропускается (fail-open), run не ломается.
+            val invariants = invariantsStore?.list(wmKey) ?: emptyList()
+            if (invariantsStore == null) {
+                logStep("Инварианты: хранилище не подключено — блок инвариантов пропускается.")
+            } else if (invariants.isEmpty()) {
+                logStep("Инварианты проекта (ключ «$wmKey»): инвариантов нет — блок в контекст не добавляется.")
+            } else {
+                messages += LlmMessage("system", buildInvariantsSystem(invariants))
+                logStep(
+                    "Инварианты проекта (ключ «$wmKey»): загружено ${invariants.size} инвариантов — " +
+                        "системный блок «=== ИНВАРИАНТЫ ===» добавлен в контекст. Модель обязана соблюдать их " +
+                        "и отказываться от решений, которые их нарушают.",
+                )
             }
         } catch (e: CancellationException) {
             throw e
@@ -799,6 +823,25 @@ class AgentImpl(
         if (!profile.preferences.isNullOrBlank()) lines += "Предпочтения: ${profile.preferences}"
         if (!profile.constraints.isNullOrBlank()) lines += "Ограничения: ${profile.constraints}"
         return "=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===\n" + lines.joinToString("\n")
+    }
+
+    /**
+     * Системный блок инвариантов («=== ИНВАРИАНТЫ ===»): перечисление обязательных
+     * ограничений проекта (категория — текст, если категория задана) и явная инструкция
+     * модели предлагать только решения, которые их соблюдают, а при конфликте запроса
+     * с инвариантом — отказываться и объяснять, какой именно инвариант нарушается.
+     * Блок подаётся как system-сообщение (после памяти, до истории) — для всех стратегий.
+     */
+    private fun buildInvariantsSystem(invariants: List<Invariant>): String {
+        val lines = invariants.mapIndexed { index, inv ->
+            if (inv.category.isNullOrBlank()) "${index + 1}. ${inv.text}"
+            else "${index + 1}. ${inv.category} — ${inv.text}"
+        }
+        return "=== ИНВАРИАНТЫ ===\n" +
+            lines.joinToString("\n") + "\n\n" +
+            "Эти инварианты обязательны. Предлагай только решения, которые их соблюдают. " +
+            "Если запрос пользователя конфликтует с инвариантом — откажись и объясни, какой именно " +
+            "инвариант нарушается и почему ты не можешь предложить такое решение."
     }
 
     /**

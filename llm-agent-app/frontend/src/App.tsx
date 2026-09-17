@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import ChatPanel from './components/ChatPanel';
+import InvariantsPanel from './components/InvariantsPanel';
 import LlmSettings from './components/LlmSettings';
 import ProfileSelect from './components/ProfileSelect';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
 import WorkflowSettings from './components/WorkflowSettings';
-import { fetchActiveProfile, fetchProfiles, fetchProjectMemory } from './api';
+import { fetchActiveProfile, fetchInvariants, fetchProfiles, fetchProjectMemory } from './api';
 import { useAgentSession } from './hooks/useAgentSession';
-import type { MemoryState, Profile } from './types';
+import type { Invariant, MemoryState, Profile } from './types';
 
 /** Дефолтная ширина правой колонки — настройки LLM + лог шагов (px). */
 const DEFAULT_STEPS_WIDTH = 320;
@@ -77,6 +78,34 @@ export default function App() {
     if (activeProjectId == null) return;
     fetchProjectMemory(activeProjectId).then(setMemory).catch(() => {});
   };
+
+  // Инварианты активного проекта (GET /api/projects/{id}/invariants): обязательные
+  // ограничения ассистента, общие для всех сессий проекта. Список перечитывается после
+  // любой мутации (add/delete) через handleInvariantsRefreshed — REST-мутации бэкенд
+  // SSE-событием не сопровождает.
+  const [invariants, setInvariants] = useState<Invariant[] | null>(null);
+
+  useEffect(() => {
+    if (activeProjectId == null) {
+      setInvariants(null);
+      return;
+    }
+    let cancelled = false;
+    fetchInvariants(activeProjectId)
+      .then((list) => {
+        if (!cancelled) setInvariants(list);
+      })
+      .catch(() => {
+        /* сервис недоступен — список остаётся прежним */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId]);
+
+  /** Перечитать инварианты проекта после мутации (add/delete). */
+  const handleInvariantsRefreshed = (projectId: number): Promise<void> =>
+    fetchInvariants(projectId).then(setInvariants).catch(() => {});
 
   // Профили пользователя (персонализация агента): глобальный справочник + глобальный
   // активный профиль (вне проектов/сессий). Грузим один раз при монтировании; после
@@ -236,6 +265,13 @@ export default function App() {
           }}
           memory={memory}
           onMemoryCleared={handleMemoryCleared}
+        />
+        {/* Инварианты Day-14: обязательные ограничения ассистента проекта (рядом с памятью). */}
+        <InvariantsPanel
+          projectId={activeProjectId ?? 0}
+          invariants={invariants}
+          refreshInvariants={handleInvariantsRefreshed}
+          disabled={tabDisabled || activeProjectId == null}
         />
         {/* Состояние задачи (Day-13 FSM) переехало в панель чата — полоса над журналом. */}
         <StepsLog

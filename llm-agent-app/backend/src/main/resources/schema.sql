@@ -186,6 +186,20 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
     updated_at      TEXT NOT NULL
 );
 
+-- Инварианты проекта (см. InvariantsStore): обязательные ограничения ассистента —
+-- архитектура, принятые технические решения, ограничения по стеку, бизнес-правила.
+-- Хранятся ОТДЕЛЬНО от диалога и скоупятся ПО ПРОЕКТУ (project_id TEXT, одна строка на
+-- инвариант). Подаются модели системным блоком «=== ИНВАРИАНТЫ ===». Удаляются каскадом
+-- при DELETE /api/projects/{id} (см. ProjectController.deleteProject).
+CREATE TABLE IF NOT EXISTS agent_invariants (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    category   TEXT,
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Состояние задачи сессии — конечный автомат (см. TaskStateStore, GET/PUT
 -- /api/sessions/{sessionId}/task-state, инструмент task_state агента и воркфлоу
 -- /continue + /cancel). stage — этап FSM (planning | execution | validation | done);

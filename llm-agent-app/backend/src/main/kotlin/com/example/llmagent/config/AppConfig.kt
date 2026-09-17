@@ -3,6 +3,7 @@ package com.example.llmagent.config
 import com.example.llmagent.agent.Agent
 import com.example.llmagent.agent.AgentImpl
 import com.example.llmagent.agent.GpuStackLlmClient
+import com.example.llmagent.agent.InvariantsStore
 import com.example.llmagent.agent.LlmClient
 import com.example.llmagent.agent.LongTermMemoryStore
 import com.example.llmagent.agent.ProfileStore
@@ -56,11 +57,12 @@ class AppConfig {
         appSettingsStore: AppSettingsStore,
         taskStateStore: TaskStateStore,
         workflowSettings: WorkflowSettings,
+        invariantsStore: InvariantsStore,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
         workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore, taskStateStore,
-        workflowSettings,
+        workflowSettings, invariantsStore,
     )
 }

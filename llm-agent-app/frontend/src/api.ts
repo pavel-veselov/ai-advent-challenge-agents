@@ -8,6 +8,8 @@
   DeleteResponse,
   FactsState,
   HistoryResponse,
+  Invariant,
+  InvariantRequest,
   MemoryState,
   Profile,
   ProfileRequest,
@@ -217,6 +219,57 @@ export async function clearLongTermMemory(): Promise<void> {
 export async function resetProjectMemory(projectId: number): Promise<void> {
   const res = await fetch(`/api/projects/${projectId}/memory/new-task`, { method: 'POST' });
   if (!res.ok) throw new Error(`project memory new-task POST http ${res.status}`);
+}
+
+/**
+ * Инварианты проекта: GET /api/projects/{projectId}/invariants.
+ * Инварианты — обязательные ограничения ассистента, общие для всех сессий проекта.
+ */
+export async function fetchInvariants(projectId: number): Promise<Invariant[]> {
+  const res = await fetch(`/api/projects/${projectId}/invariants`);
+  if (!res.ok) throw new Error(`invariants http ${res.status}`);
+  return (await res.json()) as Invariant[];
+}
+
+/**
+ * Добавить инвариант проекта: POST /api/projects/{projectId}/invariants {category?, text}.
+ * 400 — text пустой/blank; 404 — нет проекта; возвращает созданную запись.
+ */
+export async function addInvariant(projectId: number, body: InvariantRequest): Promise<Invariant> {
+  const res = await fetch(`/api/projects/${projectId}/invariants`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`invariants POST http ${res.status}`);
+  return (await res.json()) as Invariant;
+}
+
+/**
+ * Обновить инвариант проекта: PUT /api/projects/{projectId}/invariants/{id} {category?, text}.
+ * 400 — text blank; 404 — нет записи; возвращает обновлённую запись.
+ */
+export async function updateInvariant(
+  projectId: number,
+  id: number,
+  body: InvariantRequest,
+): Promise<Invariant> {
+  const res = await fetch(`/api/projects/${projectId}/invariants/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`invariants PUT http ${res.status}`);
+  return (await res.json()) as Invariant;
+}
+
+/**
+ * Удалить инвариант проекта: DELETE /api/projects/{projectId}/invariants/{id}.
+ * 404 — запись не найдена; тело ответа не разбираем: успех — 200.
+ */
+export async function deleteInvariant(projectId: number, id: number): Promise<void> {
+  const res = await fetch(`/api/projects/${projectId}/invariants/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`invariants DELETE http ${res.status}`);
 }
 
 /** Тело POST /api/projects/{projectId}/memory/notes. */

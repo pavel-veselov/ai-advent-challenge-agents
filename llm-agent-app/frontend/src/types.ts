@@ -299,6 +299,28 @@ export interface MemoryState {
   longTerm: LongTermEntry[];
 }
 
+// ---- Инварианты (GET/POST/PUT/DELETE /api/projects/{projectId}/invariants) ----
+
+/**
+ * Инвариант проекта (Day-14): обязательное ограничение ассистента, которое он не имеет
+ * права нарушать (архитектура, техническое решение, ограничение по стеку, бизнес-правило).
+ * Хранится ОТДЕЛЬНО от диалога, скоупится ПО ПРОЕКТУ (общая для всех сессий проекта).
+ */
+export interface Invariant {
+  id: number;
+  projectId: string;
+  category: string | null;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Тело POST/PUT инварианта: text обязателен (blank → 400), category опционален. */
+export interface InvariantRequest {
+  category?: string | null;
+  text: string;
+}
+
 // ---- Ветки диалога (GET/POST/PUT /api/sessions/{sessionId}/branches) ----
 
 export interface BranchInfo {
