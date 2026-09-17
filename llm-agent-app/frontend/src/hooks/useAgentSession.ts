@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   addLongTermMemory as addLongTermMemoryApi,
+  cancelTaskState,
   createBranch as createBranchApi,
   createProject as createProjectApi,
   createSessionInProject as createSessionInProjectApi,
@@ -14,14 +15,19 @@ import {
   fetchLlmSettings,
   fetchProjectSessions,
   fetchProjects,
+  fetchTaskState,
+  fetchWorkflowSettings,
   renameProject as renameProjectApi,
   saveWorkingNote as saveWorkingNoteApi,
   setActiveBranch as setActiveBranchApi,
   startBackend as startBackendApi,
   stopBackend as stopBackendApi,
   streamChat,
+  streamContinue,
   updateContextStrategy,
   updateLlmSettings as updateLlmSettingsApi,
+  updateTaskState as updateTaskStateApi,
+  updateWorkflowSettings,
 } from '../api';
 import type {
   AgentEvent,
@@ -35,7 +41,10 @@ import type {
   SessionContextStrategyPatch,
   StatsResponse,
   StepLogEntry,
+  TaskState,
+  TaskStatePatch,
   TokenTotals,
+  WorkflowSettings,
 } from '../types';
 
 const SESSION_KEY = 'llm-agent-session-id';
@@ -50,6 +59,24 @@ function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * Следующий линейный этап воркфлоу Day-14 (planning → execution → validation → done);
+ * для done/неизвестного — сам этап (переходить дальше некуда). Зеркало
+ * TaskStateStore.nextWorkflowStage на бэке.
+ */
+function nextWorkflowStage(stage: TaskState['stage']): TaskState['stage'] {
+  switch (stage) {
+    case 'planning':
+      return 'execution';
+    case 'execution':
+      return 'validation';
+    case 'validation':
+      return 'done';
+    default:
+      return stage;
+  }
 }
 
 /**
@@ -95,6 +122,8 @@ interface SessionRunState {
   facts: Record<string, string> | null;
   /** Ветки диалога сессии (GET/PUT /branches); null — ещё не загружены. */
   branches: BranchesState | null;
+  /** Состояние задачи сессии (GET/PUT /task-state, событие task_state_changed); null — задача не начата. */
+  taskState: TaskState | null;
 }
 
 /** Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming). */
@@ -227,6 +256,8 @@ export interface AgentSession {
   facts: Record<string, string> | null;
   /** Ветки диалога активной сессии (GET /branches); null — не загружены. */
   branches: BranchesState | null;
+  /** Состояние задачи активной сессии (FSM task_state); null — задача не начата. */
+  taskState: TaskState | null;
   /**
    * Сохранение сообщения в рабочую память ПРОЕКТА: POST /projects/{id}/memory/notes {note}.
    * Заметка общая для всех сессий проекта. Ошибка пробрасывается — индикацию у кнопки чата.
@@ -261,6 +292,26 @@ export interface AgentSession {
    * при ошибке откатывается), затем перечитывает историю (стратегия меняет вид сообщений).
    */
   changeContextStrategy: (sessionId: string, patch: SessionContextStrategyPatch) => Promise<void>;
+  /**
+   * Обновление состояния задачи: PUT /task-state (частичное тело {paused} или
+   * {stage, currentStep?, expectedAction?}). REST-мутации SSE не шлют — панель
+   * обновляется из ответа. Ошибка (400/сеть) пробрасывается — индикация у кнопки.
+   */
+  changeTaskState: (sessionId: string, patch: TaskStatePatch) => Promise<TaskState>;
+  /**
+   * Обновление настроек воркфлоу Day-14 (PUT /api/workflow-settings {enabled, mode}).
+   * При ошибке бросает — UI откатывает переключатель/режим к прежним значениям.
+   */
+  changeWorkflowSettings: (patch: WorkflowSettings) => Promise<WorkflowSettings>;
+  /**
+   * Продолжение воркфлоу Day-14 (кнопка «Продолжить»): запускает следующий этап
+   * (SSE-поток /continue). Новое user-сообщение не создаётся — агент читает историю.
+   */
+  continueWorkflow: (sessionId: string) => void;
+  /** Отмена воркфлоу Day-14 (кнопка «Отмена»): POST /cancel — пауза + сброс ожидания. */
+  cancelWorkflow: (sessionId: string) => Promise<TaskState>;
+  /** Настройки воркфлоу Day-14 (GET/PUT /api/workflow-settings, глобальные); null — не загружены. */
+  workflowSettings: WorkflowSettings | null;
   /**
    * Ветка сессии от сообщения истории: POST /branches {messageId}, затем обновляет список
    * веток и перечитывает историю (новая ветка становится активной).
@@ -322,6 +373,10 @@ export function useAgentSession(): AgentSession {
   const [facts, setFacts] = useState<Record<string, string> | null>(null);
   /** Ветки диалога активной сессии (зеркало буфера сессии); null — не загружены. */
   const [branches, setBranches] = useState<BranchesState | null>(null);
+  /** Состояние задачи активной сессии (зеркало буфера сессии); null — задача не начата. */
+  const [taskState, setTaskState] = useState<TaskState | null>(null);
+  /** Настройки воркфлоу Day-14 (GET/PUT /api/workflow-settings, глобальные); null — не загружены. */
+  const [workflowSettings, setWorkflowSettings] = useState<WorkflowSettings | null>(null);
   /** Каталог проектов (GET /api/projects); пустой массив — ещё не загружен или проектов нет. */
   const [projects, setProjects] = useState<Project[]>([]);
   /** Активный проект (id сохраняется в localStorage — переживает перезагрузку). */
@@ -370,6 +425,7 @@ export function useAgentSession(): AgentSession {
         windowSize: DEFAULT_CONTEXT_WINDOW,
         facts: null,
         branches: null,
+        taskState: null,
       };
       runStateRef.current.set(sid, st);
     }
@@ -400,6 +456,18 @@ export function useAgentSession(): AgentSession {
     if (!st) return;
     st.facts = next;
     if (sid === activeIdRef.current) setFacts(next);
+  };
+
+  /**
+   * Обновляет состояние задачи сессии sid (событие task_state_changed / GET/PUT /task-state).
+   * Та же дисциплина роутинга, что и у updateSessionFacts: активная сессия — сразу
+   * в живой вид панели, фоновая — в буфер до переключения вкладки.
+   */
+  const updateSessionTaskState = (sid: string, next: TaskState | null) => {
+    const st = runStateRef.current.get(sid);
+    if (!st) return;
+    st.taskState = next;
+    if (sid === activeIdRef.current) setTaskState(next);
   };
 
   /**
@@ -504,6 +572,14 @@ export function useAgentSession(): AgentSession {
       .catch(() => {
         /* веток ещё нет — остаётся null */
       });
+    fetchTaskState(sid)
+      .then((ts) => {
+        if (isStale()) return;
+        updateSessionTaskState(sid, ts);
+      })
+      .catch(() => {
+        /* состояния задачи ещё нет (404) — остаётся null */
+      });
   };
 
   /**
@@ -575,6 +651,44 @@ export function useAgentSession(): AgentSession {
       }
     },
     [refreshBranches, refreshSessionHistory],
+  );
+
+  /**
+   * Обновление состояния задачи (FSM task_state): PUT /task-state (частичное тело:
+   * {paused} — пауза/снятие, {stage, currentStep?, expectedAction?} — смена этапа).
+   * REST-мутации SSE не шлют — панель обновляем из ответа PUT. Ошибка (400 на
+   * недопустимый переход, сеть) пробрасывается — индикация у кнопки панели.
+   */
+  const changeTaskState = useCallback(
+    async (sid: string, patch: TaskStatePatch): Promise<TaskState> => {
+      const next = await updateTaskStateApi(sid, patch);
+      updateSessionTaskState(sid, next);
+      return next;
+    },
+    [],
+  );
+
+  /** Отмена воркфлоу Day-14 (кнопка «Отмена»): POST /cancel — пауза + сброс ожидания. */
+  const cancelWorkflow = useCallback(
+    async (sid: string): Promise<TaskState> => {
+      const next = await cancelTaskState(sid);
+      updateSessionTaskState(sid, next);
+      return next;
+    },
+    [],
+  );
+
+  /**
+   * Обновление настроек воркфлоу Day-14 (PUT /api/workflow-settings {enabled, mode}).
+   * При ошибке бросает — UI откатывает переключатель/режим к прежним значениям.
+   */
+  const changeWorkflowSettings = useCallback(
+    async (patch: WorkflowSettings): Promise<WorkflowSettings> => {
+      const next = await updateWorkflowSettings(patch);
+      setWorkflowSettings(next);
+      return next;
+    },
+    [],
   );
 
   /**
@@ -659,6 +773,10 @@ export function useAgentSession(): AgentSession {
           result: patch.result,
           detail: patch.detail,
           explanation: patch.explanation,
+          // Сырые тела запроса/ответа LLM API: шаг создаётся первым событием (llm_request_started),
+          // поэтому requestBody должен попадать в объект УЖЕ при создании, а не только при merge.
+          requestBody: patch.requestBody,
+          responseBody: patch.responseBody,
         });
       } else {
         map.set(id, { ...existing, ...patch });
@@ -719,11 +837,13 @@ export function useAgentSession(): AgentSession {
     setLastPromptTokens(null);
     setIsRunning(false);
     setError(null);
-    // Пер-сессионные стратегия/факты/ветки: новая сессия и пустое состояние стартуют начисто.
+    // Пер-сессионные стратегия/факты/ветки/состояние задачи: новая сессия и пустое
+    // состояние стартуют начисто.
     setStrategy('none');
     setWindowSize(DEFAULT_CONTEXT_WINDOW);
     setFacts(null);
     setBranches(null);
+    setTaskState(null);
   };
 
   /**
@@ -843,6 +963,7 @@ export function useAgentSession(): AgentSession {
           title: `LLM (итерация ${it})`,
           iteration: it,
           prompt: e.payload.prompt,
+          requestBody: e.payload.requestBody,
           // Оценка токенов запроса приходит до самого запроса — сохраняем структурно сразу.
           tokenUsage: {
             estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
@@ -859,6 +980,7 @@ export function useAgentSession(): AgentSession {
           // Токены/стоимость в текст лога не дублируем: только служебный finish_reason,
           // численные значения остаются в tokenUsage для сводки по сессии.
           detail: `finish_reason: ${e.payload.finishReason}`,
+          responseBody: e.payload.responseBody,
           // Данные о токенах храним структурно (для итогов токенов сессии).
           tokenUsage: {
             inputTokens: u?.inputTokens ?? null,
@@ -956,6 +1078,63 @@ export function useAgentSession(): AgentSession {
         updateSessionFacts(sid, e.payload.facts);
         return;
       }
+      case 'task_state_changed': {
+        // Живое обновление состояния задачи (инструмент task_state): пишем в буфер сессии,
+        // активная — сразу в живой вид панели состояния. Строку «Состояние задачи обновлено»
+        // в лог шагов кладёт сам бэкенд (событие log) — здесь только панель.
+        updateSessionTaskState(sid, {
+          sessionId: sid,
+          stage: e.payload.stage,
+          currentStep: e.payload.currentStep ?? null,
+          expectedAction: e.payload.expectedAction ?? null,
+          paused: e.payload.paused,
+          plan: e.payload.plan ?? null,
+          implementation: e.payload.implementation ?? null,
+          validation: e.payload.validation ?? null,
+          awaitConfirmation: e.payload.awaitConfirmation ?? false,
+          updatedAt: e.timestamp,
+        });
+        return;
+      }
+      case 'workflow_paused': {
+        // Воркфлоу Day-14 (ручной режим): агент завершил этап и ждёт подтверждения —
+        // кладём результат этапа в состояние задачи (нужная колонка) и поднимаем флаг
+        // ожидания, чтобы панель показала кнопки «Продолжить»/«Отмена».
+        const prev = runStateRef.current.get(sid)?.taskState;
+        updateSessionTaskState(sid, {
+          sessionId: sid,
+          stage: e.payload.stage,
+          currentStep: prev?.currentStep ?? null,
+          expectedAction: prev?.expectedAction ?? null,
+          paused: prev?.paused ?? false,
+          plan: e.payload.stage === 'planning' ? e.payload.output : (prev?.plan ?? null),
+          implementation: e.payload.stage === 'execution' ? e.payload.output : (prev?.implementation ?? null),
+          validation: e.payload.stage === 'validation' ? e.payload.output : (prev?.validation ?? null),
+          awaitConfirmation: e.payload.await,
+          updatedAt: e.timestamp,
+        });
+        return;
+      }
+      case 'workflow_stage_finished': {
+        // Воркфлоу Day-14 (авто-режим): повествование только что завершённого этапа закоммичено
+        // (и в историю, и как результат этапа). Пишем его в нужную колонку состояния задачи
+        // (текст приходит после task_state_changed, поэтому колонка заполняется актуально).
+        // Текущий этап уже сменён на следующий (в task_state_changed) — этап остаётся прежним.
+        const prev = runStateRef.current.get(sid)?.taskState;
+        updateSessionTaskState(sid, {
+          sessionId: sid,
+          stage: prev?.stage ?? e.payload.stage,
+          currentStep: prev?.currentStep ?? null,
+          expectedAction: prev?.expectedAction ?? null,
+          paused: prev?.paused ?? false,
+          plan: e.payload.stage === 'planning' ? e.payload.output : (prev?.plan ?? null),
+          implementation: e.payload.stage === 'execution' ? e.payload.output : (prev?.implementation ?? null),
+          validation: e.payload.stage === 'validation' ? e.payload.output : (prev?.validation ?? null),
+          awaitConfirmation: prev?.awaitConfirmation ?? false,
+          updatedAt: e.timestamp,
+        });
+        return;
+      }
       default:
         return;
     }
@@ -967,7 +1146,11 @@ export function useAgentSession(): AgentSession {
     const idx = st.messages.findIndex((m) => m.id === st.assistantId);
     if (idx === -1) return;
     const target = st.messages[idx];
-    const content = finalText !== undefined ? finalText : target.content;
+    // finalText переписывает пузырь (убирает промежуточные реплики tool-цикла), но НЕ пишет
+    // в пустой пузырь текст ПРОШЛОГО этапа (внешняя пауза на только что начатом этапе):
+    // финализируем без перезаписи, чтобы этап остался без чужого повествования.
+    const content =
+      finalText !== undefined && target.content.trim() !== '' ? finalText : target.content;
     if (removeIfEmpty && content.trim() === '') {
       st.messages = st.messages.filter((_, i) => i !== idx);
     } else {
@@ -978,10 +1161,19 @@ export function useAgentSession(): AgentSession {
     if (sid === activeIdRef.current) setMessages(st.messages);
   };
 
-  const run = useCallback(
-    async (sid: string, text: string, isRetry: boolean) => {
-      // Каждая сессия владеет собственным стримом: параллельные запуски разных вкладок
-      // живут в своих AbortController'ах и буферах, независимо от активной вкладки.
+  /**
+   * Общий runner SSE-стрима сессии: заводит AbortController, разбирает события,
+   * обновляет живое сообщение ассистента (токены/итоги/заметки сжатия), завершает
+   * run. [startStream] абстрагирует эндпоинт — обычный /api/chat или /continue
+   * (воркфлоу Day-14). Каждая сессия владеет собственным стримом: параллельные
+   * запуски разных вкладок живут в своих AbortController'ах и буферах.
+   */
+  const runStream = useCallback(
+    async (
+      sid: string,
+      startStream: (signal: AbortSignal, onEvent: (e: AgentEvent) => void) => Promise<void>,
+      isRetry: boolean,
+    ): Promise<void> => {
       const st = getRunState(sid);
       const controller = new AbortController();
       st.controller = controller;
@@ -989,7 +1181,7 @@ export function useAgentSession(): AgentSession {
       setRunningCount((c) => c + 1);
       let receivedAny = false;
       try {
-        await streamChat(sid, text, controller.signal, (e) => {
+        await startStream(controller.signal, (e) => {
           receivedAny = true;
           handleEvent(e, sid);
           if (e.type === 'llm_token') {
@@ -1036,6 +1228,22 @@ export function useAgentSession(): AgentSession {
           } else if (e.type === 'agent_finished') {
             finalizeRun(sid);
             finalizeAssistant(sid, e.payload.finalText);
+          } else if (e.type === 'workflow_stage_finished') {
+            // Воркфлоу (auto): БЭКЕНД только что закоммитил повествование завершённого этапа
+            // (в историю и как результат этапа) — это НАДЁЖНАЯ граница этапа. Финализируем
+            // пузырь только что завершённого этапа (streaming=false, контент сохранён) и
+            // открываем новый пустой пузырь для следующего этапа — каждая стадия в live-виде
+            // отдельным сообщением ассистента, а не одним затираемым пузырём. В отличие от
+            // task_state_changed (срабатывает и на том же этапе), это событие приходит ТОЛЬКО
+            // когда этап реально завершился и повествование сохранено. Ручной режим не затронут
+            // (там событие не эмитится — этап завершается финальным ответом + workflow_paused).
+            finalizeAssistant(sid);
+            const nextAssistantId = newId();
+            st.assistantId = nextAssistantId;
+            updateSessionMessages(sid, (prev) => [
+              ...prev,
+              { id: nextAssistantId, role: 'assistant', content: '', streaming: true },
+            ]);
           } else if (e.type === 'error') {
             finalizeRun(sid);
             // Ошибка агента/LLM (в т.ч. «Ошибка LLM (finishReason=…)»): строка ошибки крепится
@@ -1065,7 +1273,7 @@ export function useAgentSession(): AgentSession {
           if (!isRetry) {
             setError('Соединение с сервером разорвано. Переподключение…');
             setTimeout(() => {
-              void run(sid, text, true);
+              void runStream(sid, startStream, true);
             }, 1200);
             return;
           }
@@ -1078,6 +1286,12 @@ export function useAgentSession(): AgentSession {
       }
     },
     [handleEvent],
+  );
+
+  const run = useCallback(
+    (sid: string, text: string, isRetry: boolean): Promise<void> =>
+      runStream(sid, (signal, onEvent) => streamChat(sid, text, signal, onEvent), isRetry),
+    [runStream],
   );
 
   /** Фактический запуск стрима: сообщение + заглушка ассистента кладутся в буфер сессии sid. */
@@ -1095,13 +1309,71 @@ export function useAgentSession(): AgentSession {
         { id: assistantId, role: 'assistant', content: '', streaming: true },
       ];
       st.isRunning = true;
+      // Оптимистичная подсветка текущего этапа: для первой задачи воркфлоу (строки состояния
+      // ещё нет в буфере) агент начинает с «Планирования» — чип загорается сразу, не дожидаясь,
+      // пока агент вызовет инструмент task_state и закоммитит состояние. Иначе до первого
+      // task_state_changed чип был бы пустым/застывшим. Для не-воркфлоу панель состояния скрыта.
+      if (st.taskState == null && workflowSettings?.enabled === true) {
+        updateSessionTaskState(sid, {
+          sessionId: sid,
+          stage: 'planning',
+          currentStep: null,
+          expectedAction: null,
+          paused: false,
+          plan: null,
+          implementation: null,
+          validation: null,
+          awaitConfirmation: false,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       if (sid === activeIdRef.current) {
         setMessages(st.messages);
         setIsRunning(true);
       }
       void run(sid, trimmed, false);
     },
-    [run],
+    [run, workflowSettings],
+  );
+
+  /**
+   * Продолжение воркфлоу Day-14 (кнопка «Продолжить»): запускает СЛЕДУЮЩИЙ этап,
+   * читая сохранённую историю + состояние задачи без нового user-сообщения. Заглушка
+   * ассистента кладётся в буфер (без пузыря пользователя), ожидание подтверждения
+   * сбрасывается сразу — кнопки «Продолжить»/«Отмена» прячутся.
+   */
+  const runContinue = useCallback(
+    (sid: string) => {
+      setError(null);
+      const st = getRunState(sid);
+      const assistantId = newId();
+      st.assistantId = assistantId;
+      st.messages = [...st.messages, { id: assistantId, role: 'assistant', content: '', streaming: true }];
+      st.isRunning = true;
+      if (st.taskState != null) {
+        // «Продолжить»/«Выполнить» в ручном режиме — переход к СЛЕДУЮЩЕМУ линейному этапу
+        // (planning→execution→validation→done): сразу подсвечиваем его, чтобы чип загорелся,
+        // а не остался на прошлом завершённом этапе. «Снять паузу» в авто — возобновление с
+        // ТЕКУЩЕГО этапа (пауза не снята): этап не меняем. Ожидание и паузу сбрасываем всегда.
+        const isManualAdvance = st.taskState.awaitConfirmation === true && st.taskState.paused !== true;
+        const stage = isManualAdvance ? nextWorkflowStage(st.taskState.stage) : st.taskState.stage;
+        updateSessionTaskState(sid, { ...st.taskState, stage, awaitConfirmation: false, paused: false });
+      }
+      if (sid === activeIdRef.current) {
+        setMessages(st.messages);
+        setIsRunning(true);
+      }
+      void runStream(sid, (signal, onEvent) => streamContinue(sid, signal, onEvent), false);
+    },
+    [runStream],
+  );
+
+  /** Продолжение воркфлоу Day-14 (кнопка «Продолжить»): запускает следующий этап (SSE). */
+  const continueWorkflow = useCallback(
+    (sid: string) => {
+      runContinue(sid);
+    },
+    [runContinue],
   );
 
   const sendMessage = useCallback(
@@ -1596,6 +1868,23 @@ export function useAgentSession(): AgentSession {
     };
   }, [pushSystemEvent]);
 
+  // Настройки воркфлоу Day-14 глобальны (эндпоинт не требует sessionId): загружаем при
+  // монтировании — переключатель «Следовать воркфлоу» и режим в правой колонке.
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorkflowSettings()
+      .then((s) => {
+        if (cancelled) return;
+        setWorkflowSettings(s);
+      })
+      .catch(() => {
+        /* сервис недоступен — переключатель остаётся в неопределённом состоянии до перечитывания */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // восстановление истории активной сессии при монтировании (и при смене sessionId)
   useEffect(() => {
     if (sessionId == null) return;
@@ -1664,6 +1953,7 @@ export function useAgentSession(): AgentSession {
     setWindowSize(st.windowSize);
     setFacts(st.facts);
     setBranches(st.branches);
+    setTaskState(st.taskState);
   }, [sessionId]);
 
   // Зеркало активной вкладки для колбэков фоновых стримов (маршрутизация событий).
@@ -1706,6 +1996,7 @@ export function useAgentSession(): AgentSession {
     windowSize,
     facts,
     branches,
+    taskState,
     saveWorkingNote,
     saveLongTerm,
     sendMessage,
@@ -1716,6 +2007,11 @@ export function useAgentSession(): AgentSession {
     renameProject,
     deleteProject,
     changeContextStrategy,
+    changeTaskState,
+    changeWorkflowSettings,
+    continueWorkflow,
+    cancelWorkflow,
+    workflowSettings,
     forkBranch,
     switchBranch,
     deleteSession,

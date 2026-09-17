@@ -1,9 +1,11 @@
 package com.example.llmagent.agent
 
+import com.example.llmagent.agent.tools.TaskStateTool
 import com.example.llmagent.config.AgentProperties
 import com.example.llmagent.config.AppSettingsStore
 import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.SessionLlmSettingsProvider
+import com.example.llmagent.config.WorkflowSettings
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.EncodingType
@@ -59,12 +61,39 @@ class AgentImpl(
     /** Глобальные настройки приложения (app_settings): активный профиль — ключ
      *  `profile.active`; null — активный профиль не подключён (тот же fail-open). */
     private val appSettingsStore: AppSettingsStore? = null,
+    /** Per-session состояние задачи (Day-13, FSM task_state); null — инструмент не
+     *  подключён (юнит-тесты/старая обвязка): вызов инструмента возвращает ошибку,
+     *  контекстный блок «=== СОСТОЯНИЕ ЗАДАЧИ ===» молча пропускается (fail-open). */
+    private val taskStateStore: TaskStateStore? = null,
+    /** Настройки воркфлоу Day-14 (app_settings: workflow.enabled / workflow.mode);
+     *  null — воркфлоу выключен (юнит-тесты/старая обвязка): агент ведёт себя как
+     *  сегодня, без гейтинга этапов (fail-open). */
+    private val workflowSettings: WorkflowSettings? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
 
-    override fun run(sessionId: String, userMessage: String): Flux<AgentEvent> = flux {
-        sessionStore.append(sessionId, "user", userMessage)
+    override fun run(sessionId: String, userMessage: String): Flux<AgentEvent> =
+        runCore(sessionId, userMessage, appendUser = true)
+
+    override fun continueRun(sessionId: String): Flux<AgentEvent> =
+        runCore(sessionId, WORKFLOW_CONTINUE_MESSAGE, appendUser = false)
+
+    /**
+     * Ядро агентского цикла. [appendUser]=true — обычный run пользователя (сообщение
+     * сохраняется в историю); [appendUser]=false — продолжение воркфлоу Day-14
+     * (/continue): новое user-сообщение НЕ добавляется, агент читает сохранённую
+     * историю и состояние задачи (текущий этап) — контекст продолжается без
+     * повторного объяснения.
+     */
+    private fun runCore(
+        sessionId: String,
+        userMessage: String,
+        appendUser: Boolean,
+    ): Flux<AgentEvent> = flux {
+        if (appendUser) {
+            sessionStore.append(sessionId, "user", userMessage)
+        }
         // Day-12: рабочая память (WM) живёт НА ПРОЕКТЕ (общая для сессий проекта).
         // projectId берём из реестра сессий (chat_sessions); для сессии без строки
         // (легаси/осиротевшая) — fallback на sessionId: память ключуется по wmKey,
@@ -81,7 +110,11 @@ class AgentImpl(
             log.info("[AGENT] session={} {}", sessionId, msg)
             send(LogEvent(logIdx++, msg))
         }
-        logStep("Пользователь написал: «$userMessage». Сохраняю сообщение в историю сессии и начинаю обработку.")
+        if (appendUser) {
+            logStep("Пользователь написал: «$userMessage». Сохраняю сообщение в историю сессии и начинаю обработку.")
+        } else {
+            logStep("Продолжение воркфлоу: запускаю следующий этап (новое user-сообщение не добавляется — агент читает историю и состояние задачи).")
+        }
 
         // Память агента (memory layers) пишется ТОЛЬКО пользователем (REST/UI): агент НЕ
         // захватывает задачу на старте run и НЕ добавляет заметки после tool-результатов.
@@ -326,6 +359,51 @@ class AgentImpl(
             log.warn("session={} memory context blocks failed, run continues without them: {}", sessionId, e.message)
         }
 
+        // Состояние задачи (Day-13, FSM): системный блок «=== СОСТОЯНИЕ ЗАДАЧИ ===» —
+        // этап/шаг/ожидаемое действие из per-session task_state + строка паузы. Нет строки
+        // (задача не начата)/нет store — блок молча пропускается (fail-open). Блок идёт
+        // после памяти, перед сообщениями истории — для ВСЕХ стратегий контекста: модель
+        // продолжает с текущего шага без повторного объяснения задачи.
+        val taskState = taskStateStore?.get(sessionId)
+        if (taskStateStore == null) {
+            logStep("Состояние задачи (FSM): хранилище не подключено — блок состояния пропускается.")
+        } else if (taskState == null) {
+            logStep("Состояние задачи (FSM): задача не начата — блок состояния в контекст не добавляется; агент может начать её инструментом task_state.")
+        } else {
+            messages += LlmMessage("system", buildTaskStateSystem(taskState))
+            logStep(
+                "Состояние задачи (FSM): этап «${taskState.stage}», шаг: ${taskState.currentStep ?: "—"}; " +
+                    "ожидаемое действие: ${taskState.expectedAction ?: "—"}; пауза: ${if (taskState.paused) "ДА" else "нет"}. " +
+                    "Блок «=== СОСТОЯНИЕ ЗАДАЧИ ===» добавлен в контекст — продолжаю с текущего шага без повторного объяснения задачи.",
+            )
+        }
+
+        // Воркфлоу Day-14: глобальная настройка app_settings (workflow.enabled /
+        // workflow.mode). Текущий этап — из состояния задачи (или planning по умолчанию
+        // для только что поставленной задачи). Директива в контексте: ручной режим —
+        // выполнить ТОЛЬКО текущий этап (агент отдаёт результат и ждёт подтверждения),
+        // авто — пройти все этапы подряд без паузы.
+        val workflowEnabled = workflowSettings?.isEnabled() ?: false
+        val workflowMode = workflowSettings?.mode() ?: WorkflowSettings.MODE_MANUAL
+        val workflowStage = if (workflowEnabled) (taskState?.stage ?: TaskStateStore.STAGE_PLANNING) else null
+        if (workflowEnabled && workflowStage != null) {
+            messages += LlmMessage("system", buildWorkflowDirective(workflowStage, workflowMode))
+            logStep(
+                "Воркфлоу: следовать workflow (режим «$workflowMode»). Этап «$workflowStage»: " +
+                    if (workflowMode == WorkflowSettings.MODE_MANUAL)
+                        "выполняю ТОЛЬКО этот этап и жду подтверждения перехода к следующему."
+                    else "прохожу все этапы подряд (планирование → выполнение → проверка → готово), без паузы.",
+            )
+        }
+
+        // AUTO-воркфлоу: отслеживаем этап, на котором модель находится, чтобы при смене
+        // этапа инструментом task_state сохранить повествование модели как результат этапа
+        // (отдельное сообщение ассистента — пользователь видит ответы на каждом этапе).
+        // Текст последней реплики держим отдельно — для корректного закрытия пузыря при
+        // внешней паузе (см. проверку paused в цикле).
+        var lastWorkflowStage: String? = workflowStage
+        var lastAssistantText = ""
+
         when {
             // Сжатый контекст (strategy=summary): [резюме как сообщение] + последние keepLast
             // сообщений «как есть» + новый вопрос (поведение сжатия не изменилось).
@@ -406,21 +484,49 @@ class AgentImpl(
                     return@flux
                 }
 
+                // Воркфлоу: пользователь мог поставить паузу (REST PUT task-state {paused:true})
+                // в момент выполнения. Уважаем внешнюю паузу — останавливаем выполнение,
+                // НЕ отдавая финальный ответ, и сообщаем панели состояния (paused=true).
+                // Задача и текущий этап сохраняются: после снятия паузы выполнение продолжится.
+                // Проверка выполняется только для workflow-режима (вне воркфлоу поведение
+                // сохраняем прежним — юнит-тест `tool update preserves pause flag`).
+                if (workflowEnabled && taskStateStore != null) {
+                    val current = taskStateStore.get(sessionId)
+                    if (current != null && current.paused) {
+                        logStep(
+                            "Воркфлоу: задача на паузе (пользователь поставил паузу) — останавливаю выполнение " +
+                                "на этапе «${current.stage}». Сняв паузу, выполнение продолжится с текущего шага.",
+                        )
+                        send(
+                            TaskStateChanged(
+                                current.stage, current.currentStep, current.expectedAction, paused = true,
+                                current.plan, current.implementation, current.validation, current.awaitConfirmation,
+                            ),
+                        )
+                        // Закрываем пузырь ассистента финальным событием (иначе фронтенд
+                        // оставил бы его в состоянии streaming навсегда).
+                        send(AgentFinished(lastAssistantText))
+                        return@flux
+                    }
+                }
+
                 // Локальных оценок до отправки в LLM нет: переполнение контекста выявляет сам
                 // апстрим (обычно 400), его ответ пробрасывается дословно через error-событие.
                 logStep(
                     "Шаг $iteration: отправляю запрос в LLM (контекст: ${messages.size} сообщений). " +
                         "Модель сама решит — ответить текстом или попросить вызвать инструмент.",
                 )
-                send(LlmRequestStarted(iteration, promptSnapshot(messages)))
                 val text = StringBuilder()
                 var toolCalls: List<LlmToolCall> = emptyList()
                 var finishReason = "stop"
                 var usage: LlmUsage? = null
-
-                val events = llmClient.streamChat(messages, toolRegistry.definitions(), runSettings)
-                    .collectList()
-                    .awaitSingle()
+                var requestBody: String? = null
+                var responseBody: String? = null
+                // Тело запроса приходит из колбэка синхронно при построении streamChat(),
+                // поэтому строка шага появляется ДО HTTP-вызова — в т.ч. при ошибке API.
+                val flux = llmClient.streamChat(messages, toolRegistry.definitions(), runSettings) { requestBody = it }
+                send(LlmRequestStarted(iteration, promptSnapshot(messages), requestBody = requestBody))
+                val events = flux.collectList().awaitSingle()
                 for (e in events) {
                     when (e) {
                         is LlmEvent.ContentDelta -> {
@@ -432,13 +538,15 @@ class AgentImpl(
                             finishReason = e.finishReason
                             usage = e.usage
                         }
+                        is LlmEvent.ResponseAssembled -> responseBody = e.body
                     }
                 }
+                lastAssistantText = text.toString()
                 val costUsd = usage?.let {
                     (it.inputTokens * settings.priceInputPer1M() + it.outputTokens * settings.priceOutputPer1M()) /
                         1_000_000.0
                 }
-                send(LlmResponseFinished(iteration, finishReason, usage, costUsd = costUsd))
+                send(LlmResponseFinished(iteration, finishReason, usage, costUsd = costUsd, responseBody = responseBody))
                 logStep(
                     "Шаг $iteration: модель ответила (finishReason=$finishReason)." +
                         when (finishReason) {
@@ -447,6 +555,31 @@ class AgentImpl(
                             else -> ""
                         },
                 )
+
+                // Воркфлоу: пользователь мог поставить паузу, ПОКА модель генерировала ответ
+                // (REST PUT task-state {paused:true} легло в БД после проверки в топе цикла).
+                // Уважаем её: останавливаемся ДО обработки переходов инструмента (task_state →
+                // смена этапа), чтобы агент не завершил текущий этап и не переключился на
+                // следующий. Результат текущего этапа НЕ сохраняется (этап остаётся прежним),
+                // панели сообщаем paused=true. Проверка только для workflow-режима.
+                if (workflowEnabled && taskStateStore != null) {
+                    val cur = taskStateStore.get(sessionId)
+                    if (cur != null && cur.paused) {
+                        logStep(
+                            "Воркфлоу: задача поставлена на паузу, пока модель генерировала ответ — " +
+                                "останавливаюсь на этапе «${cur.stage}» ДО перехода к следующему. " +
+                                "Результат этапа не сохраняю; сняв паузу, выполнение продолжится с текущего этапа.",
+                        )
+                        send(
+                            TaskStateChanged(
+                                cur.stage, cur.currentStep, cur.expectedAction, paused = true,
+                                cur.plan, cur.implementation, cur.validation, cur.awaitConfirmation,
+                            ),
+                        )
+                        send(AgentFinished(lastAssistantText))
+                        return@flux
+                    }
+                }
 
                 if (finishReason == "tool_calls" && toolCalls.isNotEmpty()) {
                     logStep(
@@ -463,7 +596,19 @@ class AgentImpl(
                         logStep("Выполняю инструмент \"$name\" (вызов #$idx) с аргументами: $args.")
 
                         val tool = toolRegistry.get(name)
-                        val result = if (tool == null) {
+                        val result = if (name == TaskStateTool.TOOL_NAME) {
+                            // task_state исполняется агентом, а не Tool.execute: хранилищу
+                            // нужен sessionId сессии, которого у Tool его нет. Схема
+                            // аргументов для LLM объявлена в TaskStateTool.
+                            try {
+                                handleTaskState(sessionId, args)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                log.warn("session={} tool {} failed", sessionId, name, e)
+                                ToolResult("Ошибка инструмента: ${e.message}", true)
+                            }
+                        } else if (tool == null) {
                             ToolResult("Неизвестный инструмент: $name", true)
                         } else {
                             try {
@@ -481,9 +626,55 @@ class AgentImpl(
                                 "${if (result.isError) "ОШИБКУ" else "результат"}: ${result.result}. " +
                                 "Кладу его в контекст, чтобы модель увидела его на следующем шаге.",
                         )
+                        // Day-13: после успешного task_state — событие task_state_changed
+                        // (панель состояния на фронтенде обновляется в реальном времени)
+                        // и строка лога с новым состоянием. При ошибке валидации FSM
+                        // модель получает ToolResult-ошибку и скорректирует аргументы сама.
+                        if (name == TaskStateTool.TOOL_NAME && !result.isError) {
+                            val saved = taskStateStore?.get(sessionId)
+                            if (saved != null) {
+                                send(
+                                    TaskStateChanged(
+                                        saved.stage, saved.currentStep, saved.expectedAction, saved.paused,
+                                        saved.plan, saved.implementation, saved.validation, saved.awaitConfirmation,
+                                    )
+                                )
+                                logStep(
+                                    "Состояние задачи обновлено: этап «${saved.stage}» — шаг: ${saved.currentStep ?: "—"}; " +
+                                        "ожидаемое действие: ${saved.expectedAction ?: "—"}; пауза: ${if (saved.paused) "ДА" else "нет"}.",
+                                )
+                            }
+                        }
                         // Память агент НЕ пишет: рабочая память и долговременная память —
                         // ТОЛЬКО пользователь (REST/UI); tool-результаты просто уходят модели.
                         messages.add(LlmMessage("tool", result.result, toolCallId = tc.id))
+                    }
+
+                    // AUTO-воркфлоу: модель завершила этап и инструментом task_state перешла
+                    // на следующий — сохраняем повествование этапа как отдельное сообщение
+                    // ассистента (в истории чата — пользователь видит ответы на каждом этапе,
+                    // а не только финальный) и как результат этапа (колонка plan/implementation/
+                    // validation, зеркально ручному режиму, но без ожидания подтверждения).
+                    if (workflowEnabled && workflowMode == WorkflowSettings.MODE_AUTO && taskStateStore != null) {
+                        val after = taskStateStore.get(sessionId)
+                        if (after != null && after.stage != lastWorkflowStage) {
+                            val completed = lastWorkflowStage
+                            val stageText = text.toString().trim()
+                            if (completed != null && completed != TaskStateStore.STAGE_DONE && stageText.isNotEmpty()) {
+                                sessionStore.append(sessionId, "assistant", stageText)
+                                taskStateStore.setStageOutputKeepStage(sessionId, completed, stageText)
+                                // Надёжная граница этапа: повествование только что закоммичено
+                                // и в историю, и в результат этапа — сообщаем фронту, чтобы он
+                                // закрыл пузырь этапа и открыл новый для следующего (live-вид
+                                // видит каждую стадию отдельным сообщением ассистента).
+                                send(WorkflowStageFinished(completed, stageText))
+                                logStep(
+                                    "Воркфлоу (авто): этап «$completed» завершён — результат сохранён " +
+                                        "(колонка «${TaskStateStore.stageOutputColumn(completed)}») и добавлен в историю чата.",
+                                )
+                            }
+                            lastWorkflowStage = after.stage
+                        }
                     }
                 } else if (finishReason == "error" || finishReason == "length") {
                     val msg = "Ошибка LLM (finishReason=$finishReason)"
@@ -496,6 +687,49 @@ class AgentImpl(
                     sessionStore.addLifetimeTokens(usage?.inputTokens ?: 0, usage?.outputTokens ?: 0, costUsd ?: 0.0)
                     logStep("Модель дала финальный ответ (${finalText.length} символов) за $iteration шаг(ов). Сохраняю его в историю сессии — обработка завершена.")
                     send(AgentFinished(finalText))
+
+                    // AUTO-воркфлоу: модель могла дать финальный ответ, не дойдя до этапа
+                    // «готово» (например, завершилась на проверке) — сохраняем его как
+                    // результат последнего этапа (та же колонка, что в ручном режиме).
+                    if (workflowEnabled && workflowMode == WorkflowSettings.MODE_AUTO && taskStateStore != null) {
+                        val current = taskStateStore.get(sessionId)
+                        if (current != null && current.stage != TaskStateStore.STAGE_DONE &&
+                            lastWorkflowStage != null && lastWorkflowStage != TaskStateStore.STAGE_DONE
+                        ) {
+                            taskStateStore.setStageOutput(sessionId, current.stage, finalText, await = false)
+                            logStep(
+                                "Воркфлоу (авто): финальный ответ — результат этапа «${current.stage}» сохранён " +
+                                    "в колонку «${TaskStateStore.stageOutputColumn(current.stage)}».",
+                            )
+                        }
+                    }
+
+                    // Воркфлоу Day-14 (ручной режим): этап завершён, но не «готово» — сохраняем
+                    // результат этапа в состояние задачи (plan/implementation/validation),
+                    // поднимаем флаг ожидания подтверждения и сообщаем фронтенду — под последним
+                    // сообщением ассистента появятся кнопки «Продолжить»/«Отмена». Авто-режим:
+                    // агент сам прошёл все этапы — пауза не нужна.
+                    if (workflowEnabled && workflowMode == WorkflowSettings.MODE_MANUAL &&
+                        workflowStage != null && workflowStage != TaskStateStore.STAGE_DONE
+                    ) {
+                        val saved = taskStateStore?.setStageOutput(sessionId, workflowStage, finalText, await = true)
+                        if (saved != null) {
+                            send(
+                                TaskStateChanged(
+                                    saved.stage, saved.currentStep, saved.expectedAction, saved.paused,
+                                    saved.plan, saved.implementation, saved.validation, saved.awaitConfirmation,
+                                )
+                            )
+                            send(WorkflowPaused(workflowStage, finalText, true))
+                            logStep(
+                                "Воркфлоу: этап «$workflowStage» завершён — результат сохранён в состояние задачи " +
+                                    "(колонка «${TaskStateStore.stageOutputColumn(workflowStage)}»), ожидаю подтверждения перехода. " +
+                                    "Дальше: «Продолжить» (следующий этап) или «Отмена» (пауза).",
+                            )
+                        } else {
+                            logStep("Воркфлоу: не удалось сохранить результат этапа «$workflowStage» (сбой БД) — продолжаю без паузы.")
+                        }
+                    }
                     return@flux
                 }
             }
@@ -567,6 +801,142 @@ class AgentImpl(
         return "=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===\n" + lines.joinToString("\n")
     }
 
+    /**
+     * Исполнение инструмента task_state (Day-13): валидация этапа и перехода FSM,
+     * upsert в TaskStateStore с реальным sessionId сессии. Инструмент НЕ меняет флаг
+     * паузы: paused сохраняется прежним (первая запись создаётся с paused=false) —
+     * паузу/продолжение делает только пользователь через REST/UI (PUT task-state).
+     * Ошибки валидации — ToolResult(isError=true) с подсказкой допустимых значений,
+     * чтобы модель сама скорректировала аргументы на следующей итерации.
+     */
+    private fun handleTaskState(sessionId: String, args: Map<String, Any?>): ToolResult {
+        val store = taskStateStore
+            ?: return ToolResult("Хранилище состояния задачи не подключено (task_state недоступен)", true)
+        val stage = (args["stage"] as? String)?.trim().orEmpty()
+        if (stage.isEmpty()) {
+            return ToolResult(
+                "Аргумент 'stage' (string) обязателен: ${TaskStateStore.STAGES.sorted().joinToString(" | ")}",
+                true,
+            )
+        }
+        if (!TaskStateStore.isValidStage(stage)) {
+            return ToolResult(
+                "Неизвестный этап \"$stage\". Допустимые этапы: ${TaskStateStore.STAGES.sorted().joinToString(" | ")}",
+                true,
+            )
+        }
+        val existing = store.get(sessionId)
+        if (existing != null && existing.stage != stage && !TaskStateStore.canTransition(existing.stage, stage)) {
+            return ToolResult(
+                "Недопустимый переход \"${existing.stage}\" → \"$stage\". Из этапа \"${existing.stage}\" разрешено: " +
+                    TaskStateStore.allowedTargets(existing.stage).sorted().joinToString(" | ") +
+                    "; тот же этап \"${existing.stage}\" можно обновить в любой момент.",
+                true,
+            )
+        }
+        val currentStep = (args["current_step"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        val expectedAction = (args["expected_action"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        val saved = store.upsert(
+            sessionId, stage, currentStep, expectedAction, existing?.paused ?: false,
+            // Воркфлоу Day-14: при смене этапа инструментом поля результата предыдущих
+            // этапов и флаг ожидания сохраняются (не обнуляются).
+            existing?.plan, existing?.implementation, existing?.validation,
+            existing?.awaitConfirmation ?: false,
+        )
+            ?: return ToolResult("Не удалось сохранить состояние задачи (сбой БД)", true)
+        return ToolResult(
+            "Состояние задачи сохранено: этап=${saved.stage}" +
+                (saved.currentStep?.let { ", текущий шаг=$it" } ?: "") +
+                (saved.expectedAction?.let { ", ожидаемое действие=$it" } ?: "") +
+                ", пауза=${if (saved.paused) "да" else "нет"}.",
+            false,
+        )
+    }
+
+    /**
+     * Системный блок состояния задачи («=== СОСТОЯНИЕ ЗАДАЧИ ===»): этап FSM, текущий
+     * шаг и ожидаемое действие (только непустые); при паузе — явная команда не выполнять
+     * шаги (кратко подтвердить паузу и ждать продолжения). Воркфлоу Day-14: результаты
+     * пройденных этапов (plan/implementation/validation) подаются модели, чтобы она
+     * продолжала с места без повторного объяснения. Инструкция обновлять состояние
+     * инструментом task_state присутствует всегда.
+     */
+    private fun buildTaskStateSystem(state: TaskState): String {
+        val lines = mutableListOf("Этап: ${state.stage}")
+        if (!state.currentStep.isNullOrBlank()) lines += "Текущий шаг: ${state.currentStep}"
+        if (!state.expectedAction.isNullOrBlank()) lines += "Ожидаемое действие: ${state.expectedAction}"
+        if (state.paused) {
+            lines +=
+                "ЗАДАЧА НА ПАУЗЕ: не выполняй шаги задачи. Кратко подтверди паузу; когда пользователь попросит продолжить — продолжай с текущего шага без повторного объяснения задачи."
+        }
+        if (state.awaitConfirmation) {
+            lines += "Воркфлоу: пользователь ещё не подтвердил переход к следующему этапу — заверши текущий результат и не начинай следующий этап."
+        }
+        if (!state.plan.isNullOrBlank()) lines += "План (готов):\n${state.plan}"
+        if (!state.implementation.isNullOrBlank()) lines += "Выполнение (готово):\n${state.implementation}"
+        if (!state.validation.isNullOrBlank()) lines += "Проверка (готово):\n${state.validation}"
+        // Требование текущего этапа: на планировании — конкретика (шаги/файлы/порядок/крайние случаи),
+        // на выполнении — следовать плану, на проверке — сверка с планом.
+        val stageReq = workflowStageRequirement(state.stage)
+        if (stageReq.isNotEmpty()) lines += stageReq
+        lines += "После значимых продвижений обновляй состояние инструментом task_state (этап, текущий шаг, ожидаемое действие)."
+        return "=== СОСТОЯНИЕ ЗАДАЧИ ===\n" + lines.joinToString("\n")
+    }
+
+    /**
+     * Директива воркфлоу Day-14 («=== ВОРКФЛОУ ===»): ручной режим — агент выполняет
+     * ТОЛЬКО текущий этап [stage] и отдаёт результат как финальный ответ, не переходя
+     * к следующему без подтверждения пользователя; авто — проходит все этапы подряд
+     * (обновляя состояние инструментом task_state) без паузы.
+     */
+    private fun buildWorkflowDirective(stage: String, mode: String): String {
+        val label = workflowStageLabel(stage)
+        return if (mode == WorkflowSettings.MODE_AUTO) {
+            "=== ВОРКФЛОУ (авто) ===\n" +
+                "Проходи все этапы подряд: планирование → выполнение → проверка → готово. " +
+                "Каждый этап завершай, обновляя состояние задачи инструментом task_state, и переходи к следующему. " +
+                "Пользователь подтверждения не ждёт — работай на результат.\n\n" +
+                workflowStageRequirement(stage)
+        } else {
+            "=== ВОРКФЛОУ (вручную) ===\n" +
+                "Ты работаешь по шагам. Сейчас этап «$label» ($stage). " +
+                "Выполни ТОЛЬКО этот этап и дай результат как финальный ответ. " +
+                "Не переходи к следующему этапу — дождись подтверждения пользователя.\n\n" +
+                workflowStageRequirement(stage)
+        }
+    }
+
+    /**
+     * Этап-специфичные требования воркфлоу: план должен быть КОНКРЕТНЫМ рабочим планом
+     * (шаги, файлы/функции, подход, порядок, крайние случаи), а не общей фразой; выполнение —
+     * строго по плану; проверка — сверка результата с планом. Подставляется в директиву
+     * воркфлоу (авто и ручной) и в системный блок состояния задачи.
+     */
+    private fun workflowStageRequirement(stage: String): String = when (stage) {
+        TaskStateStore.STAGE_PLANNING ->
+            "ПЛАНИРОВАНИЕ: составь КОНКРЕТНЫЙ рабочий план реализации, а НЕ общую фразу. " +
+                "Перечисли шаги в порядке выполнения; какие файлы/модули/функции/фрагменты кода создашь и зачем; " +
+                "какой подход и инструменты используешь; как обработаешь крайние случаи и ошибки " +
+                "(пустые/невалидные входы, отсутствие файла, граничные значения). " +
+                "План — это ТЗ для следующего этапа: по нему можно реализовать без переспрашивания."
+        TaskStateStore.STAGE_EXECUTION ->
+            "ВЫПОЛНЕНИЕ: реализуй строго по плану и в том порядке, что указан. " +
+                "Создай/дополни нужные файлы и функции; результат — готовый рабочий код/структура."
+        TaskStateStore.STAGE_VALIDATION ->
+            "ПРОВЕРКА: проверь результат по плану. Пройди по каждому пункту плана: что работает, " +
+                "что нет и что требует доработки; прогони крайние случаи и ошибки из плана."
+        else -> ""
+    }
+
+    /** Человекочитаемая подпись этапа для директивы воркфлоу. */
+    private fun workflowStageLabel(stage: String): String = when (stage) {
+        TaskStateStore.STAGE_PLANNING -> "планирование"
+        TaskStateStore.STAGE_EXECUTION -> "выполнение"
+        TaskStateStore.STAGE_VALIDATION -> "проверка"
+        TaskStateStore.STAGE_DONE -> "готово"
+        else -> stage
+    }
+
     /** Снимок промпта для события llm_request_started: точный список сообщений, ушедший в LLM. */
     private fun promptSnapshot(messages: List<LlmMessage>): List<Map<String, String>> =
         messages.map { m ->
@@ -618,6 +988,7 @@ class AgentImpl(
                     usage = e.usage
                 }
                 is LlmEvent.ToolCallsComplete -> Unit
+                is LlmEvent.ResponseAssembled -> Unit
             }
         }
         if (finishReason == "error" || finishReason == "tool_calls") {
@@ -691,6 +1062,7 @@ class AgentImpl(
                 is LlmEvent.ContentDelta -> text.append(e.delta)
                 is LlmEvent.Finished -> finishReason = e.finishReason
                 is LlmEvent.ToolCallsComplete -> Unit
+                is LlmEvent.ResponseAssembled -> Unit
             }
         }
         if (finishReason == "error" || finishReason == "tool_calls") {
@@ -767,6 +1139,13 @@ class AgentImpl(
 
         /** Ключ активного профиля пользователя в app_settings (значение — id или "null"). */
         const val PROFILE_ACTIVE_KEY = "profile.active"
+
+        /**
+         * Метка продолжения воркфлоу Day-14: передаётся в runCore как `userMessage`,
+         * когда user-сообщение НЕ добавляется в историю (appendUser=false), поэтому
+         * служит только для логов и сборки промпта (стратегии с окном/резюме).
+         */
+        const val WORKFLOW_CONTINUE_MESSAGE = "Продолжение воркфлоу"
 
         /** Значение app_settings для «Без профиля» (активный профиль не выбран). */
         const val PROFILE_ACTIVE_NONE = "null"

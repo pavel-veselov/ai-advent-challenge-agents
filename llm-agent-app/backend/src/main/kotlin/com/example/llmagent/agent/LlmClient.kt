@@ -8,6 +8,12 @@ sealed interface LlmEvent {
     data class ContentDelta(val delta: String) : LlmEvent
     data class ToolCallsComplete(val toolCalls: List<LlmToolCall>) : LlmEvent
     data class Finished(val finishReason: String, val usage: LlmUsage? = null) : LlmEvent
+
+    /**
+     * Собранное из стрима тело ответа API в привычном нестримовом виде (chat.completion,
+     * pretty JSON) — финальное событие стрима, для панели «Детализация ответа».
+     */
+    data class ResponseAssembled(val body: String) : LlmEvent
 }
 
 /**
@@ -28,4 +34,16 @@ data class LlmUsage(
  */
 interface LlmClient {
     fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>, settings: LlmSettings): Flux<LlmEvent>
+
+    /**
+     * То же, но с колбэком на фактическое тело HTTP-запроса (pretty JSON). Колбэк вызывается
+     * синхронно при построении запроса, ДО HTTP-вызова. Реализации без захвата наследуют
+     * дефолт, который игнорирует колбэк.
+     */
+    fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+        onRequestBody: (String) -> Unit,
+    ): Flux<LlmEvent> = streamChat(messages, tools, settings)
 }

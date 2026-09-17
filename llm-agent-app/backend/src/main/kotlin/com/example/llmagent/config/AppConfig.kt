@@ -11,6 +11,7 @@ import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
 import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
+import com.example.llmagent.agent.TaskStateStore
 import com.example.llmagent.agent.ToolRegistry
 import com.example.llmagent.agent.WorkingMemoryStore
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -53,10 +54,13 @@ class AppConfig {
         longTermMemoryStore: LongTermMemoryStore,
         profileStore: ProfileStore,
         appSettingsStore: AppSettingsStore,
+        taskStateStore: TaskStateStore,
+        workflowSettings: WorkflowSettings,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
-        workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore,
+        workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore, taskStateStore,
+        workflowSettings,
     )
 }

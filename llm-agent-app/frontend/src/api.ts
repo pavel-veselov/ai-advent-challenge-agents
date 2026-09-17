@@ -23,6 +23,9 @@
   SessionSummary,
   SessionsResponse,
   StatsResponse,
+  TaskState,
+  TaskStatePatch,
+  WorkflowSettings,
 } from './types';
 
 function parseEventData(line: string): AgentEvent | null {
@@ -133,6 +136,33 @@ export async function fetchFacts(sessionId: string): Promise<FactsState> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/facts`);
   if (!res.ok) throw new Error(`facts http ${res.status}`);
   return (await res.json()) as FactsState;
+}
+
+/**
+ * Состояние задачи сессии: GET /api/sessions/{sessionId}/task-state.
+ * 404 — задача не начата (состояние не сохранено) → null; остальные ошибки бросает.
+ */
+export async function fetchTaskState(sessionId: string): Promise<TaskState | null> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-state`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`task-state http ${res.status}`);
+  return (await res.json()) as TaskState;
+}
+
+/**
+ * Обновление состояния задачи: PUT /api/sessions/{sessionId}/task-state (частичное тело:
+ * {paused} — пауза/снятие, {stage, currentStep?, expectedAction?} — смена этапа).
+ * 400 — недопустимый переход/этап. Возвращает полное состояние; при ошибке бросает.
+ * REST-мутации SSE не шлют — панель обновляем из ответа.
+ */
+export async function updateTaskState(sessionId: string, patch: TaskStatePatch): Promise<TaskState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-state`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`task-state PUT http ${res.status}`);
+  return (await res.json()) as TaskState;
 }
 
 /**
@@ -382,14 +412,33 @@ export async function streamChat(
   signal: AbortSignal,
   onEvent: (e: AgentEvent) => void,
 ): Promise<void> {
-  const res = await fetch('/api/chat', {
+  await streamSse(
+    '/api/chat',
+    JSON.stringify({ sessionId, message } satisfies ChatRequest),
+    signal,
+    onEvent,
+  );
+}
+
+/**
+ * Читает SSE-поток произвольного POST-эндпоинта (fetch + ReadableStream):
+ * тело запроса [body] (строка; может быть пустой), каждый `data:`-блок — в onEvent.
+ * Общая функция для /api/chat и /api/sessions/{id}/task-state/continue.
+ */
+async function streamSse(
+  url: string,
+  body: string,
+  signal: AbortSignal,
+  onEvent: (e: AgentEvent) => void,
+): Promise<void> {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message } satisfies ChatRequest),
+    body,
     signal,
   });
   if (!res.ok || !res.body) {
-    throw new Error(`chat http ${res.status}`);
+    throw new Error(`http ${res.status}`);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -408,6 +457,35 @@ export async function streamChat(
       if (ev) onEvent(ev);
     }
   }
+}
+
+/**
+ * Продолжение воркфлоу (Day-14, кнопка «Продолжить»): POST /api/sessions/{sid}/task-state/continue
+ * возвращает SSE-поток следующего этапа агента (контекст продолжается). Каждое событие — в onEvent.
+ */
+export async function streamContinue(
+  sessionId: string,
+  signal: AbortSignal,
+  onEvent: (e: AgentEvent) => void,
+): Promise<void> {
+  await streamSse(
+    `/api/sessions/${encodeURIComponent(sessionId)}/task-state/continue`,
+    '{}',
+    signal,
+    onEvent,
+  );
+}
+
+/** Отмена воркфлоу (Day-14, кнопка «Отмена»): POST /api/sessions/{sid}/task-state/cancel.
+ *  Агент не запускается — возвращает обновлённое состояние задачи (JSON, без SSE). */
+export async function cancelTaskState(sessionId: string): Promise<TaskState> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-state/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok) throw new Error(`task-state cancel POST http ${res.status}`);
+  return (await res.json()) as TaskState;
 }
 
 // ---- Профили пользователя (персонализация агента; глобальный справочник) ----
@@ -477,4 +555,28 @@ export async function setActiveProfile(profileId: number | null): Promise<Active
   });
   if (!res.ok) throw new Error(`profiles active PUT http ${res.status}`);
   return (await res.json()) as ActiveProfileResponse;
+}
+
+// ---- Воркфлоу (Day-14): GET/PUT /api/workflow-settings ----
+
+/** Настройки воркфлоу: GET /api/workflow-settings (глобальные, app_settings). */
+export async function fetchWorkflowSettings(): Promise<WorkflowSettings> {
+  const res = await fetch('/api/workflow-settings');
+  if (!res.ok) throw new Error(`workflow-settings http ${res.status}`);
+  return (await res.json()) as WorkflowSettings;
+}
+
+/**
+ * Обновление настроек воркфлоу: PUT /api/workflow-settings {enabled, mode}.
+ * 400 — mode не в {manual,auto}; возвращает сохранённый набор. При ошибке бросает
+ * (UI откатывает переключатель/режим к прежним значениям).
+ */
+export async function updateWorkflowSettings(patch: WorkflowSettings): Promise<WorkflowSettings> {
+  const res = await fetch('/api/workflow-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`workflow-settings PUT http ${res.status}`);
+  return (await res.json()) as WorkflowSettings;
 }

@@ -8,6 +8,7 @@ import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
 import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
+import com.example.llmagent.agent.TaskStateStore
 import com.example.llmagent.agent.WorkingMemoryStore
 import com.example.llmagent.config.SessionLlmSettingsStore
 import org.springframework.http.HttpStatus
@@ -47,6 +48,7 @@ class ProjectController(
     private val factsStore: SessionFactsStore,
     private val branchStore: SessionBranchStore,
     private val workingMemoryStore: WorkingMemoryStore,
+    private val taskStateStore: TaskStateStore,
 ) {
 
     data class ProjectRequest(val name: String?)
@@ -107,6 +109,7 @@ class ProjectController(
             contextStore.remove(s.sessionId)
             factsStore.remove(s.sessionId)
             branchStore.remove(s.sessionId)
+            taskStateStore.remove(s.sessionId)
         }
         workingMemoryStore.deleteByProject(id.toString())
         if (!projectStore.delete(id)) {

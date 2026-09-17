@@ -25,7 +25,7 @@ data class LlmProperties(
     val maxTokens: Int? = 10000,
     /** Включено ли «рассуждение» модели (thinking). false — в API уходит chat_template_kwargs.enable_thinking=false (не для glm*). */
     val reasoningEnabled: Boolean = true,
-    val timeoutSeconds: Long = 60,
+    val timeoutSeconds: Long = 7200,
     /** Лимит контекста модели в токенах — для пресечения переполнения до отправки запроса. */
     val contextLimit: Int = 126608,
     /** Условная цена за 1M входных токенов, USD (для расчёта стоимости ответа). */

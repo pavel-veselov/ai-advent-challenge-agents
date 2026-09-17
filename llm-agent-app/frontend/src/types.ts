@@ -51,6 +51,9 @@ export type AgentEventType =
   | 'context_summary_started'
   | 'context_summary_finished'
   | 'facts_updated'
+  | 'task_state_changed'
+  | 'workflow_paused'
+  | 'workflow_stage_finished'
   | 'memory_updated'
   | 'log'
   | 'error';
@@ -66,7 +69,7 @@ export interface BaseEvent<TType extends AgentEventType, TPayload> {
 
 export type AgentEvent =
   | BaseEvent<'agent_started', { userMessage: string; settings: RunSettings }>
-  | BaseEvent<'llm_request_started', { iteration: number; prompt: PromptMessage[]; estimatedRequestTokens?: number }>
+  | BaseEvent<'llm_request_started', { iteration: number; prompt: PromptMessage[]; estimatedRequestTokens?: number; requestBody?: string }>
   | BaseEvent<'llm_token', { delta: string }>
   | BaseEvent<
       'llm_response_finished',
@@ -75,6 +78,7 @@ export type AgentEvent =
         usage?: { inputTokens: number; outputTokens: number };
         estimatedRequestTokens?: number | null;
         costUsd?: number | null;
+        responseBody?: string;
       }
     >
   | BaseEvent<'tool_call_started', { toolName: string; args: Record<string, unknown> }>
@@ -95,6 +99,42 @@ export type AgentEvent =
       }
     >
   | BaseEvent<'facts_updated', { facts: Record<string, string> }>
+  | BaseEvent<
+      'task_state_changed',
+      {
+        stage: TaskState['stage'];
+        /** Условные поля: бэкенд добавляет их в payload только если не null. */
+        currentStep?: string;
+        expectedAction?: string;
+        paused: boolean;
+        /** Результаты этапов воркфлоу (Day-14); добавляются в payload, если не null. */
+        plan?: string;
+        implementation?: string;
+        validation?: string;
+        /** true — агент ждёт подтверждения перехода на следующий этап. */
+        awaitConfirmation: boolean;
+      }
+    >
+  | BaseEvent<
+      'workflow_paused',
+      {
+        /** Этап, который только что завершился (planning | execution | validation). */
+        stage: TaskStage;
+        /** Результат этапа (финальный текст ассистента). */
+        output: string;
+        /** true — агент ждёт подтверждения (кнопки «Продолжить»/«Отмена»). */
+        await: boolean;
+      }
+    >
+  | BaseEvent<
+      'workflow_stage_finished',
+      {
+        /** Этап, повествование которого только что закоммичено (planning | execution | validation). */
+        stage: TaskStage;
+        /** Повествование этапа — сохраняется отдельным сообщением ассистента. */
+        output: string;
+      }
+    >
   | BaseEvent<'memory_updated', { projectId: number; working: WorkingMemoryState; longTerm: LongTermEntry[] }>
   | BaseEvent<'error', { message: string }>;
 
@@ -179,6 +219,58 @@ export interface SessionContextStrategyPatch {
 export interface FactsState {
   sessionId: string;
   facts: Record<string, string>;
+}
+
+// ---- Состояние задачи (GET/PUT /api/sessions/{sessionId}/task-state, событие task_state_changed) ----
+
+/** Этапы конечного автомата задачи (Day-13): переходы валидирует бэкенд (400 на недопустимые). */
+export type TaskStage = 'planning' | 'execution' | 'validation' | 'done';
+
+/**
+ * Состояние задачи сессии (FSM task_state). Строка одна на сессию; null (GET 404)
+ * — задача не начата. Инструмент task_state обновляет stage/шаги, паузу меняет
+ * ТОЛЬКО пользователь (PUT {paused}). Воркфлоу Day-14: plan/implementation/validation —
+ * результат каждого этапа, awaitConfirmation — агент ждёт подтверждения перехода.
+ */
+export interface TaskState {
+  sessionId: string;
+  stage: TaskStage;
+  currentStep: string | null;
+  expectedAction: string | null;
+  /** true — задача на паузе: агент НЕ выполняет шаги задачи. */
+  paused: boolean;
+  /** Результат этапа планирования (воркфлоу Day-14); null — этап ещё не пройден. */
+  plan: string | null;
+  /** Результат этапа выполнения (воркфлоу Day-14); null — ещё не пройден. */
+  implementation: string | null;
+  /** Результат этапа проверки (воркфлоу Day-14); null — ещё не пройден. */
+  validation: string | null;
+  /** true — агент ждёт подтверждения перехода на следующий этап (ручной режим). */
+  awaitConfirmation: boolean;
+  updatedAt: string;
+}
+
+/** Частичное тело PUT /api/sessions/{sessionId}/task-state. */
+export interface TaskStatePatch {
+  stage?: TaskStage;
+  currentStep?: string;
+  expectedAction?: string;
+  paused?: boolean;
+  plan?: string;
+  implementation?: string;
+  validation?: string;
+  awaitConfirmation?: boolean;
+}
+
+// ---- Воркфлоу (Day-14): GET/PUT /api/workflow-settings ----
+
+/** Режим воркфлоу: manual — пауза на границе этапа; auto — все этапы подряд. */
+export type WorkflowMode = 'manual' | 'auto';
+
+/** Настройки воркфлоу (app_settings): следовать ли и в каком режиме (глобально). */
+export interface WorkflowSettings {
+  enabled: boolean;
+  mode: WorkflowMode;
 }
 
 // ---- Память (GET /api/projects/{projectId}/memory, событие memory_updated) ----
@@ -372,6 +464,10 @@ export interface StepLogEntry {
   toolName?: string;
   /** Промпт, отправленный в LLM (событие llm_request_started). */
   prompt?: PromptMessage[];
+  /** Фактическое тело HTTP-запроса к LLM API (pretty JSON, событие llm_request_started). */
+  requestBody?: string;
+  /** Тело ответа LLM API, собранное из стрима (pretty JSON, событие llm_response_finished). */
+  responseBody?: string;
   /** Аргументы вызова инструмента. */
   args?: Record<string, unknown>;
   /** Результат инструмента или текст ошибки. */

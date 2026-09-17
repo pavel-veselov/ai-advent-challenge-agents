@@ -6,6 +6,7 @@ import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
 import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
+import com.example.llmagent.agent.TaskStateStore
 import com.example.llmagent.config.LlmProperties
 import com.example.llmagent.config.SessionLlmSettingsStore
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -23,6 +24,7 @@ class HistoryController(
     private val contextStore: SessionContextStore,
     private val factsStore: SessionFactsStore,
     private val branchStore: SessionBranchStore,
+    private val taskStateStore: TaskStateStore,
 ) {
 
     data class HistoryMessage(
@@ -91,12 +93,12 @@ class HistoryController(
     /**
      * Удаляет всю историю сессии (в том числе для несуществующей — всё равно 200) вместе
      * со ВСЕМИ per-session данными: сжатие (настройки + резюме), настройки LLM, стратегия
-     * контекста, «липкие факты» и ветки — чтобы после пересоздания сессии не оставалось
-     * «призрачных» настроек. Рабочая память (WM) с day-12 живёт НА ПРОЕКТЕ (см.
-     * WorkingMemoryStore) — удаление ОДНОЙ сессии её НЕ трогает (она общая для всех
-     * сессий проекта); проектная WM каскадно удаляется при DELETE /api/projects/{id}.
-     * Долговременная память (LongTermMemoryStore) ГЛОБАЛЬНАЯ — её удаление сессии НЕ
-     * трогает (записи переживают удаление сессий).
+     * контекста, «липкие факты», ветки и состояние задачи (task_state, Day-13) — чтобы
+     * после пересоздания сессии не оставалось «призрачных» настроек. Рабочая память (WM)
+     * с day-12 живёт НА ПРОЕКТЕ (см. WorkingMemoryStore) — удаление ОДНОЙ сессии её НЕ
+     * трогает (она общая для всех сессий проекта); проектная WM каскадно удаляется при
+     * DELETE /api/projects/{id}. Долговременная память (LongTermMemoryStore) ГЛОБАЛЬНАЯ —
+     * её удаление сессии НЕ трогает (записи переживают удаление сессий).
      */
     @DeleteMapping("/api/sessions/{sessionId}")
     fun delete(@PathVariable sessionId: String): DeleteResponse {
@@ -106,6 +108,7 @@ class HistoryController(
         contextStore.remove(sessionId)
         factsStore.remove(sessionId)
         branchStore.remove(sessionId)
+        taskStateStore.remove(sessionId)
         return DeleteResponse(true)
     }
 }

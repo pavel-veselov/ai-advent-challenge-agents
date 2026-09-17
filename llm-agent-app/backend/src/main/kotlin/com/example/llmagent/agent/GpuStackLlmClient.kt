@@ -41,6 +41,13 @@ class GpuStackLlmClient(
         messages: List<LlmMessage>,
         tools: List<ToolDefinition>,
         settings: LlmSettings,
+    ): Flux<LlmEvent> = streamChat(messages, tools, settings) { }
+
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+        onRequestBody: (String) -> Unit,
     ): Flux<LlmEvent> {
         // Пустые tools — отдельный случай: некоторые OpenAI-совместимые бэкенды (gpustack) отвечают
         // 400 и на `"tools": []`, и на `"tool_choice"` без `tools`. Оба поля уходят ЛИБО вместе
@@ -72,6 +79,9 @@ class GpuStackLlmClient(
             val toolsArr = body.putArray("tools")
             tools.forEach { toolsArr.add(toolNode(it)) }
         }
+        // Фактическое тело запроса (pretty JSON) уходит в колбэк ДО HTTP-вызова:
+        // панель «Детализация» показывает реальный payload, включая значения из настроек.
+        onRequestBody(om.writerWithDefaultPrettyPrinter().writeValueAsString(body))
 
         return Flux.defer {
             val acc = Pending()
@@ -93,7 +103,7 @@ class GpuStackLlmClient(
                 .timeout(Duration.ofSeconds(settings.timeoutSeconds()))
                 .flatMapIterable { raw -> parseChunks(raw) }
                 .concatMap { node -> processChunk(node, acc) }
-                .concatWith(Flux.defer { Flux.fromIterable(emitPending(acc)) })
+                .concatWith(Flux.defer { Flux.fromIterable(emitPending(acc, settings.model())) })
         }
     }
 
@@ -147,8 +157,9 @@ class GpuStackLlmClient(
             }
             .toList()
 
-    /** Сырые фрагменты tool_calls, finish_reason и usage на время стрима. */
+    /** Сырые фрагменты tool_calls, finish_reason, usage и накопленный текст на время стрима. */
     private class Pending {
+        val content = StringBuilder()
         val toolCalls = sortedMapOf<Int, MutableList<String>>() // index -> [id:, name:, args:]
         var finishReason: String? = null
         var usage: LlmUsage? = null
@@ -170,7 +181,10 @@ class GpuStackLlmClient(
         val out = mutableListOf<LlmEvent>()
         val delta = choice.path("delta")
         val content = delta.path("content").takeIf { it.isTextual }?.asText()
-        if (!content.isNullOrEmpty()) out += LlmEvent.ContentDelta(content)
+        if (!content.isNullOrEmpty()) {
+            out += LlmEvent.ContentDelta(content)
+            acc.content.append(content)
+        }
 
         val tcs = delta.path("tool_calls")
         if (tcs.isArray) {
@@ -186,29 +200,59 @@ class GpuStackLlmClient(
         return if (out.isEmpty()) Flux.empty() else Flux.fromIterable(out)
     }
 
-    private fun emitPending(acc: Pending): List<LlmEvent> {
+    private fun emitPending(acc: Pending, model: String): List<LlmEvent> {
         val out = mutableListOf<LlmEvent>()
-        if (acc.toolCalls.isNotEmpty()) {
-            val calls = acc.toolCalls.map { (idx, parts) ->
-                var id: String? = null
-                var name: String? = null
-                val sb = StringBuilder()
-                for (p in parts) {
-                    when {
-                        p.startsWith("id:") -> id = p.removePrefix("id:")
-                        p.startsWith("name:") -> name = p.removePrefix("name:")
-                        p.startsWith("args:") -> sb.append(p.removePrefix("args:"))
-                    }
+        val calls = acc.toolCalls.map { (idx, parts) ->
+            var id: String? = null
+            var name: String? = null
+            val sb = StringBuilder()
+            for (p in parts) {
+                when {
+                    p.startsWith("id:") -> id = p.removePrefix("id:")
+                    p.startsWith("name:") -> name = p.removePrefix("name:")
+                    p.startsWith("args:") -> sb.append(p.removePrefix("args:"))
                 }
-                LlmToolCall(index = idx, id = id, name = name, arguments = sb.toString().ifEmpty { "{}" })
             }
-            out += LlmEvent.ToolCallsComplete(calls)
+            LlmToolCall(index = idx, id = id, name = name, arguments = sb.toString().ifEmpty { "{}" })
         }
+        if (calls.isNotEmpty()) out += LlmEvent.ToolCallsComplete(calls)
         out += LlmEvent.Finished(
             acc.finishReason ?: if (acc.toolCalls.isNotEmpty()) "tool_calls" else "stop",
             acc.usage,
         )
+        out += LlmEvent.ResponseAssembled(assembleResponse(acc, model, calls))
         return out
+    }
+
+    /**
+     * Собирает ответ API в привычном нестримовом виде (chat.completion) из накопленного
+     * стрима — для панели «Детализация ответа». Опускаются поля, которых стрим не содержал
+     * (content при tool_calls, usage без данных провайдера и т.п.).
+     */
+    private fun assembleResponse(acc: Pending, model: String, calls: List<LlmToolCall>): String {
+        val root = om.createObjectNode()
+            .put("object", "chat.completion")
+            .put("model", model)
+        val choice = root.putArray("choices").addObject()
+        choice.put("index", 0)
+        choice.put("finish_reason", acc.finishReason ?: if (calls.isNotEmpty()) "tool_calls" else "stop")
+        val message = choice.putObject("message").put("role", "assistant")
+        if (acc.content.isNotEmpty()) message.put("content", acc.content.toString())
+        if (calls.isNotEmpty()) {
+            val arr = message.putArray("tool_calls")
+            calls.forEach { tc ->
+                val c = arr.addObject()
+                if (tc.id != null) c.put("id", tc.id)
+                c.put("type", "function")
+                c.putObject("function").put("name", tc.name ?: "").put("arguments", tc.arguments)
+            }
+        }
+        acc.usage?.let { usage ->
+            root.putObject("usage")
+                .put("prompt_tokens", usage.inputTokens)
+                .put("completion_tokens", usage.outputTokens)
+        }
+        return om.writerWithDefaultPrettyPrinter().writeValueAsString(root)
     }
 
     private fun normalizeBaseUrl(raw: String): String {

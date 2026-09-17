@@ -185,3 +185,26 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
+
+-- Состояние задачи сессии — конечный автомат (см. TaskStateStore, GET/PUT
+-- /api/sessions/{sessionId}/task-state, инструмент task_state агента и воркфлоу
+-- /continue + /cancel). stage — этап FSM (planning | execution | validation | done);
+-- валидность переходов проверяет TaskStateStore (см. canTransition). paused — флаг
+-- паузы: агент НЕ выполняет шаги задачи, пока флаг поднят.
+-- Воркфлоу Day-14: plan / implementation / validation — результат каждого этапа;
+-- await_confirmation — агент ждёт подтверждения перехода на следующий этап (ручной
+-- режим). Одна строка на сессию; строка отсутствует → задача не начата (панель
+-- состояния скрыта, PUT без stage → 400). Переживает перезапуск backend; для старых
+-- БД колонки воркфлоу добавляются миграцией store (ALTER TABLE ADD COLUMN).
+CREATE TABLE IF NOT EXISTS task_state (
+    session_id        TEXT PRIMARY KEY REFERENCES chat_sessions(session_id),
+    stage             TEXT NOT NULL,
+    current_step      TEXT,
+    expected_action   TEXT,
+    paused            INTEGER NOT NULL DEFAULT 0,
+    plan              TEXT,
+    implementation    TEXT,
+    validation        TEXT,
+    await_confirmation INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);

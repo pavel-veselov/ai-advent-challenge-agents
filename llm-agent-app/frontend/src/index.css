@@ -2573,3 +2573,284 @@ button:disabled {
   justify-content: flex-end;
   gap: 6px;
 }
+
+/* ============================================================
+   Полоса «Состояние задачи» в панели чата (Day-13 FSM task_state):
+   узкая рейка над журналом сообщений (свёрнута по умолчанию, не
+   отъедает высоту) — ламповый ряд этапов, текущий шаг/действие,
+   бейджи «ПАУЗА»/«ОЖИДАНИЕ», кнопка паузы. Клик раскрывает детали
+   (план/выполнение/проверка, время обновления, ошибка паузы).
+   ============================================================ */
+.task-strip {
+  flex-shrink: 0;
+  min-height: 0;
+  background: color-mix(in srgb, var(--panel-2) 85%, var(--panel));
+  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(242, 232, 213, 0.05);
+}
+
+/* Ожидание подтверждения воркфлоу — янтарная кромка слева (координация с кнопками
+  «Продолжить»/«Отмена» в журнале). */
+.task-strip.is-await {
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 rgba(242, 232, 213, 0.05);
+}
+
+/* Пауза — сов. красная кромка (перекрывает янтарь, если и то и другое). */
+.task-strip.is-paused {
+  box-shadow: inset 3px 0 0 var(--red), inset 0 1px 0 rgba(242, 232, 213, 0.05);
+}
+
+.task-strip-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  min-width: 0;
+}
+
+.task-strip-label {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+  text-shadow: 0 1px 0 rgba(5, 12, 8, 0.7);
+}
+
+/* Красная звезда — как в шапках панелей: полоса = мини-прибор внутри чата. */
+.task-strip-label::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  background: var(--svg-star) center / contain no-repeat;
+  filter: drop-shadow(0 0 3px rgba(200, 64, 47, 0.55));
+}
+
+/* Ламповый ряд этапов внутри рейки: компактные чипы «лампа + подпись». */
+.task-strip-stages {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.task-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.task-stage-lamp {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--steel);
+}
+
+/* Активный этап — янтарная лампа и янтарная рамка чипа. */
+.task-stage-chip.is-active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.task-stage-chip.is-active .task-stage-lamp {
+  background: var(--accent);
+  box-shadow: var(--glow-amber);
+}
+
+.task-strip-spacer {
+  flex: 1;
+}
+
+/* Бейджи-сигналы рейки: пауза (красный) и ожидание подтверждения (янтарь, пульсирует). */
+.task-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.task-badge::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.task-badge.is-paused {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red-bright);
+}
+
+.task-badge.is-paused::before {
+  background: var(--red);
+  box-shadow: var(--glow-red);
+}
+
+.task-badge.is-await {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  animation: task-badge-pulse 1.6s ease-in-out infinite;
+}
+
+.task-badge.is-await::before {
+  background: var(--accent);
+  box-shadow: var(--glow-amber);
+}
+
+@keyframes task-badge-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Инлайн-ошибка смены паузы под компактной рейкой (без отдельного блока деталей). */
+.task-strip-error {
+  padding: 3px 12px 5px;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 55%, transparent);
+  font-size: 11px;
+  color: var(--red-bright);
+}
+
+/* ----- Воркфлоу Day-14: настройки (рубильник + режим) и подтверждение перехода ----- */
+
+/* Приборная карточка настроек воркфлоу — в стиле блока профиля/настроек LLM
+   (тёмная эмаль, чертёжная сетка, янтарная световая линия сверху). */
+.workflow-settings-block {
+  flex-shrink: 0;
+  background-color: #20332a;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
+  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28),
+    inset 1px 1px 0 rgba(242, 232, 213, 0.06),
+    inset -1px -1px 0 rgba(5, 12, 8, 0.45);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Строка рубильника: подпись + описание слева, общий с thinking .llm-switch справа. */
+.workflow-main-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workflow-main-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.workflow-main-title {
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* Режим воркфлоу: сегментированный выбор в стиле свитчера стратегии контекста. */
+.workflow-mode-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.workflow-mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: 5px 8px 4px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  text-align: left;
+  box-shadow: inset 0 2px 4px rgba(5, 12, 8, 0.4);
+  transition: border-color 0.15s, color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.workflow-mode-option:hover:not(:disabled):not(.is-active) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--text);
+}
+
+/* Активный режим — горящий индикатор, как у активной модели/стратегии. */
+.workflow-mode-option.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--field));
+  color: var(--text);
+  box-shadow: var(--glow-amber), inset 0 2px 4px rgba(5, 12, 8, 0.35);
+}
+
+.workflow-mode-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workflow-mode-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.workflow-mode-desc {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
+}
+
+.workflow-mode-option.is-active .workflow-mode-desc {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-dim));
+}
+
+/* Кнопки подтверждения перехода этапа воркфлоу. */
+.workflow-confirm-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}

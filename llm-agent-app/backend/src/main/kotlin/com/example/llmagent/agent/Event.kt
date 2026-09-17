@@ -24,14 +24,17 @@ data class LlmRequestStarted(
     val prompt: List<Map<String, String>>,
     /** Оценки токенов больше нет (локальный подсчёт удалён); поле 0 — сохранено для схемы. */
     val estimatedRequestTokens: Int = 0,
+    /** Фактическое тело HTTP-запроса к LLM API (pretty JSON); null — если клиент не отдал тело. */
+    val requestBody: String? = null,
 ) : AgentEvent {
     override val type = "llm_request_started"
     override val stepId = "llm-$iteration"
-    override val payload = mapOf(
-        "iteration" to iteration,
-        "prompt" to prompt,
-        "estimatedRequestTokens" to estimatedRequestTokens,
-    )
+    override val payload: Map<String, Any?> = buildMap {
+        put("iteration", iteration)
+        put("prompt", prompt)
+        put("estimatedRequestTokens", estimatedRequestTokens)
+        if (requestBody != null) put("requestBody", requestBody)
+    }
 }
 
 data class LlmToken(val iteration: Int, val delta: String) : AgentEvent {
@@ -48,6 +51,8 @@ data class LlmResponseFinished(
     val estimatedRequestTokens: Int? = null,
     /** Условная стоимость запроса+ответа в USD; null, если usage от провайдера не пришёл. */
     val costUsd: Double? = null,
+    /** Тело ответа LLM API, собранное из стрима (pretty JSON); null — если клиент не отдал тело. */
+    val responseBody: String? = null,
 ) : AgentEvent {
     override val type = "llm_response_finished"
     override val stepId = "llm-$iteration"
@@ -56,6 +61,7 @@ data class LlmResponseFinished(
         put("estimatedRequestTokens", estimatedRequestTokens)
         if (costUsd != null) put("costUsd", costUsd)
         if (usage != null) put("usage", mapOf("inputTokens" to usage.inputTokens, "outputTokens" to usage.outputTokens))
+        if (responseBody != null) put("responseBody", responseBody)
     }
 }
 
@@ -171,4 +177,75 @@ data class MemoryUpdated(
         "working" to working,
         "longTerm" to longTerm,
     )
+}
+
+/**
+ * Обновление состояния задачи (Day-13, FSM task_state): агент только что успешно
+ * выполнил инструмент task_state — этап/шаг/ожидаемое действие сохранены в per-session
+ * task_state (см. TaskStateStore). Идёт в основном цикле сразу после tool_call_finished,
+ * но НЕ входит в нумерацию итераций: stepId фиксирован ("task-state"). currentStep /
+ * expectedAction/plan/implementation/validation добавляются в payload только если не null
+ * (условные puts, как в llm_response_finished); paused и awaitConfirmation — всегда.
+ * REST-мутации состояния (пауза через UI, /continue, /cancel) SSE НЕ отправляют —
+ * фронтенд обновляет панель из ответа PUT/POST.
+ */
+data class TaskStateChanged(
+    val stage: String,
+    val currentStep: String?,
+    val expectedAction: String?,
+    val paused: Boolean,
+    val plan: String? = null,
+    val implementation: String? = null,
+    val validation: String? = null,
+    val awaitConfirmation: Boolean = false,
+) : AgentEvent {
+    override val type = "task_state_changed"
+    override val stepId = "task-state"
+    override val payload: Map<String, Any?> = buildMap {
+        put("stage", stage)
+        if (currentStep != null) put("currentStep", currentStep)
+        if (expectedAction != null) put("expectedAction", expectedAction)
+        put("paused", paused)
+        if (plan != null) put("plan", plan)
+        if (implementation != null) put("implementation", implementation)
+        if (validation != null) put("validation", validation)
+        put("awaitConfirmation", awaitConfirmation)
+    }
+}
+
+/**
+ * Воркфлоу Day-14: агент завершил этап и ждёт подтверждения пользователя (ручной
+ * режим, `workflow.mode=manual`). Эмитится в конце run (после agent_finished), когда
+ * этап != done: результат этапа сохранён в task_state (plan/implementation/validation),
+ * флаг awaitConfirmation поднят. Фронтенд по этому событию показывает под последним
+ * сообщением ассистента кнопки «Продолжить»/«Отмена». В авто-режиме не эмитится.
+ * stepId фиксирован ("workflow").
+ */
+data class WorkflowPaused(
+    val stage: String,
+    val output: String,
+    val await: Boolean,
+) : AgentEvent {
+    override val type = "workflow_paused"
+    override val stepId = "workflow"
+    override val payload = mapOf("stage" to stage, "output" to output, "await" to await)
+}
+
+/**
+ * Воркфлоу Day-14 (авто-режим): этап завершён и его повествование уже сохранено и в историю
+ * (sessionStore.append), и как результат этапа (колонка plan/implementation/validation через
+ * setStageOutputKeepStage). Эмитится в блоке сохранения повествования (см. AgentImpl, авто
+ * stage-save) СРАЗУ после коммита — это НАДЁЖНАЯ граница этапа. Фронтенд по этому событию
+ * финализирует пузырь повествования завершённого этапа и открывает новый пузырь для
+ * следующего — каждая стадия видна отдельным сообщением ассистента (а не одним затираемым
+ * пузырём, где остаётся только финальный текст). В ручном режиме не эмитится (там этап
+ * завершается финальным ответом + workflow_paused). stepId фиксирован ("workflow-stage").
+ */
+data class WorkflowStageFinished(
+    val stage: String,
+    val output: String,
+) : AgentEvent {
+    override val type = "workflow_stage_finished"
+    override val stepId = "workflow-stage"
+    override val payload = mapOf("stage" to stage, "output" to output)
 }

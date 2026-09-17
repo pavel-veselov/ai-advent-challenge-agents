@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { BranchesState, ChatMessage, ContextStrategy } from '../types';
+import TaskStatePanel from './TaskStatePanel';
+import type { BranchesState, ChatMessage, ContextStrategy, TaskState } from '../types';
 
 /**
  * Строка «контекст запроса: N · ответ: M» для пузыря ассистента.
@@ -43,6 +44,15 @@ interface ChatPanelProps {
   strategy: ContextStrategy;
   /** Ветки диалога активной сессии (GET /branches); null — не загружены. */
   branches: BranchesState | null;
+  /**
+   * Воркфлоу Day-14 (ручной режим): true — агент завершил этап и ждёт подтверждения
+   * перехода — под последним сообщением ассистента рендерятся кнопки «Продолжить»/«Отмена».
+   */
+  workflowPending: boolean;
+  /** Воркфлоу Day-14: кнопка «Продолжить» — запускает следующий этап (SSE /continue). */
+  onWorkflowContinue: () => void;
+  /** Воркфлоу Day-14: кнопка «Отмена» — пауза задачи и сброс ожидания. */
+  onWorkflowCancel: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
   onDeleteSession: () => void;
@@ -54,6 +64,16 @@ interface ChatPanelProps {
   onForkBranch: (messageId: number) => void;
   /** Переключение активной ветки: PUT /branches {activeBranchId}. */
   onSwitchBranch: (branchId: number) => void;
+  /** Состояние задачи активной сессии (Day-13 FSM) — для полосы состояния над журналом. */
+  taskState: TaskState | null;
+  /** true — сервис остановлен/запускается: кнопка паузы на полосе состояния заблокирована. */
+  taskDisabled: boolean;
+  /** Пауза/снятие паузы задачи: PUT /task-state {paused} (кнопка на полосе состояния). */
+  onChangePaused: (paused: boolean) => Promise<TaskState>;
+  /** Воркфлоу включён — полоса состояния задачи показывается. */
+  workflowEnabled: boolean;
+  /** Показывать кнопку паузы на полосе состояния — только в авто-режиме. */
+  showPause: boolean;
 }
 
 export default function ChatPanel({
@@ -66,6 +86,9 @@ export default function ChatPanel({
   activeProjectId,
   strategy,
   branches,
+  workflowPending,
+  onWorkflowContinue,
+  onWorkflowCancel,
   onSend,
   onStop,
   onDeleteSession,
@@ -73,6 +96,11 @@ export default function ChatPanel({
   onSaveLongTerm,
   onForkBranch,
   onSwitchBranch,
+  taskState,
+  taskDisabled,
+  onChangePaused,
+  workflowEnabled,
+  showPause,
 }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
@@ -172,8 +200,22 @@ export default function ChatPanel({
         <div className="service-banner service-banner-starting">Сервис запускается…</div>
       )}
 
+      {/* Полоса состояния задачи (Day-13 FSM): ряд этапов ведущего паза — узкая рейка
+          между служебными баннерами и журналом. Показывается только при включённом
+          воркфлоу; кнопка паузы — только в авто-режиме. */}
+      <TaskStatePanel
+        taskState={taskState}
+        sessionId={sessionId}
+        disabled={taskDisabled}
+        workflowPending={workflowPending}
+        workflowEnabled={workflowEnabled}
+        showPause={showPause}
+        onResume={onWorkflowContinue}
+        onChangePaused={onChangePaused}
+      />
+
       <div className="chat-list" ref={listRef}>
-        {messages.map((m) => {
+        {messages.map((m, index) => {
           // Id сообщения в истории бэкенда, если оно пришло из истории (для ветвления).
           const historyId = m.historyId;
           // Мини-кнопки «сохранить в память» — под каждым сообщением, кроме служебных system.
@@ -181,6 +223,32 @@ export default function ChatPanel({
           const saveBusy = saveFeedback?.msgId === m.id && saveFeedback.status === 'saving';
           const saveDone =
             saveFeedback?.msgId === m.id && saveFeedback.status !== 'saving' ? saveFeedback : null;
+          // Воркфлоу Day-14: кнопки подтверждения/«Отмена» под ПОСЛЕДНИМ сообщением ассистента,
+          // когда агент завершил этап и ждёт подтверждения перехода (ручной режим).
+          // Подпись главной кнопки зависит от текущего этапа FSM (задача пользователя №1):
+          //   planning  → «Выполнить»      (подтвердить выполнение плана)
+          //   execution → «Проверить задачу» (подтвердить проверку)
+          //   validation → «Завершить»     (задача выполнена)
+          //   done / null → «Продолжить»   (fallback)
+          const workflowBtns =
+            workflowPending && m.role === 'assistant' && index === messages.length - 1 && !m.streaming;
+          const confirmStage = taskState?.stage ?? null;
+          const confirmLabel =
+            confirmStage === 'planning'
+              ? 'Выполнить'
+              : confirmStage === 'execution'
+                ? 'Проверить задачу'
+                : confirmStage === 'validation'
+                  ? 'Завершить'
+                  : 'Продолжить';
+          const confirmTitle =
+            confirmStage === 'planning'
+              ? 'Подтвердить выполнение плана — перейти к этапу выполнения'
+              : confirmStage === 'execution'
+                ? 'Подтвердить проверку — перейти к этапу проверки'
+                : confirmStage === 'validation'
+                  ? 'Подтвердить завершение — задача выполнена'
+                  : 'Подтвердить переход к следующему этапу воркфлоу';
           return (
             <div key={m.id} className={`chat-msg ${m.role}`}>
               {m.role === 'assistant' ? (
@@ -198,6 +266,28 @@ export default function ChatPanel({
                     </div>
                   ) : null}
                   {m.error ? <div className="chat-msg-error">{m.error}</div> : null}
+                  {workflowBtns ? (
+                    <div className="workflow-confirm-row">
+                      <button
+                        type="button"
+                        className="project-btn"
+                        title={confirmTitle}
+                        onClick={onWorkflowContinue}
+                        disabled={isRunning || serviceDown}
+                      >
+                        {confirmLabel}
+                      </button>
+                      <button
+                        type="button"
+                        className="project-btn"
+                        title="Отменить воркфлоу — поставить задачу на паузу"
+                        onClick={onWorkflowCancel}
+                        disabled={isRunning || serviceDown}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  ) : null}
                 </>
               ) : m.role === 'system' ? (
                 // Служебная заметка бэкенда (например, информация о сжатии контекста) —

@@ -139,9 +139,9 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
 | type | payload | stepId (id узла графа) | Узел графа |
 |------|---------|------------------------|------------|
 | `agent_started` | `{ "userMessage": string, "settings": { "provider": string, "model": string, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "reasoningEnabled": boolean, "timeoutSeconds": number, "contextLimit": number, "priceInputPer1M": number, "priceOutputPer1M": number, "maxToolCallIterations": number, "tools": string[], "contextStrategy": string } }` | `user` | «Запрос пользователя» |
-| `llm_request_started` | `{ "iteration": number, "prompt": [{ "role": string, "content": string }], "estimatedRequestTokens": number }` | `llm-<iteration>` | «LLM (итерация N)» |
+| `llm_request_started` | `{ "iteration": number, "prompt": [{ "role": string, "content": string }], "estimatedRequestTokens": number, "requestBody"?: string (фактическое тело HTTP-запроса к LLM API, pretty JSON) }` | `llm-<iteration>` | «LLM (итерация N)» |
 | `llm_token` | `{ "delta": string }` | `llm-<iteration>` | — (токен, статус running) |
-| `llm_response_finished` | `{ "finishReason": "stop"\|"tool_calls"\|"length"\|"error", "estimatedRequestTokens": number\|null, "costUsd"?: number, "usage"?: { "inputTokens": number, "outputTokens": number } }` | `llm-<iteration>` | — (статус success/error) |
+| `llm_response_finished` | `{ "finishReason": "stop"\|"tool_calls"\|"length"\|"error", "estimatedRequestTokens": number\|null, "costUsd"?: number, "usage"?: { "inputTokens": number, "outputTokens": number }, "responseBody"?: string (тело ответа LLM API, собранное из стрима, pretty JSON) }` | `llm-<iteration>` | — (статус success/error) |
 | `tool_call_started` | `{ "toolName": string, "args": object }` | `tool-<toolName>-<idx>` | «Инструмент: <toolName>» |
 | `tool_call_finished` | `{ "result": string, "status": "success"\|"error" }` | `tool-<toolName>-<idx>` | — (статус, результат) |
 | `agent_finished` | `{ "finalText": string }` | `answer` | «Ответ» |

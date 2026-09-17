@@ -4,6 +4,7 @@ import LlmSettings from './components/LlmSettings';
 import ProfileSelect from './components/ProfileSelect';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
+import WorkflowSettings from './components/WorkflowSettings';
 import { fetchActiveProfile, fetchProfiles, fetchProjectMemory } from './api';
 import { useAgentSession } from './hooks/useAgentSession';
 import type { MemoryState, Profile } from './types';
@@ -125,6 +126,16 @@ export default function App() {
   // (менять настройки посреди выполнения собственного запуска сомнительно).
   const llmSettingsDisabled = tabDisabled || session.isRunning;
 
+  // Воркфлоу Day-14: «Продолжить»/«Отмена» под последним сообщением ассистента показываем,
+  // только когда воркфлоу включён, режим ручной И агент ждёт подтверждения перехода.
+  const workflowEnabled = session.workflowSettings?.enabled ?? false;
+  const workflowMode = session.workflowSettings?.mode ?? 'manual';
+  const workflowPending =
+    workflowEnabled && workflowMode === 'manual' && session.taskState?.awaitConfirmation === true;
+  // Кнопка паузы/снятия паузы на полосе состояния — только в авто-режиме (ручной
+  // подтверждает переход кнопками в чате, снимать паузу не нужно).
+  const showPause = workflowEnabled && workflowMode === 'auto';
+
   const handleCreateProject = () => {
     const name = newProjectName.trim();
     if (name === '') return;
@@ -206,6 +217,12 @@ export default function App() {
           activeProfileId={activeProfileId}
           onRefresh={handleProfilesRefresh}
         />
+        {/* Воркфлоу Day-14: переключатель «Следовать воркфлоу» + режим ручное/авто. */}
+        <WorkflowSettings
+          settings={session.workflowSettings}
+          onChange={session.changeWorkflowSettings}
+          disabled={tabDisabled}
+        />
         <LlmSettings
           settings={session.runSettings}
           sessionId={session.sessionId}
@@ -220,6 +237,7 @@ export default function App() {
           memory={memory}
           onMemoryCleared={handleMemoryCleared}
         />
+        {/* Состояние задачи (Day-13 FSM) переехало в панель чата — полоса над журналом. */}
         <StepsLog
           steps={session.steps}
           backendStopped={session.backendStopped}
@@ -398,6 +416,13 @@ export default function App() {
               activeProjectId={session.activeProjectId}
               strategy={session.strategy}
               branches={session.branches}
+              workflowPending={workflowPending}
+              onWorkflowContinue={() => {
+                if (session.sessionId != null) session.continueWorkflow(session.sessionId);
+              }}
+              onWorkflowCancel={() => {
+                if (session.sessionId != null) void session.cancelWorkflow(session.sessionId);
+              }}
               onSend={session.sendMessage}
               onStop={session.stopAgent}
               onDeleteSession={session.deleteSession}
@@ -409,6 +434,15 @@ export default function App() {
               onSwitchBranch={(branchId) => {
                 if (session.sessionId != null) void session.switchBranch(session.sessionId, branchId);
               }}
+              taskState={session.taskState}
+              taskDisabled={tabDisabled}
+              onChangePaused={(paused) =>
+                session.sessionId == null
+                  ? Promise.reject(new Error('Нет активной сессии'))
+                  : session.changeTaskState(session.sessionId, { paused })
+              }
+              workflowEnabled={workflowEnabled}
+              showPause={showPause}
             />
           )}
         </div>

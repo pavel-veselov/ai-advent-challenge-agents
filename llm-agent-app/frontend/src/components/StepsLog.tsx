@@ -39,34 +39,53 @@ function explainSystem(step: StepLogEntry): string | null {
   return null;
 }
 
-/** Строка лога шага агента: время + простой текст; для запросов к LLM — ссылка «Детализация». */
+/** Строка лога шага агента: время + текст; для LLM-шагов — ссылки «Детализация»/«Детализация ответа». */
 function StepLine({
   step,
   onDetail,
 }: {
   step: StepLogEntry;
-  onDetail: (step: StepLogEntry) => void;
+  onDetail: (step: StepLogEntry, mode: 'request' | 'response') => void;
 }) {
+  const hasRequest = (step.prompt && step.prompt.length > 0) || !!step.requestBody;
   return (
     <div className={`step-line status-${step.status}`}>
       <span className="step-time">{step.time}</span>
       <span className="step-line-text">{step.title}</span>
-      {step.prompt && step.prompt.length > 0 ? (
+      {hasRequest ? (
         <button
           type="button"
           className="step-detail"
           title="Показать фактический запрос, отправленный в LLM API"
-          onClick={() => onDetail(step)}
+          onClick={() => onDetail(step, 'request')}
         >
           Детализация
+        </button>
+      ) : null}
+      {step.responseBody ? (
+        <button
+          type="button"
+          className="step-detail"
+          title="Показать фактический ответ LLM API"
+          onClick={() => onDetail(step, 'response')}
+        >
+          Детализация ответа
         </button>
       ) : null}
     </div>
   );
 }
 
-/** Диалог «Детализация»: фактический промпт, отправленный в LLM API (роли + содержимое). */
-function DetailModal({ step, onClose }: { step: StepLogEntry; onClose: () => void }) {
+/** Диалог «Детализация»: тело запроса/ответа LLM API (pretty JSON) или промпт по сообщениям. */
+function DetailModal({
+  step,
+  mode,
+  onClose,
+}: {
+  step: StepLogEntry;
+  mode: 'request' | 'response';
+  onClose: () => void;
+}) {
   // ESC закрывает диалог наравне с кнопкой «Закрыть» и кликом по затемнению.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -76,17 +95,30 @@ function DetailModal({ step, onClose }: { step: StepLogEntry; onClose: () => voi
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const title = mode === 'response' ? 'Детализация: фактический ответ LLM' : 'Детализация: фактический запрос в LLM';
+  const subtitle =
+    mode === 'response'
+      ? `${step.title} — ответ API модели (собран из стрима)`
+      : `${step.title} — сообщения, отправленные в API модели`;
   return (
     <div className="detail-backdrop" onClick={onClose}>
       <div className="detail-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="detail-title">Детализация: фактический запрос в LLM</div>
-        <div className="detail-subtitle">{step.title} — сообщения, отправленные в API модели</div>
-        {step.prompt?.map((m, i) => (
-          <div className="detail-msg" key={`${i}-${m.role}`}>
-            <div className="detail-role">{m.role}</div>
-            <pre className="detail-code">{m.content}</pre>
-          </div>
-        ))}
+        <div className="detail-title">{title}</div>
+        <div className="detail-subtitle">{subtitle}</div>
+        {mode === 'response' ? (
+          <pre className="detail-code">{step.responseBody}</pre>
+        ) : step.requestBody ? (
+          // Приоритет — сырое тело запроса (pretty JSON, как реально ушло в API); без re-format.
+          <pre className="detail-code">{step.requestBody}</pre>
+        ) : (
+          // Fallback для старых записей без тела запроса — рендер промпта по сообщениям.
+          step.prompt?.map((m, i) => (
+            <div className="detail-msg" key={`${i}-${m.role}`}>
+              <div className="detail-role">{m.role}</div>
+              <pre className="detail-code">{m.content}</pre>
+            </div>
+          ))
+        )}
         <div className="detail-actions">
           <button type="button" className="detail-close" onClick={onClose}>
             Закрыть
@@ -119,8 +151,8 @@ export default function StepsLog({
   onStart,
 }: StepsLogProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
-  /** Шаг, для которого открыт диалог «Детализация» (запрос в LLM). */
-  const [detail, setDetail] = useState<StepLogEntry | null>(null);
+  /** Шаг + тип детализации, для которого открыт диалог (запрос/ответ LLM). */
+  const [detail, setDetail] = useState<{ step: StepLogEntry; mode: 'request' | 'response' } | null>(null);
 
   // Автопрокрутка к последнему шагу
   useEffect(() => {
@@ -163,12 +195,12 @@ export default function StepsLog({
             s.kind === 'system' ? (
               <SystemRow key={s.id} step={s} />
             ) : (
-              <StepLine key={s.id} step={s} onDetail={setDetail} />
+              <StepLine key={s.id} step={s} onDetail={(step, mode) => setDetail({ step, mode })} />
             ),
           )
         )}
       </div>
-      {detail ? <DetailModal step={detail} onClose={() => setDetail(null)} /> : null}
+      {detail ? <DetailModal step={detail.step} mode={detail.mode} onClose={() => setDetail(null)} /> : null}
     </section>
   );
 }
