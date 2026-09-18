@@ -245,13 +245,23 @@ class TaskStateStore(private val jdbc: JdbcTemplate) {
      * Воркфлоу Day-14: переход на следующий линейный этап ([advanceTo]); сбрасывает
      * [awaitConfirmation] (подтверждение получено) и паузу. Текущий шаг/ожидаемое
      * действие сохраняются — новый этап сам опишет их инструментом task_state.
-     * Возвращает обновлённое состояние; null — строки нет или сбой БД.
+     * Переход валидируется [canTransition] (строго линейный конвейер: откат назад и
+     * «перепрыгивание» запрещены); при недопустимом переходе — fail-open (null).
+     * Возвращает обновлённое состояние; null — строки нет, недопустимый переход или
+     * сбой БД.
      */
     fun advance(
         sessionId: String,
         newStage: String,
     ): TaskState? {
         val e = get(sessionId) ?: return null
+        if (!canTransition(e.stage, newStage)) {
+            log.warn(
+                "TaskState.advance({}) — недопустимый переход {} → {} (fail-open: null)",
+                sessionId, e.stage, newStage,
+            )
+            return null
+        }
         return upsert(
             sessionId,
             newStage,
@@ -337,15 +347,17 @@ class TaskStateStore(private val jdbc: JdbcTemplate) {
         val STAGES: Set<String> = setOf(STAGE_PLANNING, STAGE_EXECUTION, STAGE_VALIDATION, STAGE_DONE)
 
         /**
-         * Разрешённые переходы (единый источник истины FSM):
-         * planning → execution/done; execution → validation/planning;
-         * validation → done/execution; done → planning/execution.
+         * Разрешённые переходы (единый источник истины FSM) — СТРОГО ЛИНЕЙНЫЙ конвейер
+         * Day-15: planning → execution → validation → done. Откаты назад (на любой этап)
+         * запрещены; done — терминальный (переходов в новые этапы нет — новая задача
+         * начинается заново с planning). Обновление того же этапа всегда допустимо
+         * (см. [canTransition], `from == to`).
          */
         private val ALLOWED_TRANSITIONS: Map<String, Set<String>> = mapOf(
-            STAGE_PLANNING to setOf(STAGE_EXECUTION, STAGE_DONE),
-            STAGE_EXECUTION to setOf(STAGE_VALIDATION, STAGE_PLANNING),
-            STAGE_VALIDATION to setOf(STAGE_DONE, STAGE_EXECUTION),
-            STAGE_DONE to setOf(STAGE_PLANNING, STAGE_EXECUTION),
+            STAGE_PLANNING to setOf(STAGE_EXECUTION),
+            STAGE_EXECUTION to setOf(STAGE_VALIDATION),
+            STAGE_VALIDATION to setOf(STAGE_DONE),
+            STAGE_DONE to emptySet(),
         )
 
         const val TEXT_MAX_LENGTH = 2000
@@ -366,6 +378,32 @@ class TaskStateStore(private val jdbc: JdbcTemplate) {
 
         /** Разрешённые ЦЕЛЕВЫЕ этапы из from (без самого from) — для текста ошибки. */
         fun allowedTargets(from: String): Set<String> = ALLOWED_TRANSITIONS[from] ?: emptySet()
+
+        /**
+         * Человекочитаемая ошибка недопустимого перехода from → to (для ToolResult и 400):
+         * перечисляет допустимые целевые этапы из from; для терминального done — «переходов
+         * нет». Обновление того же этапа допустимо всегда.
+         */
+        fun transitionErrorMessage(from: String, to: String): String {
+            val targets = allowedTargets(from).sorted()
+            return if (targets.isEmpty()) {
+                "Недопустимый переход \"$from\" → \"$to\". Этап \"$from\" терминальный — задача выполнена, " +
+                    "переходов в новые этапы нет. Для новой задачи начните с этапа \"$STAGE_PLANNING\"."
+            } else {
+                "Недопустимый переход \"$from\" → \"$to\". Из этапа \"$from\" разрешено: " +
+                    targets.joinToString(" | ") +
+                    "; тот же этап \"$from\" можно обновить в любой момент."
+            }
+        }
+
+        /**
+         * Человекочитаемая ошибка «первого состояния»: задача ВСЕГДА начинается с этапа
+         * [STAGE_PLANNING] — нельзя стартовать с execution/validation/done (День-15).
+         */
+        fun firstStageErrorMessage(stage: String): String =
+            "Недопустимый старт: задача начинается с этапа \"$STAGE_PLANNING\", а не \"$stage\". " +
+                "Сначала обозначь план (этап planning), затем execution → validation → done. " +
+                "Допустимые этапы: ${STAGES.sorted().joinToString(" | ")}."
 
         /**
          * Следующий этап ЛИНЕЙНОГО воркфлоу DAY-14 для /continue (planning → execution →

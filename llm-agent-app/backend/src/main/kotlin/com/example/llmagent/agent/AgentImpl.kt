@@ -671,7 +671,20 @@ class AgentImpl(
                         }
                         // Память агент НЕ пишет: рабочая память и долговременная память —
                         // ТОЛЬКО пользователь (REST/UI); tool-результаты просто уходят модели.
-                        messages.add(LlmMessage("tool", result.result, toolCallId = tc.id))
+                        // День-15: если task_state вернул ОШИБКУ (недопустимый переход) — кладём в
+                        // контекст не голый текст ошибки, а блокирующую директиву: переход НЕ
+                        // выполнен, состояние не изменилось, заявлять успех нельзя. Так модель не
+                        // «перепрыгивает» строгий линейный FSM и честно передаёт пользователю ошибку.
+                        val llmToolMessage = if (name == TaskStateTool.TOOL_NAME && result.isError) {
+                            "[ОШИБКА ИНСТРУМЕНТА task_state — переход НЕ выполнен, состояние задачи не изменилось]\n" +
+                                result.result + "\n\n" +
+                                "Передай пользователю текст ошибки выше ДОСЛОВНО. НЕ утверждай, что переход " +
+                                "выполнен, этап изменён или задача закрыта. Объясни, какой переход допустим " +
+                                "для текущего этапа и что нужно сделать, чтобы его выполнить."
+                        } else {
+                            result.result
+                        }
+                        messages.add(LlmMessage("tool", llmToolMessage, toolCallId = tc.id))
                     }
 
                     // AUTO-воркфлоу: модель завершила этап и инструментом task_state перешла
@@ -869,13 +882,14 @@ class AgentImpl(
             )
         }
         val existing = store.get(sessionId)
+        // День-15: задача ВСЕГДА начинается с этапа planning — нельзя стартовать с
+        // execution/validation/done (первое состояние жёстко фиксировано). Даже если
+        // строка ещё нет (existing == null), недопустимый первый этап — ошибка.
+        if (existing == null && stage != TaskStateStore.STAGE_PLANNING) {
+            return ToolResult(TaskStateStore.firstStageErrorMessage(stage), true)
+        }
         if (existing != null && existing.stage != stage && !TaskStateStore.canTransition(existing.stage, stage)) {
-            return ToolResult(
-                "Недопустимый переход \"${existing.stage}\" → \"$stage\". Из этапа \"${existing.stage}\" разрешено: " +
-                    TaskStateStore.allowedTargets(existing.stage).sorted().joinToString(" | ") +
-                    "; тот же этап \"${existing.stage}\" можно обновить в любой момент.",
-                true,
-            )
+            return ToolResult(TaskStateStore.transitionErrorMessage(existing.stage, stage), true)
         }
         val currentStep = (args["current_step"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
         val expectedAction = (args["expected_action"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
@@ -923,6 +937,11 @@ class AgentImpl(
         val stageReq = workflowStageRequirement(state.stage)
         if (stageReq.isNotEmpty()) lines += stageReq
         lines += "После значимых продвижений обновляй состояние инструментом task_state (этап, текущий шаг, ожидаемое действие)."
+        lines +=
+            "ВАЖНО: если инструмент task_state вернул ошибку (переход недопустим / состояние не сохранено) — " +
+                "переход НЕ выполнен, состояние задачи осталось прежним. Не утверждай, что этап изменён, " +
+                "задача выполнена или закрыта. Передай пользователю текст " +
+                "ошибки ДОСЛОВНО и объясни, какой переход допустим для текущего этапа и что нужно сделать."
         return "=== СОСТОЯНИЕ ЗАДАЧИ ===\n" + lines.joinToString("\n")
     }
 
@@ -934,17 +953,27 @@ class AgentImpl(
      */
     private fun buildWorkflowDirective(stage: String, mode: String): String {
         val label = workflowStageLabel(stage)
+        // Общее правило для обоих режимов: строго линейный конвейер и честность при ошибке.
+        val strictFlowRule =
+            "Переходы СТРОГО ЛИНЕЙНЫЕ, перепрыгивание этапов и откат назад запрещены: " +
+                "планирование → выполнение → проверка → готово; к этапу «готово» можно перейти " +
+                "только после пройденной проверки (validation). " +
+                "Если инструмент task_state вернул ошибку (переход недопустим) — переход НЕ выполнен, " +
+                "задача не изменена: НЕ заявляй успех/закрытие/смену этапа, а сообщи пользователю текст " +
+                "ошибки ДОСЛОВНО и объясни, какой переход допустим."
         return if (mode == WorkflowSettings.MODE_AUTO) {
             "=== ВОРКФЛОУ (авто) ===\n" +
                 "Проходи все этапы подряд: планирование → выполнение → проверка → готово. " +
                 "Каждый этап завершай, обновляя состояние задачи инструментом task_state, и переходи к следующему. " +
                 "Пользователь подтверждения не ждёт — работай на результат.\n\n" +
+                "$strictFlowRule\n\n" +
                 workflowStageRequirement(stage)
         } else {
             "=== ВОРКФЛОУ (вручную) ===\n" +
                 "Ты работаешь по шагам. Сейчас этап «$label» ($stage). " +
                 "Выполни ТОЛЬКО этот этап и дай результат как финальный ответ. " +
                 "Не переходи к следующему этапу — дождись подтверждения пользователя.\n\n" +
+                "$strictFlowRule\n\n" +
                 workflowStageRequirement(stage)
         }
     }

@@ -146,6 +146,72 @@ class AgentTaskStateTest {
     }
 
     @Test
+    fun `first state must be planning`() {
+        val store = newStore("at-first.db")
+        val llm = FakeToolCallLlmClient(
+            listOf(
+                // Задача ещё не начата, модель сразу просит execution — первый этап обязан быть planning.
+                MockPlan.ToolCall("task_state", """{"stage":"execution"}"""),
+                // Модель корректируется на планирование.
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
+                MockPlan.Text("Составлю план"),
+            ),
+        )
+
+        val events = run(llm, store, "at-first", "Сделай задачу")
+
+        val finished = events.filterIsInstance<ToolCallFinished>()
+        assertEquals(2, finished.size, "первый execution — ошибка, затем planning — успех")
+        assertEquals("error", finished[0].status)
+        assertTrue("planning" in finished[0].result, "ошибка должна указывать, что старт — с этапа planning")
+        assertEquals("success", finished[1].status)
+        assertEquals("planning", store.get("at-first")!!.stage)
+    }
+
+    @Test
+    fun `planning to done rejected - cannot finish without execution and validation`() {
+        val store = newStore("at-done.db")
+        val llm = FakeToolCallLlmClient(
+            listOf(
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
+                // planning → done ЗАПРЕЩЁН: нельзя завершить, пропустив execution и validation.
+                MockPlan.ToolCall("task_state", """{"stage":"done"}"""),
+                MockPlan.Text("Нужно пройти выполнение и проверку"),
+            ),
+        )
+
+        val events = run(llm, store, "at-done", "Сделай задачу")
+
+        val finished = events.filterIsInstance<ToolCallFinished>()
+        assertEquals("error", finished[1].status)
+        assertTrue("Недопустимый переход" in finished[1].result)
+        assertTrue("execution" in finished[1].result, "из planning разрешён следующий этап execution")
+        assertEquals("planning", store.get("at-done")!!.stage, "состояние осталось на planning")
+    }
+
+    @Test
+    fun `rollback from execution to planning is rejected`() {
+        val store = newStore("at-rollback.db")
+        val llm = FakeToolCallLlmClient(
+            listOf(
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
+                MockPlan.ToolCall("task_state", """{"stage":"execution"}"""),
+                // откат назад execution → planning ЗАПРЕЩЁН.
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
+                MockPlan.Text("Продолжу выполнение"),
+            ),
+        )
+
+        val events = run(llm, store, "at-rollback", "Сделай задачу")
+
+        val finished = events.filterIsInstance<ToolCallFinished>()
+        assertEquals("error", finished[2].status)
+        assertTrue("Недопустимый переход" in finished[2].result)
+        assertTrue("validation" in finished[2].result, "из execution разрешён следующий этап validation")
+        assertEquals("execution", store.get("at-rollback")!!.stage, "состояние не должно откатиться назад")
+    }
+
+    @Test
     fun `missing stage argument returns tool error without touching store`() {
         val store = newStore("at-noargs.db")
         val llm = FakeToolCallLlmClient(
@@ -298,9 +364,11 @@ class AgentTaskStateTest {
     fun `auto workflow does not pause and agent walks all stages`() {
         val store = newStore("aw-auto.db")
         val wf = workflowSettings(true, WorkflowSettings.MODE_AUTO)
-        // Авто: агент сам проходит этапы через инструмент task_state и завершает на done
+        // Авто: агент сам проходит этапы через инструмент task_state и завершает на done.
+        // Первый вызов — задать НАЧАЛЬНЫЙ этап planning (задача не может стартовать иначе).
         val llm = FakeToolCallLlmClient(
             listOf(
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
                 MockPlan.ToolCall("task_state", """{"stage":"execution","current_step":"реализую план"}"""),
                 MockPlan.ToolCall("task_state", """{"stage":"validation","current_step":"проверяю результат"}"""),
                 MockPlan.ToolCall("task_state", """{"stage":"done"}"""),
@@ -330,6 +398,7 @@ class AgentTaskStateTest {
         val wf = workflowSettings(true, WorkflowSettings.MODE_AUTO)
         val llm = FakeToolCallLlmClient(
             listOf(
+                MockPlan.ToolCall("task_state", """{"stage":"planning"}"""),
                 MockPlan.ToolCall("task_state", """{"stage":"execution","current_step":"реализую"}"""),
                 MockPlan.Text("Задача выполнена"),
             ),
@@ -355,6 +424,11 @@ class AgentTaskStateTest {
         // Модель на каждом этапе даёт повествование (ContentDelta) и в том же ответе
         // переходит дальше инструментом task_state — как в реальном игре с моделью.
         val script = listOf(
+            // Первый вызов — задать начальный этап planning (задача не может стартовать иначе).
+            listOf(
+                LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c0", "task_state", """{"stage":"planning"}"""))),
+                LlmEvent.Finished("tool_calls"),
+            ),
             listOf(
                 LlmEvent.ContentDelta("План: три шага"),
                 LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c1", "task_state", """{"stage":"execution"}"""))),
@@ -405,6 +479,11 @@ class AgentTaskStateTest {
         // Модель на каждом этапе даёт повествование и в том же ответе переходит дальше
         // инструментом task_state — как в реальном игре с моделью.
         val script = listOf(
+            // Первый вызов — задать начальный этап planning (задача не может стартовать иначе).
+            listOf(
+                LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c0", "task_state", """{"stage":"planning"}"""))),
+                LlmEvent.Finished("tool_calls"),
+            ),
             listOf(
                 LlmEvent.ContentDelta("План: три шага"),
                 LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c1", "task_state", """{"stage":"execution"}"""))),
@@ -470,6 +549,11 @@ class AgentTaskStateTest {
         // Пауза легла в БД после проверки в топе цикла, поэтому остановить должен
         // повторный check (см. AgentImpl: после LLM-ответа, до обработки task_state).
         val script = listOf(
+            // Первый вызов — задать начальный этап planning.
+            listOf(
+                LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c0", "task_state", """{"stage":"planning"}"""))),
+                LlmEvent.Finished("tool_calls"),
+            ),
             listOf(
                 LlmEvent.ContentDelta("План: три шага"),
                 LlmEvent.ToolCallsComplete(listOf(LlmToolCall(0, "c1", "task_state", """{"stage":"execution"}"""))),
@@ -490,8 +574,9 @@ class AgentTaskStateTest {
                 settings: LlmSettings,
             ): Flux<LlmEvent> {
                 val call = idx.getAndIncrement()
-                // Пользователь ставит паузу, ПОКА модель генерирует ответ на этап выполнения.
-                if (call == 1) store.setPaused("aw-mid", true)
+                // Пользователь ставит паузу, ПОКА модель генерирует ответ на этап выполнения
+                // (переход execution → validation, 3-й вызов LLM).
+                if (call == 2) store.setPaused("aw-mid", true)
                 return Flux.fromIterable(script[minOf(call, script.size - 1)])
             }
         }

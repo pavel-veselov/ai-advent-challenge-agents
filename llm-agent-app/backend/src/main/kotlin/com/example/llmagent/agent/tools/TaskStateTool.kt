@@ -36,9 +36,9 @@ class TaskStateTool : Tool {
             "Аргументы JSON: {\"stage\": \"planning|execution|validation|done\" (обязательно), " +
             "\"current_step\": \"...\" (опционально), \"expected_action\": \"...\" (опционально)}. " +
             "Вызывай после значимых продвижений: смена этапа, уточнение текущего шага или " +
-            "ожидаемого действия. Переходы ограничены: planning→execution|done, " +
-            "execution→validation|planning, validation→done|execution; тот же этап можно " +
-            "обновить в любой момент."
+            "ожидаемого действия. Переходы СТРОГО ЛИНЕЙНЫЕ — перепрыгивать этап и откатываться " +
+            "назад нельзя: planning→execution, execution→validation, validation→done; done — " +
+            "терминальный (дальше переходов нет); тот же этап можно обновить в любой момент."
 
     override val parameters: JsonNode = run {
         val root: ObjectNode = JsonNodeFactory.instance.objectNode()

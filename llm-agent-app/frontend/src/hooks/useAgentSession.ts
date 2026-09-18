@@ -1868,6 +1868,37 @@ export function useAgentSession(): AgentSession {
     };
   }, [pushSystemEvent]);
 
+  // Автовосстановление: если сервис был недоступен при загрузке страницы (например,
+  // бэк кратковременно перезапускался), периодически опрашиваем /api/llm-settings и
+  // снимаем блокировку кнопок (backendStopped → false), как только бэк снова отвечает.
+  // Это позволяет разблокировать UI без ручного клика «Старт сервиса».
+  useEffect(() => {
+    if (!backendStopped || backendStarting) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const tryOnce = async () => {
+      try {
+        const s = await fetchLlmSettings();
+        if (cancelled) return;
+        setBackendStopped(false);
+        setRunSettings(s);
+        runSettingsRef.current = s;
+        pushSystemEvent('Бэк-сервис доступен — интерфейс разблокирован');
+        refreshGlobalStats();
+        syncSessions();
+        if (interval) clearInterval(interval);
+      } catch {
+        /* сервис ещё недоступен — пробуем на следующем тике */
+      }
+    };
+    interval = setInterval(tryOnce, 3000);
+    void tryOnce();
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [backendStopped, backendStarting, pushSystemEvent, refreshGlobalStats, syncSessions]);
+
   // Настройки воркфлоу Day-14 глобальны (эндпоинт не требует sessionId): загружаем при
   // монтировании — переключатель «Следовать воркфлоу» и режим в правой колонке.
   useEffect(() => {

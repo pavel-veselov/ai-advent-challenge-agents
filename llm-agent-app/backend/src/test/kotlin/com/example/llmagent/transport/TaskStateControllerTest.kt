@@ -110,14 +110,36 @@ class TaskStateControllerTest {
     }
 
     @Test
-    fun `PUT valid transition chain accepted`() {
+    fun `PUT valid linear transition chain accepted`() {
         put("ts-chain", """{"stage":"planning"}""")
         put("ts-chain", """{"stage":"execution"}""")
         put("ts-chain", """{"stage":"validation"}""")
         val node = put("ts-chain", """{"stage":"done"}""")!!
         assertEquals("done", node["stage"].asText())
-        // done → planning тоже разрешён (новая задача)
-        assertEquals("planning", put("ts-chain", """{"stage":"planning"}""")!!["stage"].asText())
+    }
+
+    @Test
+    fun `PUT planning to done rejected with 400`() {
+        put("ts-chain-done", """{"stage":"planning"}""")
+        // планирование → done запрещено: нельзя завершить, пропустив execution и validation.
+        put("ts-chain-done", """{"stage":"done"}""", expectStatus = 400)
+        assertEquals("planning", get("ts-chain-done")["stage"].asText(), "состояние осталось на planning")
+    }
+
+    @Test
+    fun `PUT first stage must be planning - execution rejected`() {
+        put("ts-first-exec", """{"stage":"execution"}""", expectStatus = 400)
+        // состояние не создалось
+        client.get().uri("/api/sessions/ts-first-exec/task-state")
+            .exchange()
+            .expectStatus().isNotFound
+    }
+
+    @Test
+    fun `PUT first stage must be planning - ok`() {
+        val node = put("ts-first-planning", """{"stage":"planning"}""")!!
+        assertEquals("planning", node["stage"].asText())
+        assertEquals("planning", get("ts-first-planning")["stage"].asText())
     }
 
     @Test
@@ -145,6 +167,7 @@ class TaskStateControllerTest {
 
     @Test
     fun `PUT paused only toggles pause and preserves stage and steps`() {
+        put("ts-pause", """{"stage":"planning"}""")
         put("ts-pause", """{"stage":"execution","currentStep":"шаг","expectedAction":"действие"}""")
         val paused = put("ts-pause", """{"paused":true}""")!!
         assertTrue(paused["paused"].asBoolean())
@@ -169,6 +192,7 @@ class TaskStateControllerTest {
 
     @Test
     fun `PUT stage without paused preserves pause flag`() {
+        put("ts-preserve", """{"stage":"planning"}""")
         put("ts-preserve", """{"stage":"execution"}""")
         put("ts-preserve", """{"paused":true}""")
         // смена этапа без поля paused — пауза сохраняется (её меняет только пользователь)
@@ -231,6 +255,9 @@ class TaskStateControllerTest {
 
     @Test
     fun `POST continue at done returns 400`() {
+        put("ts-cont-done", """{"stage":"planning"}""")
+        put("ts-cont-done", """{"stage":"execution"}""")
+        put("ts-cont-done", """{"stage":"validation"}""")
         put("ts-cont-done", """{"stage":"done"}""")
         client.post().uri("/api/sessions/ts-cont-done/task-state/continue")
             .exchange()
@@ -262,7 +289,9 @@ class TaskStateControllerTest {
 
     @Test
     fun `POST continue when paused resumes current stage instead of advancing`() {
-        put("ts-resume", """{"stage":"validation","plan":"план","implementation":"реализация"}""")
+        put("ts-resume", """{"stage":"planning","plan":"план"}""")
+        put("ts-resume", """{"stage":"execution","implementation":"реализация"}""")
+        put("ts-resume", """{"stage":"validation"}""")
         put("ts-resume", """{"paused":true}""")
         val before = get("ts-resume")
         assertEquals("validation", before["stage"].asText())

@@ -115,31 +115,31 @@ class TaskStateStoreTest {
     }
 
     @Test
-    fun `canTransition follows the FSM graph and allows same-stage updates`() {
-        // Разрешённые переходы по графу FSM
+    fun `canTransition follows the strict linear graph and allows same-stage updates`() {
+        // Строго линейный конвейер Day-15: только вперёд, без откатов, done терминальный.
         assertTrue(TaskStateStore.canTransition("planning", "execution"))
-        assertTrue(TaskStateStore.canTransition("planning", "done"))
         assertTrue(TaskStateStore.canTransition("execution", "validation"))
-        assertTrue(TaskStateStore.canTransition("execution", "planning"))
         assertTrue(TaskStateStore.canTransition("validation", "done"))
-        assertTrue(TaskStateStore.canTransition("validation", "execution"))
-        assertTrue(TaskStateStore.canTransition("done", "planning"))
-        assertTrue(TaskStateStore.canTransition("done", "execution"))
         // Тот же этап — обновлять можно всегда
         for (s in TaskStateStore.STAGES) assertTrue(TaskStateStore.canTransition(s, s))
-        // Запрещённые переходы
+        // Запрещённые переходы: откат назад, перепрыгивание этапа, переход из done
         assertFalse(TaskStateStore.canTransition("planning", "validation"))
+        assertFalse(TaskStateStore.canTransition("planning", "done"))
+        assertFalse(TaskStateStore.canTransition("execution", "planning"))
         assertFalse(TaskStateStore.canTransition("execution", "done"))
+        assertFalse(TaskStateStore.canTransition("validation", "execution"))
         assertFalse(TaskStateStore.canTransition("validation", "planning"))
+        assertFalse(TaskStateStore.canTransition("done", "planning"))
+        assertFalse(TaskStateStore.canTransition("done", "execution"))
         assertFalse(TaskStateStore.canTransition("done", "validation"))
     }
 
     @Test
-    fun `allowedTargets lists only other reachable stages`() {
-        assertEquals(setOf("execution", "done"), TaskStateStore.allowedTargets("planning"))
-        assertEquals(setOf("validation", "planning"), TaskStateStore.allowedTargets("execution"))
-        assertEquals(setOf("done", "execution"), TaskStateStore.allowedTargets("validation"))
-        assertEquals(setOf("planning", "execution"), TaskStateStore.allowedTargets("done"))
+    fun `allowedTargets lists only the reachable next stage`() {
+        assertEquals(setOf("execution"), TaskStateStore.allowedTargets("planning"))
+        assertEquals(setOf("validation"), TaskStateStore.allowedTargets("execution"))
+        assertEquals(setOf("done"), TaskStateStore.allowedTargets("validation"))
+        assertTrue(TaskStateStore.allowedTargets("done").isEmpty(), "done терминальный — целевых этапов нет")
         assertTrue(TaskStateStore.allowedTargets("invalid").isEmpty())
     }
 
@@ -214,6 +214,48 @@ class TaskStateStoreTest {
     fun `advance returns null when state missing`() {
         val store = newStore("ts-wf-advance-missing.db")
         assertNull(store.advance("ghost", TaskStateStore.STAGE_EXECUTION))
+    }
+
+    @Test
+    fun `advance rejects invalid transition and returns null`() {
+        val store = newStore("ts-wf-advance-invalid.db")
+        store.setStageOutput("w9", TaskStateStore.STAGE_PLANNING, "план", await = true)
+        // перепрыгивание: planning → validation (мимо execution) запрещено
+        assertNull(store.advance("w9", TaskStateStore.STAGE_VALIDATION), "перепрыгивание этапа должно быть отклонено")
+        // planning → done без выполнения/проверки запрещено
+        assertNull(store.advance("w9", TaskStateStore.STAGE_DONE))
+        // линейный переход planning → execution допустим
+        assertEquals(TaskStateStore.STAGE_EXECUTION, store.advance("w9", TaskStateStore.STAGE_EXECUTION)!!.stage)
+        // откат назад: execution → planning запрещён
+        assertNull(store.advance("w9", TaskStateStore.STAGE_PLANNING), "откат на planning должен быть отклонён")
+        // execution → validation допустим
+        assertEquals(TaskStateStore.STAGE_VALIDATION, store.advance("w9", TaskStateStore.STAGE_VALIDATION)!!.stage)
+        // validation → done допустим
+        assertEquals(TaskStateStore.STAGE_DONE, store.advance("w9", TaskStateStore.STAGE_DONE)!!.stage)
+        // терминальный done: переход в новые этапы запрещён
+        assertNull(store.advance("w9", TaskStateStore.STAGE_PLANNING), "из done новых переходов нет")
+        assertNull(store.advance("w9", TaskStateStore.STAGE_EXECUTION))
+    }
+
+    @Test
+    fun `transitionErrorMessage reports forbidden and allowed targets`() {
+        val msg = TaskStateStore.transitionErrorMessage("planning", "validation")
+        assertTrue("Недопустимый переход" in msg)
+        assertTrue("\"planning\"" in msg)
+        assertTrue("\"validation\"" in msg)
+        assertTrue("execution" in msg, "должен перечислять допустимый целевой этап")
+        // терминальный done
+        val doneMsg = TaskStateStore.transitionErrorMessage("done", "planning")
+        assertTrue("терминальный" in doneMsg)
+        assertTrue("planning" in doneMsg)
+    }
+
+    @Test
+    fun `firstStageErrorMessage explains that task starts at planning`() {
+        val msg = TaskStateStore.firstStageErrorMessage("execution")
+        assertTrue("planning" in msg, "должен указывать этап старта")
+        assertTrue("\"execution\"" in msg)
+        assertTrue("execution" in msg && "validation" in msg && "done" in msg, "должен перечислять цепочку")
     }
 
     @Test

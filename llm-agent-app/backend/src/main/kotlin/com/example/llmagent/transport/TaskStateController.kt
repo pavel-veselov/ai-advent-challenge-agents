@@ -89,13 +89,13 @@ class TaskStateController(
                     "Неизвестный этап \"$stage\". Допустимые этапы: ${TaskStateStore.STAGES.sorted().joinToString(" | ")}",
                 )
             }
+            // День-15: задача ВСЕГДА начинается с этапа planning — первый stage не может
+            // быть execution/validation/done (строгий линейный конвейер).
+            if (existing == null && stage != TaskStateStore.STAGE_PLANNING) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, TaskStateStore.firstStageErrorMessage(stage))
+            }
             if (existing != null && existing.stage != stage && !TaskStateStore.canTransition(existing.stage, stage)) {
-                throw ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Недопустимый переход \"${existing.stage}\" → \"$stage\". Из этапа \"${existing.stage}\" разрешено: " +
-                        TaskStateStore.allowedTargets(existing.stage).sorted().joinToString(" | ") +
-                        "; тот же этап \"${existing.stage}\" можно обновить в любой момент.",
-                )
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, TaskStateStore.transitionErrorMessage(existing.stage, stage))
             }
             val currentStep = textField(body["currentStep"], "currentStep")
             val expectedAction = textField(body["expectedAction"], "expectedAction")
