@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { createProfile, deleteProfile, setActiveProfile, updateProfile } from '../api';
 import type { Profile } from '../types';
+import CollapsibleSection from './CollapsibleSection';
 
 /** Служебное значение опции «Добавить профиль…» в выпадающем списке. */
 const ADD_OPTION = '__add__';
@@ -142,11 +143,12 @@ export default function ProfileSelect({
   };
 
   return (
-    <section className="profile-select-block">
-      <header className="llm-settings-block-header">
-        <h2>Профиль пользователя</h2>
-        <span className="llm-hint">передаётся в запросах к LLM</span>
-      </header>
+    <CollapsibleSection
+      className="profile-select-block"
+      title="Профиль пользователя"
+      icon="☉"
+      hint="передаётся в запросах к LLM"
+    >
       <div className="profile-row">
         <select
           className="profile-select"
@@ -279,6 +281,6 @@ export default function ProfileSelect({
           </form>
         </div>
       ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }

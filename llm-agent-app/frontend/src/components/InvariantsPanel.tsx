@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { addInvariant, deleteInvariant } from '../api';
 import type { Invariant } from '../types';
+import CollapsibleSection from './CollapsibleSection';
 
 /** Предустановленные категории инвариантов (селект формы добавления) + «без категории» и «другая». */
 const CATEGORY_PRESETS = ['Архитектура', 'Техническое решение', 'Стек', 'Бизнес-правило'] as const;
@@ -90,12 +91,12 @@ export default function InvariantsPanel({
   };
 
   return (
-    <section className="llm-settings-block">
-      <header className="llm-settings-block-header">
-        <h2>Инварианты</h2>
-        <span className="llm-hint">обязательные ограничения ассистента</span>
-      </header>
-
+    <CollapsibleSection
+      className="llm-settings-block"
+      title="Инварианты"
+      icon="⚖"
+      hint="обязательные ограничения ассистента"
+    >
       {/* Список инвариантов проекта (категория + текст + удаление). */}
       {invariants === null ? (
         <div className="mem-hint">Загрузка…</div>
@@ -188,6 +189,6 @@ export default function InvariantsPanel({
           {busy ? 'Сохранение…' : 'Добавить'}
         </button>
       </form>
-    </section>
+    </CollapsibleSection>
   );
 }

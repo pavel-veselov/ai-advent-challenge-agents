@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { WorkflowMode, WorkflowSettings as WorkflowSettingsType } from '../types';
+import CollapsibleSection from './CollapsibleSection';
 
 type SaveStatus = 'idle' | 'saving' | 'error';
 
@@ -73,16 +74,20 @@ export default function WorkflowSettings({
   };
 
   return (
-    <section className="workflow-settings-block">
-      <header className="llm-settings-block-header">
-        <h2>Воркфлоу</h2>
-        <span className="llm-hint">планирование → выполнение → проверка → готово</span>
-        {saveState !== 'idle' ? (
+    <CollapsibleSection
+      className="workflow-settings-block"
+      title="Воркфлоу"
+      icon="⚛"
+      hint="планирование → выполнение → проверка → готово"
+      // Индикатор сохранения живёт в шапке — виден и в свёрнутом состоянии.
+      headerExtra={
+        saveState !== 'idle' ? (
           <span className={`llm-save-state is-${saveState}`} role="status" aria-live="polite">
             {saveState === 'saving' ? 'сохранение…' : 'ошибка'}
           </span>
-        ) : null}
-      </header>
+        ) : null
+      }
+    >
 
       {/* Рубильник воркфлоу: общий с thinking переключатель .llm-switch + подпись с описанием */}
       <div className="workflow-main-row">
@@ -138,6 +143,6 @@ export default function WorkflowSettings({
           не удалось применить воркфлоу: {error}
         </div>
       ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }

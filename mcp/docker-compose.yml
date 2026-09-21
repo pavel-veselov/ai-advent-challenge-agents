@@ -1,0 +1,18 @@
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: papkin-helper:0.1.0
+    container_name: papkin-helper
+    ports:
+      # host:container — клиент обращается к <host>:8787/mcp (Streamable HTTP)
+      - "8787:8080"
+    environment:
+      # Порт внутри контейнера (Spring Boot). Снаружи проброшен как 8787.
+      SERVER_PORT: "8080"
+      # Имя/версия сервера, видимые MCP-клиенту. Spring relaxed binding: env
+      # SPRING_AI_MCP_SERVER_NAME -> свойство spring.ai.mcp.server.name.
+      SPRING_AI_MCP_SERVER_NAME: "papkin-helper"
+      SPRING_AI_MCP_SERVER_VERSION: "0.1.0"
+    restart: unless-stopped

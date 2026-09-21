@@ -113,9 +113,10 @@ body::after {
   background-clip: padding-box;
 }
 
-/* Каркас: горизонтальная строка на всю высоту окна — слева рабочая зона (проект-бар ·
-   вкладки · чат), правее разделитель и общая колонка «настройки LLM + лог шагов»,
-   которая тянется от верхнего края окна до нижнего, а не только до панелей. */
+/* Каркас: горизонтальная строка на всю высоту окна — слева колонка панелей (профиль ·
+   воркфлоу · настройки LLM · инварианты · MCP), правее рабочая зона (проект-бар ·
+   вкладки · чат), крайняя правая — колонка лога шагов, тянущаяся от верхнего края
+   окна до нижнего. */
 .app-shell {
   display: flex;
   flex-direction: row;
@@ -123,8 +124,8 @@ body::after {
   background: var(--seam);
 }
 
-/* Левая рабочая зона app-shell: проект-бар, вкладки, чат. Правее — разделитель и общая
-   колонка «настройки LLM + лог шагов» (sidebar-column), тянущаяся на всю высоту окна. */
+/* Рабочая зона app-shell (центр): проект-бар, вкладки, чат. Левее — колонка панелей
+   (sidebar-column), правее — колонка лога шагов (steps-column) на всю высоту окна. */
 .app-left {
   flex: 1;
   display: flex;
@@ -134,7 +135,7 @@ body::after {
   background: var(--seam);
 }
 
-/* Основная область: чат (настройки LLM переехали в правую колонку app-shell) */
+/* Основная область: чат (настройки — в левой колонке панелей app-shell) */
 .app-main {
   flex: 1;
   display: grid;
@@ -511,7 +512,8 @@ body::after {
   min-width: 0;
 }
 
-/* Трафаретная гравировка шапок панелей + красная звезда */
+/* Трафаретная гравировка шапок панелей. Красная звезда-псевдоэлемент удалена:
+   роль маркера в меню выполняют янтарные глифы .collapsible-icon (☉ ⚙ ⚛ ⚖ ☢). */
 .panel-header,
 .steps-header,
 .llm-settings-block-header {
@@ -519,17 +521,6 @@ body::after {
   letter-spacing: 0.16em;
   color: var(--text);
   text-shadow: 0 1px 0 rgba(5, 12, 8, 0.7);
-}
-
-.panel-header::before,
-.steps-header::before,
-.llm-settings-block-header::before {
-  content: '';
-  flex: none;
-  width: 11px;
-  height: 11px;
-  background: var(--svg-star) center / contain no-repeat;
-  filter: drop-shadow(0 0 3px rgba(200, 64, 47, 0.55));
 }
 
 .panel-header {
@@ -1001,10 +992,9 @@ button:disabled {
   font: inherit;
 }
 
-/* Правая колонка «настройки LLM + лог шагов»: прямой ребёнок app-shell, поэтому тянется
-   на всю высоту окна. Фиксированную ширину задаёт App (inline style, меняется
-   разделителем .steps-resizer), поэтому flex: none. Внутри — настройки сверху,
-   лог снизу (занимает остаток высоты). */
+/* Левая колонка панелей (профиль · воркфлоу · настройки LLM · инварианты · MCP): прямой
+   ребёнок app-shell, поэтому тянется на всю высоту окна. Ширину задаёт App (inline style,
+   константа PANELS_WIDTH), поэтому flex: none. */
 .sidebar-column {
   flex: none;
   display: flex;
@@ -1016,20 +1006,33 @@ button:disabled {
   background: var(--seam);
 }
 
-/* Блок настроек LLM: приборная доска с янтарной световой линией сверху. В правой колонке
-   живёт над логом шагов: разворачивается максимум до 65% высоты колонки и скроллится сам
-   (overflow-y), поэтому лог снизу остаётся видимым при любой высоте настроек. */
-.llm-settings-block {
+/* Правая колонка лога шагов (steps-panel): бывшее место sidebar-column — прямой ребёнок
+   app-shell, поэтому тянется на всю высоту окна. Ширину задаёт App (inline style, меняется
+   разделителем .steps-resizer), поэтому flex: none; лог занимает колонку целиком. */
+.steps-column {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--seam);
+}
+
+/* Приборная карточка панели — общий каркас всех пяти блоков левой колонки (профиль ·
+   настройки LLM · воркфлоу · инварианты · MCP): тёмная эмаль, чертёжная сетка, стальная
+   окантовка, янтарная световая линия сверху. Один расшаренный каркас — панели выглядят
+   единообразно, различается только содержимое. */
+.llm-settings-block,
+.profile-select-block,
+.workflow-settings-block {
   flex-shrink: 0;
   min-height: 0;
-  max-height: 65%;
-  overflow-y: auto;
   background-color: #20332a;
   background-image:
     repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
     repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
   border: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
   box-shadow:
     inset 0 3px 0 -1px rgba(232, 181, 74, 0.28),
     inset 1px 1px 0 rgba(242, 232, 213, 0.06),
@@ -1040,12 +1043,36 @@ button:disabled {
   gap: 10px;
 }
 
+/* Настройки LLM: содержимое самое высокое в колонке — блок разворачивается максимум до
+   65% высоты колонки и скроллится сам (overflow-y), остальные панели остаются доступны. */
+.llm-settings-block {
+  max-height: 65%;
+  overflow-y: auto;
+}
+
+/* Шапка блока — двухэтажная (колонка): сверху строка заголовка (кнопка + headerExtra),
+   под ней подсказка-описание панели. */
 .llm-settings-block-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Строка заголовка: кнопка-тайтл слева, headerExtra (индикатор сохранения) прижат
+   вправо своим margin-left: auto внутри этой строки */
+.llm-settings-block-header-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  font-weight: 700;
+}
+
+/* Подсказка-описание — второй строкой шапки, под кнопкой заголовка; отступ слева
+   23px = 15px иконка + 8px gap — текст выравнивается по тексту заголовка */
+.llm-settings-block-header > .llm-hint {
+  padding-left: 23px;
 }
 
 .llm-settings-block-header h2 {
@@ -1054,7 +1081,8 @@ button:disabled {
 }
 
 /* Заголовок блока — кнопка (по названию секции): клик сворачивает/разворачивает весь блок.
-   По умолчанию блок свёрнут; подсказки и индикатор сохранения остаются в шапке всегда. */
+   По умолчанию блок свёрнут. Шапка двухэтажная: сверху строка-заголовок (кнопка + индикатор
+   сохранения справа), под ней — подсказка-описание; оба элемента видны и в свёрнутом виде. */
 .llm-settings-toggle {
   display: inline-flex;
   align-items: center;
@@ -1070,10 +1098,31 @@ button:disabled {
   color: var(--accent);
 }
 
+/* Шеврон сворачивания ▸/▾: 15px — та же шкала глифов, что у .collapsible-icon,
+   чтобы стрелка читалась на одном уровне с приборными иконками панелей. */
 .llm-settings-chevron {
   flex: none;
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1;
+}
+
+/* Иконка блока в шапке (уникальный монохромный глиф панели, перед заголовком).
+   15px — заметно крупнее 12px заголовка: глиф читается как приборный маркер, а не
+   опечатка; toggle — inline-flex с align-items: center, глиф центрируется сам.
+   Цвет — сигнальный янтарь: отличный от кремовых названий блоков в покое, а не только
+   на ховере. Font-stack c «Segoe UI Symbol» первой (монохромные контуры всех пяти
+   кодпоинтов) резолвится ДО эмодзи-шрифта, плюс VS15 \uFE0E в DOM — цветной эмодзи
+   фолбэк невозможен ни в одном браузере. На ховере кнопки — янтарное свечение лампы. */
+.collapsible-icon {
+  flex: none;
+  font-family: 'Segoe UI Symbol', 'Arial Narrow', 'PT Sans Narrow', 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.llm-settings-toggle:hover .collapsible-icon {
+  text-shadow: var(--glow-amber);
 }
 
 /* Индикатор результата сохранения в шапке блока: точка-лампа + текст (моно 11px) */
@@ -1131,8 +1180,10 @@ button:disabled {
   }
 }
 
-/* Инлайн-ошибка сохранения (вместо alert) — в стиле error-banner */
-.llm-error-line {
+/* Инлайн-ошибка сохранения (вместо alert) — в стиле error-banner; .mem-error
+   (форма в «Инвариантах»/«MCP») — тот же вид, расшарен этим правилом */
+.llm-error-line,
+.mem-error {
   padding: 6px 9px;
   border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
   border-left: 3px solid var(--red);
@@ -1316,21 +1367,28 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Приглушённая подсказка под переключателем: моно 11px */
-.llm-hint {
+/* Приглушённая подсказка панелей колонки: .llm-hint (шапки/тело LLM, воркфлоу) и
+   .mem-hint (память, инварианты, MCP) — один общий вид: моно 11px, приглушённый крем.
+   text-transform: none — в шапке блока .panel-header наследует UPPERCASE, подсказка
+   обязана оставаться строчной (как .llm-save-state и подсказки в теле панелей). */
+.llm-hint,
+.mem-hint {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.4;
   letter-spacing: 0.2px;
+  text-transform: none;
   color: color-mix(in srgb, var(--text-dim) 75%, transparent);
 }
 
-/* Метка привязки блока к активной сессии в шапке: моно, тёплый акцент */
+/* Метка привязки блока к активной сессии в шапке: моно, тёплый акцент.
+   text-transform: none — по той же причине, что у .llm-hint (шапка капсит детей). */
 .llm-session-cue {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.4;
   letter-spacing: 0.2px;
+  text-transform: none;
   color: var(--accent);
   opacity: 0.85;
 }
@@ -2114,14 +2172,8 @@ button:disabled {
   background: linear-gradient(90deg, color-mix(in srgb, var(--steel) 80%, transparent), transparent);
 }
 
-/* Подсказка-пояснение (краткосрочная память): моно 11px, приглушённая — как .llm-hint */
-.mem-hint {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  letter-spacing: 0.2px;
-  color: color-mix(in srgb, var(--text-dim) 75%, transparent);
-}
+/* Подсказка-пояснение (краткосрочная память): .mem-hint расшарен с .llm-hint —
+   общее правило объявлено выше (line-height выровнен: 1.4, была копипаст-дрейф 1.5). */
 
 /* Пока GET /memory не ответил: тонкая строка вместо данных */
 .mem-loading {
@@ -2235,7 +2287,13 @@ button:disabled {
   white-space: nowrap;
 }
 
-.mem-entry-del {
+/* Круглая кнопка 18×18 — общий идиом строк списков в панелях колонки: долговременная
+   память (.mem-entry-del), профиль (.profile-edit ✎ / .profile-del ✕), инварианты и
+   MCP (.mem-entry-del). Прозрачная окантовка, приглушённый глиф; цвет появляется на
+   ховере (янтарь у редактирования, красный у удаления). */
+.mem-entry-del,
+.profile-edit,
+.profile-del {
   flex: none;
   width: 18px;
   height: 18px;
@@ -2248,9 +2306,15 @@ button:disabled {
   transition: border-color 0.15s, color 0.15s;
 }
 
-.mem-entry-del:hover:not(:disabled) {
+.mem-entry-del:hover:not(:disabled),
+.profile-del:hover:not(:disabled) {
   border-color: var(--red);
   color: var(--red-bright);
+}
+
+.profile-edit:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .mem-entry-value {
@@ -2300,21 +2364,31 @@ button:disabled {
   background: color-mix(in srgb, var(--steel) 22%, transparent);
 }
 
-/* Кнопки панели: пилюли в стиле .btn-reset; «Сохранить» — с янтарным намёком */
-.mem-btn {
+/* Кнопки-пилюли действий внутри приборных панелей колонки — один общий вид для
+   «Добавить» (Инварианты/MCP, .mem-btn), «Очистить долговременную память»
+   (.project-btn внутри llm-блока) и «Сохранить/Отмена» диалога профиля (.project-btn
+   внутри profile-блока): пилюля 11px, полупрозрачный фон, моно-шрифт (общий язык
+   контролов панелей — как inputs/selects), янтарный ховер. Потомок .project-btn —
+   чтобы не трогать крупные кнопки сайдбара проектов/диалогов. */
+.mem-btn,
+.llm-settings-block .project-btn,
+.profile-select-block .project-btn {
   flex: none;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 3px 10px;
+  font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0;
   text-transform: none;
   color: var(--text-dim);
   background: color-mix(in srgb, var(--panel) 70%, transparent);
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
-.mem-btn:hover:not(:disabled) {
+.mem-btn:hover:not(:disabled),
+.llm-settings-block .project-btn:hover:not(:disabled),
+.profile-select-block .project-btn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -2348,10 +2422,14 @@ button:disabled {
   width: 118px;
 }
 
-/* Поля ввода: утопленное «стекло» приборов, как .llm-num / .branch-select */
-.mem-input {
-  flex: 1;
-  min-width: 0;
+/* Поля ввода панелей колонки (MCP/Инварианты — .mem-input; Профиль — .profile-input,
+   .profile-textarea, .profile-select): утопленное «стекло» приборов, как .llm-num /
+   .branch-select. Один расшаренный каркас (отступы, рамка, фокус, шрифт) — контролы
+   всех пяти панелей выглядят единообразно; раскладочные отличия — правилами ниже. */
+.mem-input,
+.profile-input,
+.profile-textarea,
+.profile-select {
   padding: 4px 8px;
   background: var(--field);
   border: 1px solid var(--border);
@@ -2363,127 +2441,60 @@ button:disabled {
   transition: border-color 0.15s;
 }
 
-.mem-input::placeholder {
+.mem-input::placeholder,
+.profile-input::placeholder,
+.profile-textarea::placeholder {
   color: color-mix(in srgb, var(--text-dim) 60%, transparent);
 }
 
-.mem-input:focus {
+.mem-input:focus,
+.profile-input:focus,
+.profile-textarea:focus,
+.profile-select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Раскладка поверх общего каркаса: строковые поля тянутся по ширине строки/формы */
+.mem-input,
+.profile-select {
+  flex: 1;
+  min-width: 0;
 }
 
 .mem-form-type {
   cursor: pointer;
 }
 
-.mem-form-type option {
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-/* Инлайн-ошибка API формы (вместо alert) — как .llm-error-line */
-.mem-error {
-  padding: 6px 9px;
-  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
-  border-left: 3px solid var(--red);
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  color: var(--red-bright);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-/* ===== Профиль пользователя: выпадашка над настройками LLM + диалог создания (day14) ===== */
-
-/* Блок «Профиль пользователя» — приборная панель в стиле .llm-settings-block */
-.profile-select-block {
-  flex-shrink: 0;
-  background-color: #20332a;
-  background-image:
-    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
-    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
-  border: 1px solid var(--border);
-  box-shadow:
-    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28),
-    inset 1px 1px 0 rgba(242, 232, 213, 0.06),
-    inset -1px -1px 0 rgba(5, 12, 8, 0.45);
-  padding: 10px 14px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* Выпадашка + кнопка удаления активного профиля */
-.profile-row {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-}
-
-.profile-select {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 8px;
-  background: var(--field);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-
-.profile-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
+.mem-form-type option,
 .profile-select option {
   background: var(--panel-2);
   color: var(--text);
 }
 
-/* Компактная кнопка удаления активного профиля (в стиле project-chip-del) */
-.profile-del {
-  flex: none;
-  padding: 4px 10px;
-  background: var(--field);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--red-bright);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.4;
+/* Инлайн-ошибка API формы (вместо alert) — .mem-error расшарен с .llm-error-line
+   (общее правило объявлено выше). */
+
+/* ===== Профиль пользователя: выпадашка + диалог создания (day14) ===== */
+/* Каркас секции — общий .profile-select-block из группы приборных карточек (см. выше). */
+
+/* Выпадашка + кнопки ✎/✕ активного профиля */
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Каркас .profile-select расшарен с .mem-input (общее правило «Поля ввода панелей
+   колонки» выше); здесь — только курсор-указатель выпадающего списка */
+.profile-select {
   cursor: pointer;
-  transition: border-color 0.15s;
 }
 
-.profile-del:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--red) 60%, var(--border));
-}
-
-/* Компактная кнопка редактирования активного профиля (стиль .profile-del, но акцентный) */
-.profile-edit {
-  flex: none;
-  padding: 4px 10px;
-  background: var(--field);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.4;
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-
-.profile-edit:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-}
+/* Кнопки ✎/✕ строки профиля — расшаренный идиом круга .mem-entry-del (база и ховеры
+   объявлены в разделе «Память» выше). Раньше были прямоугольными кнопками с фоном —
+   выбивались из семейства панелей. */
 
 /* Диалог «Новый профиль»: затемнение поверх всего приложения + панель */
 .profile-modal-backdrop {
@@ -2538,31 +2549,8 @@ button:disabled {
   color: var(--text-dim);
 }
 
-/* Поля ввода профиля: утопленное «стекло» приборов, как .mem-input */
-.profile-input,
-.profile-textarea {
-  padding: 4px 8px;
-  background: var(--field);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  box-shadow: inset 0 1px 3px rgba(5, 12, 8, 0.5);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text);
-  transition: border-color 0.15s;
-}
-
-.profile-input::placeholder,
-.profile-textarea::placeholder {
-  color: color-mix(in srgb, var(--text-dim) 60%, transparent);
-}
-
-.profile-input:focus,
-.profile-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
+/* Каркас .profile-input/.profile-textarea расшарен с .mem-input (общее правило
+   «Поля ввода панелей колонки» выше); здесь — только поведение textarea */
 .profile-textarea {
   resize: vertical;
   min-height: 44px;
@@ -2741,25 +2729,7 @@ button:disabled {
 }
 
 /* ----- Воркфлоу Day-14: настройки (рубильник + режим) и подтверждение перехода ----- */
-
-/* Приборная карточка настроек воркфлоу — в стиле блока профиля/настроек LLM
-   (тёмная эмаль, чертёжная сетка, янтарная световая линия сверху). */
-.workflow-settings-block {
-  flex-shrink: 0;
-  background-color: #20332a;
-  background-image:
-    repeating-linear-gradient(0deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px),
-    repeating-linear-gradient(90deg, rgba(156, 192, 105, 0.035) 0 1px, transparent 1px 28px);
-  border: 1px solid var(--border);
-  box-shadow:
-    inset 0 3px 0 -1px rgba(232, 181, 74, 0.28),
-    inset 1px 1px 0 rgba(242, 232, 213, 0.06),
-    inset -1px -1px 0 rgba(5, 12, 8, 0.45);
-  padding: 10px 14px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* Каркас секции — общий .workflow-settings-block из группы приборных карточек (см. выше). */
 
 /* Строка рубильника: подпись + описание слева, общий с thinking .llm-switch справа. */
 .workflow-main-row {
@@ -2853,4 +2823,112 @@ button:disabled {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+}
+
+/* ===== MCP-серверы (day16): список серверов + переключатель активности + инструменты ===== */
+
+/* Список серверов: колонка карточек — как .mem-entries (внутренний скролл при
+   переполнении: max-height 200px + overflow-y, раньше список рос неограниченно). */
+.mcp-servers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+/* Карточка одного сервера — вставка на панели, ровно как .mem-entry: плотная заливка
+   --panel-2 и сплошная окантовка --border (были полупрозрачные mix-версии — карточки
+   «Инвариантов» и «MCP» отличались весом), flex-shrink: 0 — карточки не сминаются,
+   список скроллится, как у .mem-entries. */
+.mcp-server {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* Шапка карточки: переключатель + состояние + имя + кнопка удаления. */
+.mcp-server-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Имя сервера: крем, усечение с многоточием при нехватке ширины колонки. */
+.mcp-server-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Url сервера: моно-гравировка, переносится — адреса бывают длинными. */
+.mcp-server-url {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
+}
+
+/* Подпись состояния у переключателя: зелёный «Активен» / серый «Неактивен». */
+.mcp-state {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+}
+
+.mcp-state.is-on {
+  color: var(--green);
+  text-shadow: 0 0 6px rgba(156, 192, 105, 0.35);
+}
+
+/* Переключатель активности — тот же прибор, что .llm-switch, но сигнальный
+   зелёный вместо янтарного: «норма/подключено» на пультовой. */
+.mcp-switch.is-on {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 16%, var(--field));
+}
+
+.mcp-switch.is-on .llm-switch-knob {
+  background: var(--green);
+  box-shadow: var(--glow-green);
+}
+
+/* Обнаруженные инструменты: обёртка + чипы-таблички (name; описание в title). */
+.mcp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mcp-tool-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--green);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }

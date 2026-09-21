@@ -1,0 +1,73 @@
+# «Папкин помощник» — MCP-сервер на Kotlin
+
+**Papkin Helper** — Model Context Protocol (MCP) сервер на **Kotlin + Spring Boot 3 (WebFlux)** поверх
+официального Java SDK для MCP. Работает по транспорту **Streamable HTTP**, поэтому может быть развёрнут в
+Docker и доступен как обычный HTTP-хост в интернете (не stdio).
+
+Сервер обращается к реальным публичным API без ключей.
+
+## Инструменты
+
+| Инструмент | Описание | Источник |
+|---|---|---|
+| `get_exchange_rate` | Курс валюты к рублю; без кода — все курсы за день | ЦБ РФ (`cbr-xml-daily.ru`) |
+| `get_weather` | Текущая погода в городе (температура, влажность, ветер, код погоды) | Open-Meteo (+ геокодер) |
+| `get_top_news` | Топ новостей (заголовки + ссылки) | Hacker News (Firebase API) |
+
+## Требования
+
+- JDK 21
+- Gradle 8.14.3 (wrapper в репозитории)
+- Docker (для контейнерного запуска)
+- Исходящий доступ в интернет (инструменты ходят во внешние API)
+
+## Локальный запуск
+
+```bash
+cd mcp
+./gradlew bootRun            # Linux/macOS
+gradlew.bat bootRun          # Windows
+```
+
+Сервер слушает `http://localhost:8080`; Streamable HTTP endpoint — `http://localhost:8080/mcp`.
+
+## Docker
+
+```bash
+docker build -t papkin-helper:0.1.0 .
+docker run -d -p 8787:8080 --name papkin-helper papkin-helper:0.1.0
+```
+
+или через compose:
+
+```bash
+docker compose up -d --build
+```
+
+## Публичный доступ в интернет
+
+Контейнер пробрасывает порт: хост `8787` → контейнер `8080`. Чтобы MCP-клиент (Claude, opencode и
+др.) подключился, `http://<публичный-хост>:8787/mcp` должен быть доступен извне:
+
+1. Откройте порт `8787` в файрволе хостинга/облака, настройте security group.
+2. (Опционально) поднимите reverse-proxy (nginx/Caddy) и выдайте TLS по `https://<домен>/mcp`.
+3. В настройках MCP-клиента укажите URL: `http://<публичный-хост>:8787/mcp` или `https://<домен>/mcp`.
+4. Убедитесь, что у контейнера есть исходящий доступ в интернет — иначе инструменты вернут ошибку.
+
+## Пример вызова инструмента
+
+```bash
+curl -X POST http://localhost:8787/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_exchange_rate","arguments":{"code":"USD"}},"id":1}'
+```
+
+## Конфигурация (переменные окружения)
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `SERVER_PORT` | `8080` | Порт сервера |
+| `SPRING_AI_MCP_SERVER_NAME` | `papkin-helper` | Имя сервера (видно клиентам) |
+| `SPRING_AI_MCP_SERVER_VERSION` | `0.1.0` | Версия сервера |
+
+Публичные ключи/токены не требуются — все три источника бесплатные и открытые.

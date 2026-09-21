@@ -10,6 +10,8 @@
   HistoryResponse,
   Invariant,
   InvariantRequest,
+  McpServer,
+  McpServerRequest,
   MemoryState,
   Profile,
   ProfileRequest,
@@ -632,4 +634,68 @@ export async function updateWorkflowSettings(patch: WorkflowSettings): Promise<W
   });
   if (!res.ok) throw new Error(`workflow-settings PUT http ${res.status}`);
   return (await res.json()) as WorkflowSettings;
+}
+
+// ---- MCP-серверы (GET/POST /api/mcp-servers, PUT .../{id}/enabled, DELETE /{id}) ----
+
+/**
+ * Разбирает JSON-ошибку бэкенда вида {error: "..."} и возвращает Error с её текстом;
+ * тело не JSON / error пустой — fallback «<prefix> http <status>» (идиома остальных
+ * функций файла, но с текстом бэкенда, который нужно показывать пользователю).
+ */
+async function raiseMcpError(res: Response, prefix: string): Promise<never> {
+  let message = `${prefix} http ${res.status}`;
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === 'string' && body.error !== '') message = body.error;
+  } catch {
+    /* тело не разбирается — остаётся fallback */
+  }
+  throw new Error(message);
+}
+
+/** Каталог MCP-серверов: GET /api/mcp-servers. */
+export async function fetchMcpServers(): Promise<McpServer[]> {
+  const res = await fetch('/api/mcp-servers');
+  if (!res.ok) await raiseMcpError(res, 'mcp-servers');
+  return (await res.json()) as McpServer[];
+}
+
+/**
+ * Добавление MCP-сервера: POST /api/mcp-servers {name, url}.
+ * Создаётся неактивным (enabled=false); 400 — пустые поля, 409 — имя занято.
+ */
+export async function createMcpServer(body: McpServerRequest): Promise<McpServer> {
+  const res = await fetch('/api/mcp-servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'mcp-servers POST');
+  return (await res.json()) as McpServer;
+}
+
+/**
+ * Активация/деактивация MCP-сервера: PUT /api/mcp-servers/{id}/enabled {enabled}.
+ * При активации бэкенд подключается к серверу и возвращает обновлённую запись
+ * (tools заполнены); 404 — сервер не найден.
+ */
+export async function setMcpServerEnabled(id: number, enabled: boolean): Promise<McpServer> {
+  const res = await fetch(`/api/mcp-servers/${id}/enabled`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) await raiseMcpError(res, 'mcp-servers enabled PUT');
+  return (await res.json()) as McpServer;
+}
+
+/**
+ * Удаление MCP-сервера: DELETE /api/mcp-servers/{id} → {deleted: true};
+ * 404 — сервер не найден.
+ */
+export async function deleteMcpServer(id: number): Promise<DeleteResponse> {
+  const res = await fetch(`/api/mcp-servers/${id}`, { method: 'DELETE' });
+  if (!res.ok) await raiseMcpError(res, 'mcp-servers DELETE');
+  return (await res.json()) as DeleteResponse;
 }

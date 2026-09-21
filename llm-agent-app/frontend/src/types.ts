@@ -470,6 +470,34 @@ export interface ActiveProfileResponse {
   activeProfileId: number | null;
 }
 
+// ---- MCP-серверы (GET/POST /api/mcp-servers, PUT/DELETE /api/mcp-servers/{id}) ----
+
+/** Инструмент, обнаруженный на MCP-сервере (заполняется при активации). */
+export interface McpTool {
+  name: string;
+  description: string;
+}
+
+/**
+ * MCP-сервер: внешний источник инструментов агента. Создаётся неактивным
+ * (enabled=false); при активации бэкенд подключается и заполняет tools.
+ */
+export interface McpServer {
+  id: number;
+  name: string;
+  url: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  tools: McpTool[];
+}
+
+/** Тело POST /api/mcp-servers. */
+export interface McpServerRequest {
+  name: string;
+  url: string;
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */

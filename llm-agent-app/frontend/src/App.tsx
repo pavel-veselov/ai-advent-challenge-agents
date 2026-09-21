@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import ChatPanel from './components/ChatPanel';
 import InvariantsPanel from './components/InvariantsPanel';
 import LlmSettings from './components/LlmSettings';
+import McpServersPanel from './components/McpServersPanel';
 import ProfileSelect from './components/ProfileSelect';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
@@ -10,8 +11,10 @@ import { fetchActiveProfile, fetchInvariants, fetchProfiles, fetchProjectMemory 
 import { useAgentSession } from './hooks/useAgentSession';
 import type { Invariant, MemoryState, Profile } from './types';
 
-/** Дефолтная ширина правой колонки — настройки LLM + лог шагов (px). */
+/** Дефолтная ширина правой колонки — лог шагов (steps-panel) (px). */
 const DEFAULT_STEPS_WIDTH = 320;
+/** Ширина левой колонки панелей (профиль · настройки LLM · воркфлоу · инварианты · MCP) — px. */
+const PANELS_WIDTH = 320;
 /** Минимальная ширина правой колонки (px). */
 const MIN_STEPS_WIDTH = 200;
 /** Максимум ширины колонки — доля ширины окна (чтобы чат не схлопывался). */
@@ -226,10 +229,54 @@ export default function App() {
     return sid == null ? Promise.resolve() : session.saveLongTerm(sid, note);
   };
 
-  // Правая колонка «настройки LLM + лог шагов» + разделитель: общая разметка правой зоны
-  // app-shell. Колонка — прямой ребёнок app-shell, поэтому тянется на всю высоту окна
-  // (а не только до панелей) и видна всегда — даже до создания проекта/сессии.
-  const sidebarArea = (
+  // Левая колонка панелей (sidebar-column): профиль, настройки LLM, воркфлоу, инварианты,
+  // MCP-серверы. Стоит левее рабочей зоны (проект-бар → вкладки → чат); ширина фиксированная
+  // (PANELS_WIDTH). Лог шагов переехал в правую колонку (stepsArea) — на бывшее место
+  // sidebar-column.
+  const panelsArea = (
+    <div className="sidebar-column" style={{ width: PANELS_WIDTH }}>
+      {/* Профиль пользователя (персонализация агента) — глобальный. */}
+      <ProfileSelect
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onRefresh={handleProfilesRefresh}
+      />
+      <LlmSettings
+        settings={session.runSettings}
+        sessionId={session.sessionId}
+        disabled={llmSettingsDisabled}
+        strategy={session.strategy}
+        windowSize={session.windowSize}
+        facts={session.facts}
+        onChangeStrategy={(patch) => {
+          if (session.sessionId == null) return Promise.resolve();
+          return session.changeContextStrategy(session.sessionId, patch);
+        }}
+        memory={memory}
+        onMemoryCleared={handleMemoryCleared}
+      />
+      {/* Воркфлоу Day-14: переключатель «Следовать воркфлоу» + режим ручное/авто. */}
+      <WorkflowSettings
+        settings={session.workflowSettings}
+        onChange={session.changeWorkflowSettings}
+        disabled={tabDisabled}
+      />
+      {/* Инварианты Day-14: обязательные ограничения ассистента проекта (рядом с памятью). */}
+      <InvariantsPanel
+        projectId={activeProjectId ?? 0}
+        invariants={invariants}
+        refreshInvariants={handleInvariantsRefreshed}
+        disabled={tabDisabled || activeProjectId == null}
+      />
+      {/* MCP-серверы Day-16: управление внешними источниками инструментов (глобально). */}
+      <McpServersPanel disabled={tabDisabled} />
+    </div>
+  );
+
+  // Правая колонка лога шагов (steps-panel, «Этапы задачи» + журнал агента): бывшее место
+  // sidebar-column. Разделитель + колонка — прямые дети app-shell: колонка тянется на всю
+  // высоту окна и видна всегда — даже до создания проекта/сессии.
+  const stepsArea = (
     <>
       <div
         className={`steps-resizer${resizing ? ' active' : ''}`}
@@ -239,41 +286,8 @@ export default function App() {
         onPointerUp={handleResizeEnd}
         onPointerCancel={handleResizeEnd}
       />
-      <div className="sidebar-column" style={{ width: stepsWidth }}>
-        {/* Профиль пользователя (персонализация агента) — над настройками LLM, глобальный. */}
-        <ProfileSelect
-          profiles={profiles}
-          activeProfileId={activeProfileId}
-          onRefresh={handleProfilesRefresh}
-        />
-        {/* Воркфлоу Day-14: переключатель «Следовать воркфлоу» + режим ручное/авто. */}
-        <WorkflowSettings
-          settings={session.workflowSettings}
-          onChange={session.changeWorkflowSettings}
-          disabled={tabDisabled}
-        />
-        <LlmSettings
-          settings={session.runSettings}
-          sessionId={session.sessionId}
-          disabled={llmSettingsDisabled}
-          strategy={session.strategy}
-          windowSize={session.windowSize}
-          facts={session.facts}
-          onChangeStrategy={(patch) => {
-            if (session.sessionId == null) return Promise.resolve();
-            return session.changeContextStrategy(session.sessionId, patch);
-          }}
-          memory={memory}
-          onMemoryCleared={handleMemoryCleared}
-        />
-        {/* Инварианты Day-14: обязательные ограничения ассистента проекта (рядом с памятью). */}
-        <InvariantsPanel
-          projectId={activeProjectId ?? 0}
-          invariants={invariants}
-          refreshInvariants={handleInvariantsRefreshed}
-          disabled={tabDisabled || activeProjectId == null}
-        />
-        {/* Состояние задачи (Day-13 FSM) переехало в панель чата — полоса над журналом. */}
+      <div className="steps-column" style={{ width: stepsWidth }}>
+        {/* Состояние задачи (Day-13 FSM) живёт в панели чата — полоса над журналом. */}
         <StepsLog
           steps={session.steps}
           backendStopped={session.backendStopped}
@@ -286,10 +300,11 @@ export default function App() {
   );
 
   // Нет ни одного проекта — весь экран отдаём под «Создать проект» (чистый старт day12:
-  // старые сессии без проекта удалены, чат начинается с проекта). Колонка лога видна и здесь.
+  // старые сессии без проекта удалены, чат начинается с проекта). Колонки панелей и лога видны и здесь.
   if (session.projects.length === 0) {
     return (
       <div className="app-shell" ref={appShellRef}>
+        {panelsArea}
         <div className="app-left">
           <div className="app-main">
             <div className="app-empty">
@@ -325,15 +340,17 @@ export default function App() {
             </div>
           </div>
         </div>
-        {sidebarArea}
+        {stepsArea}
       </div>
     );
   }
 
   return (
     <div className="app-shell" ref={appShellRef}>
-      {/* Левая рабочая зона (app-left): проект-бар → вкладки → чат. Правее — общая колонка
-          настроек LLM и лога шагов (sidebarArea), тянущаяся на всю высоту окна. */}
+      {/* Слева — колонка панелей (panelsArea: sidebar-column). Правее — рабочая зона (app-left):
+          проект-бар → вкладки → чат. Крайняя правая — колонка лога шагов (stepsArea), бывшее
+          место sidebar-column: тянется на всю высоту окна, ширина меняется разделителем. */}
+      {panelsArea}
       <div className="app-left">
       {/* Уровень 1: проекты. Активный подсвечен, ✕ удаляет (каскад на бэкенде). */}
       <div className="project-bar">
@@ -421,8 +438,8 @@ export default function App() {
           onNew={session.newSession}
         />
       ) : null}
-      {/* Уровень 3: рабочая область — слева чат + настройки LLM (app-main), справа колонка
-          лога шагов (уровень app-shell: видна всегда, ширина меняется разделителем). */}
+      {/* Уровень 3: рабочая область — чат (app-main); левее — колонка панелей, правее —
+          колонка лога шагов (обе — уровни app-shell: видны всегда). */}
       <div className="app-main">
           {session.activeProjectId == null || session.tabs.length === 0 ? (
             <div className="app-empty">
@@ -480,10 +497,10 @@ export default function App() {
               workflowEnabled={workflowEnabled}
               showPause={showPause}
             />
-          )}
+           )}
         </div>
       </div>
-      {sidebarArea}
+      {stepsArea}
     </div>
   );
 }

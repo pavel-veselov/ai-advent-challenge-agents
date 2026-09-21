@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: papkin-helper
+  ai:
+    mcp:
+      server:
+        protocol: STREAMABLE
+        name: papkin-helper
+        version: 0.1.0
+        # ASYNC -> @McpTool методы могут возвращать Mono/Flux (реактивно, без блокировки event loop).
+        type: ASYNC
+        streamable-http:
+          # Путь Streamable HTTP endpoint, по которому подключается MCP-клиент.
+          mcp-endpoint: /mcp

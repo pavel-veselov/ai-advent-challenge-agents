@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import CollapsibleSection from './CollapsibleSection';
 import {
   clearLongTermMemory,
   fetchSessionCompression,
@@ -217,12 +218,6 @@ export default function LlmSettings({
   /** Индикатор очистки долговременной памяти (saving/saved/error; saved гаснет через 2 с). */
   const [clearState, setClearState] = useState<SaveState>({ status: 'idle', message: null });
   const clearTimerRef = useRef<number | null>(null);
-  /**
-   * Видимость всего блока «Настройки LLM»: по умолчанию свёрнут (запрос пользователя).
-   * Раскрывается/сворачивается только вручную кликом по заголовку; при смене сессии
-   * состояние не меняется — блок остаётся в текущем положении.
-   */
-  const [open, setOpen] = useState(false);
 
   // Последние известные глобальные настройки (для показа без сессии и отката в глобальном режиме).
   const settingsRef = useRef<RunSettings | null>(settings);
@@ -697,52 +692,43 @@ export default function LlmSettings({
   };
 
   return (
-    <section className="llm-settings-block">
-      <header className="llm-settings-block-header">
-        <h2>
-          <button
-            type="button"
-            className="llm-settings-toggle"
-            aria-expanded={open}
-            aria-controls="llm-settings-content"
-            title={open ? 'Свернуть блок' : 'Развернуть блок'}
-            onClick={() => setOpen((v) => !v)}
-          >
-            Настройки LLM
-            <span className="llm-settings-chevron" aria-hidden="true">
-              {open ? '−' : '+'}
-            </span>
-          </button>
-        </h2>
-        {sessionId != null ? (
-          <span
-            className="llm-session-cue"
-            title="Все поля применяются к активной сессии — у каждой сессии свой набор"
-          >
-            сессия ···{sessionId.slice(-8)}
-          </span>
-        ) : (
-          <span className="llm-hint">применяется к активной сессии</span>
-        )}
-        {saveState.status !== 'idle' ? (
-          <span
-            className={`llm-save-state is-${saveState.status}`}
-            role="status"
-            aria-live="polite"
-          >
-            {saveState.status === 'saving'
-              ? 'сохранение…'
-              : saveState.status === 'saved'
-                ? 'сохранено'
-                : 'ошибка'}
-          </span>
-        ) : null}
-      </header>
-
-      {/* Тело блока: монтируется только в развёрнутом состоянии (по умолчанию блок свёрнут),
-          поэтому скрытые поля не попадают в табуляцию — как в механике бывших групп. */}
-      {open ? (
+    // Общая механика сворачивания колонки (CollapsibleSection): по умолчанию блок свёрнут,
+    // шеврон ▸/▾ и иконка — как у остальных панелей; подсказка сессии и индикатор
+    // сохранения живут в headerExtra — видны и в свёрнутом состоянии.
+    <CollapsibleSection
+      className="llm-settings-block"
+      title="Настройки LLM"
+      icon="⚙"
+      hint={sessionId != null ? undefined : 'применяется к активной сессии'}
+      headerExtra={
         <>
+          {sessionId != null ? (
+            <span
+              className="llm-session-cue"
+              title="Все поля применяются к активной сессии — у каждой сессии свой набор"
+            >
+              сессия ···{sessionId.slice(-8)}
+            </span>
+          ) : null}
+          {saveState.status !== 'idle' ? (
+            <span
+              className={`llm-save-state is-${saveState.status}`}
+              role="status"
+              aria-live="polite"
+            >
+              {saveState.status === 'saving'
+                ? 'сохранение…'
+                : saveState.status === 'saved'
+                  ? 'сохранено'
+                  : 'ошибка'}
+            </span>
+          ) : null}
+        </>
+      }
+    >
+      {/* Тело блока монтируется только в развёрнутом состоянии (по умолчанию блок свёрнут),
+          поэтому скрытые поля не попадают в табуляцию. */}
+      <>
           {saveState.status === 'error' ? (
             <div className="llm-error-line" role="alert">
               не удалось сохранить{saveState.message != null ? `: ${saveState.message}` : ''}
@@ -1055,15 +1041,14 @@ export default function LlmSettings({
             ) : null}
           </Group>
         </>
-      ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }
 
 /**
  * Статическая группа настроек: uppercase-заголовок-строка + содержимое.
- * Сворачивания внутри группы больше нет (запрос пользователя) — весь блок
- * «Настройки LLM» сворачивается целиком через заголовок секции.
+ * Сворачивания внутри группы нет (запрос пользователя) — весь блок «Настройки LLM»
+ * сворачивается целиком через шапку секции (CollapsibleSection).
  */
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (

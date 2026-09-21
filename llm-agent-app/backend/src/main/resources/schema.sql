@@ -222,3 +222,13 @@ CREATE TABLE IF NOT EXISTS task_state (
     await_confirmation INTEGER NOT NULL DEFAULT 0,
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Day 16: MCP-серверы (агент-клиент)
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    url        TEXT NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
