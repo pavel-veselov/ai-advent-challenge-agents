@@ -30,6 +30,16 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 log()  { echo "==> $*"; }
 warn() { echo "!!> $*"; }
 
+# Проба живости MCP: POST initialize.
+# ВАЖНО: GET /mcp на живом Streamable HTTP сервере отвечает 405/4xx,
+# поэтому проверять надо настоящим JSON-RPC вызовом initialize.
+probe_mcp() {
+    curl -fsS -o /dev/null -X POST "http://127.0.0.1:${PORT}/mcp" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-probe","version":"0.0.1"}}}' 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 log "[1/5] Открываю TCP-порт ${PORT} на хосте"
 # ---------------------------------------------------------------------------
@@ -63,7 +73,7 @@ docker compose -f "${COMPOSE_FILE}" up -d --build
 log "[3/5] Жду готовности сервера"
 # ---------------------------------------------------------------------------
 for i in $(seq 1 15); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/mcp" 2>/dev/null; then
+    if probe_mcp; then
         break
     fi
     sleep 2
@@ -72,8 +82,8 @@ done
 # ---------------------------------------------------------------------------
 log "[4/5] Проверяю MCP endpoint"
 # ---------------------------------------------------------------------------
-if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/mcp" 2>/dev/null; then
-    echo "    OK: сервер отвечает на http://127.0.0.1:${PORT}/mcp"
+if probe_mcp; then
+    echo "    OK: MCP initialize отвечает на http://127.0.0.1:${PORT}/mcp"
 else
     warn "/mcp не ответил. Смотри логи:"
     warn "    docker compose -f ${COMPOSE_FILE} logs -f"
