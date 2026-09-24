@@ -657,6 +657,11 @@ export interface ChatMessage {
   promptTokens?: number | null;
   /** Токены ответа ассистента (usage.outputTokens; из истории — completion_tokens). */
   completionTokens?: number | null;
+  /**
+   * Файл, созданный MCP-пайплайном в этом ответе (Day-19): фронтенд по нему рендерит
+   * кнопку «Скачать файл» в чате. Ссылка строится через downloadToolFileUrl(filename).
+   */
+  file?: { filename: string } | null;
 }
 
 /**

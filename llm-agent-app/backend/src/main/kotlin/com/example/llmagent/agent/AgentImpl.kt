@@ -610,7 +610,19 @@ class AgentImpl(
                         "Модель решила не отвечать сразу, а использовать инструмент(ы): ${toolCalls.mapNotNull { it.name }} — " +
                             "ей нужны данные для точного ответа.",
                     )
-                    messages.add(LlmMessage("assistant", text.toString().ifEmpty { null }, toolCalls = toolCalls))
+                    val assistantReply = text.toString().trim()
+                    messages.add(LlmMessage("assistant", assistantReply.ifEmpty { null }, toolCalls = toolCalls))
+                    // Day-19: сохраняем в историю КАЖДЫЙ ответ модели (не только финальный). Иначе
+                    // фронтенд после финализации перечитывает историю (сокращённую до одного ответа)
+                    // и «схлопывает» все промежуточные сообщения модели. Fail-open: сбой БД не
+                    // прерывает цикл инструментов.
+                    if (assistantReply.isNotEmpty()) {
+                        try {
+                            sessionStore.append(sessionId, "assistant", assistantReply, usage?.inputTokens, usage?.outputTokens)
+                        } catch (e: Exception) {
+                            log.warn("session={} не удалось сохранить промежуточный ответ модели: {}", sessionId, e.message)
+                        }
+                    }
                     for (tc in toolCalls) {
                         val name = tc.name ?: "unknown"
                         val idx = toolCounters[name] ?: 0
@@ -698,7 +710,8 @@ class AgentImpl(
                             val completed = lastWorkflowStage
                             val stageText = text.toString().trim()
                             if (completed != null && completed != TaskStateStore.STAGE_DONE && stageText.isNotEmpty()) {
-                                sessionStore.append(sessionId, "assistant", stageText)
+                                // Повествование этапа уже сохранено в историю (append промежуточного
+                                // ответа выше) — здесь только фиксируем результат этапа и событие UI.
                                 taskStateStore.setStageOutputKeepStage(sessionId, completed, stageText)
                                 // Надёжная граница этапа: повествование только что закоммичено
                                 // и в историю, и в результат этапа — сообщаем фронту, чтобы он

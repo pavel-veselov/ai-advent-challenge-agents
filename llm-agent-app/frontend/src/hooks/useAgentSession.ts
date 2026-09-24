@@ -124,6 +124,8 @@ interface SessionRunState {
   branches: BranchesState | null;
   /** Состояние задачи сессии (GET/PUT /task-state, событие task_state_changed); null — задача не начата. */
   taskState: TaskState | null;
+  /** Файлы, созданные MCP-пайплайном в последнем запуске (Day-19) — для кнопки скачивания. */
+  files: { filename: string }[];
 }
 
 /** Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming). */
@@ -137,6 +139,21 @@ function historyToMessages(msgs: HistoryMessage[]): ChatMessage[] {
     promptTokens: m.promptTokens ?? null,
     completionTokens: m.completionTokens ?? null,
   }));
+}
+
+/** Имя файла из результата MCP-инструмента (run_pipeline / save_to_file) или null. */
+function fileRefFromToolResult(result: string): { filename: string } | null {
+  if (!result) return null;
+  try {
+    const r: unknown = JSON.parse(result);
+    if (typeof r !== 'object' || r === null) return null;
+    const rec = r as { file?: { filename?: string }; filename?: string };
+    const f = rec.file?.filename ?? rec.filename;
+    if (typeof f === 'string' && f.trim() !== '') return { filename: f };
+  } catch {
+    /* не JSON — это не файл */
+  }
+  return null;
 }
 
 /**
@@ -426,6 +443,7 @@ export function useAgentSession(): AgentSession {
         facts: null,
         branches: null,
         taskState: null,
+        files: [],
       };
       runStateRef.current.set(sid, st);
     }
@@ -479,6 +497,8 @@ export function useAgentSession(): AgentSession {
   const applyHistoryToRunState = useCallback((sid: string, h: HistoryResponse) => {
     const st = getRunState(sid);
     st.messages = historyToMessages(h.messages);
+    // Day-19: после перечитывания истории прикрепляем к ответу файл, созданный в этом запуске.
+    attachFilesToLastAssistant(sid);
     st.tokenTotals = h.totals
       ? {
           promptTokens: h.totals.promptTokens,
@@ -1162,6 +1182,25 @@ export function useAgentSession(): AgentSession {
   };
 
   /**
+   * Прикрепляет файл, созданный MCP-пайплайном в последнем запуске, к последнему сообщению
+   * ассистента сессии — по нему фронтенд рендерит кнопку «Скачать файл» в чате. Вызывается и на
+   * живой финализации ответа, и после перечитывания истории (чтобы кнопка не пропала).
+   */
+  function attachFilesToLastAssistant(sid: string) {
+    const st = runStateRef.current.get(sid);
+    if (!st || !st.files || st.files.length === 0) return;
+    let lastIdx = -1;
+    for (let i = st.messages.length - 1; i >= 0; i--) {
+      if (st.messages[i].role === 'assistant') { lastIdx = i; break; }
+    }
+    if (lastIdx === -1) return;
+    const next = [...st.messages];
+    next[lastIdx] = { ...next[lastIdx], file: st.files[st.files.length - 1] };
+    st.messages = next;
+    if (sid === activeIdRef.current) setMessages(st.messages);
+  }
+
+  /**
    * Общий runner SSE-стрима сессии: заводит AbortController, разбирает события,
    * обновляет живое сообщение ассистента (токены/итоги/заметки сжатия), завершает
    * run. [startStream] абстрагирует эндпоинт — обычный /api/chat или /continue
@@ -1245,6 +1284,16 @@ export function useAgentSession(): AgentSession {
           } else if (e.type === 'agent_finished') {
             finalizeRun(sid);
             finalizeAssistant(sid, e.payload.finalText);
+            // Day-19: прикрепляем созданный пайплайном файл к финальному ответу (кнопка «Скачать»).
+            attachFilesToLastAssistant(sid);
+          } else if (e.type === 'tool_call_finished') {
+            // Day-19: запоминаем файл из результата пайплайна — по нему в ответе ассистента
+            // появится кнопка «Скачать файл».
+            const ref = fileRefFromToolResult(e.payload.result);
+            if (ref) {
+              const stRun = getRunState(sid);
+              stRun.files.push(ref);
+            }
           } else if (e.type === 'workflow_stage_finished') {
             // Воркфлоу (auto): БЭКЕНД только что закоммитил повествование завершённого этапа
             // (в историю и как результат этапа) — это НАДЁЖНАЯ граница этапа. Финализируем
@@ -1320,6 +1369,7 @@ export function useAgentSession(): AgentSession {
       const st = getRunState(sid);
       const assistantId = newId();
       st.assistantId = assistantId;
+      st.files = [];
       st.messages = [
         ...st.messages,
         { id: newId(), role: 'user', content: trimmed },
@@ -1365,6 +1415,7 @@ export function useAgentSession(): AgentSession {
       const st = getRunState(sid);
       const assistantId = newId();
       st.assistantId = assistantId;
+      st.files = [];
       st.messages = [...st.messages, { id: assistantId, role: 'assistant', content: '', streaming: true }];
       st.isRunning = true;
       if (st.taskState != null) {

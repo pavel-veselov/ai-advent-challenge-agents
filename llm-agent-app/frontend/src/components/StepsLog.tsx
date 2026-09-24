@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { StepLogEntry } from '../types';
-import { downloadToolFileUrl } from '../api';
 
 interface StepsLogProps {
   steps: StepLogEntry[];
@@ -40,21 +39,6 @@ function explainSystem(step: StepLogEntry): string | null {
   return null;
 }
 
-/** Имя файла из результата MCP-инструмента (save_to_file / run_pipeline) или null, если это не файл. */
-function fileFromStep(step: StepLogEntry): string | null {
-  if (!step.result) return null;
-  try {
-    const r: unknown = JSON.parse(step.result);
-    if (typeof r !== 'object' || r === null) return null;
-    const rec = r as { file?: { filename?: string }; filename?: string };
-    const f = rec.file?.filename ?? rec.filename;
-    if (typeof f === 'string' && f.trim() !== '') return f;
-  } catch {
-    /* результат не JSON — не файл */
-  }
-  return null;
-}
-
 /** Строка лога шага агента: время + текст; для LLM-шагов — ссылки «Детализация»/«Детализация ответа». */
 function StepLine({
   step,
@@ -64,21 +48,10 @@ function StepLine({
   onDetail: (step: StepLogEntry, mode: 'request' | 'response') => void;
 }) {
   const hasRequest = (step.prompt && step.prompt.length > 0) || !!step.requestBody;
-  const file = fileFromStep(step);
   return (
     <div className={`step-line status-${step.status}`}>
       <span className="step-time">{step.time}</span>
       <span className="step-line-text">{step.title}</span>
-      {file ? (
-        <a
-          className="step-detail"
-          href={downloadToolFileUrl(file)}
-          download
-          title="Скачать сохранённый файл"
-        >
-          Скачать файл
-        </a>
-      ) : null}
       {hasRequest ? (
         <button
           type="button"
