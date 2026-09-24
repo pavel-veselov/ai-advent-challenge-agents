@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import TaskStatePanel from './TaskStatePanel';
 import type { BranchesState, ChatMessage, ContextStrategy, TaskState } from '../types';
-import { downloadToolFileUrl } from '../api';
+import { downloadToolFile } from '../api';
 
 /**
  * Строка «контекст запроса: N · ответ: M» для пузыря ассистента.
@@ -267,14 +267,19 @@ export default function ChatPanel({
                     </div>
                   ) : null}
                   {m.file ? (
-                    <a
-                      className="chat-msg-file"
-                      href={downloadToolFileUrl(m.file.filename)}
-                      download
-                      title="Скачать файл, созданный пайплайном"
-                    >
-                      ⤓ Скачать файл
-                    </a>
+                    <div className="chat-msg-file-row">
+                      <button
+                        type="button"
+                        className="chat-msg-file"
+                        title="Скачать файл, созданный пайплайном"
+                        onClick={() => {
+                          const fn = m.file?.filename;
+                          if (fn) void downloadToolFile(fn).catch(() => {});
+                        }}
+                      >
+                        <span className="chat-save-icon">⤓</span> Скачать файл
+                      </button>
+                    </div>
                   ) : null}
                   {m.error ? <div className="chat-msg-error">{m.error}</div> : null}
                   {workflowBtns ? (

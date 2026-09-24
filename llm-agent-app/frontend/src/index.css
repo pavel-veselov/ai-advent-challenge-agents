@@ -1698,6 +1698,35 @@ button:disabled {
   line-height: 1;
 }
 
+/* Кнопка «Скачать файл» из MCP-пайплайна (Day-19): заметная, не «голубая» ссылка */
+.chat-msg-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-msg-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.chat-msg-file:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
 /* Статус сохранения: гаснет через 2 секунды (сброс таймером из ChatPanel) */
 .chat-save-state {
   font-size: 11px;

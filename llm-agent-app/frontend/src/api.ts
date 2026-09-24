@@ -54,6 +54,25 @@ export function downloadToolFileUrl(filename: string): string {
   return `/api/mcp/file/download?filename=${encodeURIComponent(filename)}`;
 }
 
+/**
+ * Скачивает файл, созданный MCP-пайплайном, через fetch → Blob → программный клик.
+ * Работает в браузере (в т.ч. у пользователя в интернете) независимо от заголовков
+ * ответа сервера. Ошибка (нет файла/сервер недоступен) — бросит исключение, вызывает UI.
+ */
+export async function downloadToolFile(filename: string): Promise<void> {
+  const res = await fetch(downloadToolFileUrl(filename));
+  if (!res.ok) throw new Error(`download http ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 /** Р—Р°РіСЂСѓР·РєР° РёСЃС‚РѕСЂРёРё РґРёР°Р»РѕРіР° РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РїРѕСЃР»Рµ РїРµСЂРµР·Р°РіСЂСѓР·РєРё. */
 export async function fetchHistory(sessionId: string): Promise<HistoryResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/history`);
