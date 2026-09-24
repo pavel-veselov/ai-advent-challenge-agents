@@ -581,3 +581,25 @@ agent_finished
   - `agent_finished` → `answer` success (ответ раскрывается).
   - `error` → `error-<idx>` error (сообщение раскрывается).
 - Пояснения шагов («что происходит и зачем») фронтенд генерирует сам из семантики событий выше — это презентационный слой, частью контракта не является.
+
+---
+
+## День 17/18 — Планировщик (papkin-helper)
+
+Панель «Планировщик» на фронтенде управляет задачами периодического сбора через REST-эндпоинты
+backend. Сводка доступна только вручную (кнопка в панели) — автопуша в чат нет.
+
+### API планировщика (backend)
+
+Backend — посредник между фронтендом (snake_case) и MCP papkin-helper (camelCase): на входе
+переводит snake_case (`interval_seconds`/`task_id`/`since_hours`) в camelCase аргументы инструментов
+(`intervalSeconds`/`taskId`/`sinceHours`), на выходе — рекурсивно переводит поля ответа MCP
+(`intervalSeconds`→`interval_seconds`, `latestAt`→`latest_at`, `runsCount`→`runs_count` и т.д.).
+
+| Метод | Путь | Тело / Параметры | Ответ |
+|-------|------|------------------|-------|
+| `GET` | `/api/scheduler/tasks` | — | `200` — `[{ "id": number, "name": string, "source": "weather"\|"currency"\|"news", "interval_seconds": number, "active": boolean, "last_run_at": string\|null, "runs_count": number }]`; `502` — MCP недоступен (`{ "error": string }`) |
+| `POST` | `/api/scheduler/tasks` | `{ "name": string, "source": "weather"\|"currency"\|"news", "interval_seconds": number, "params"?: object }` | `200` — `{ "id", "name", "source", "interval_seconds", "active" }`; `502`/`400` при ошибке |
+| `PATCH` | `/api/scheduler/tasks/{id}/interval` | `{ "interval_seconds": number }` | `200` — `{ "id", "interval_seconds", "last_run_at" }`; `400` — некорректный `id`; `502` |
+| `DELETE` | `/api/scheduler/tasks/{id}` | — | `200` — `{ "ok": boolean }`; `400` — некорректный `id`; `502` |
+| `POST` | `/api/scheduler/summary` | `{ "task_id"?: string, "since_hours"?: number }` | `200` — сводка: weather `{ task_id?, count, since, min, max, avg, latest }` / currency `{ count, since, latest, rates_list }` / news `{ count, since, latest_titles }` / generic `{ count, since, latest_at }`; `502` |

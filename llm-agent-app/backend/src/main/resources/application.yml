@@ -35,6 +35,8 @@ llm:
 
 agent:
   max-tool-call-iterations: ${AGENT_MAX_ITERATIONS:8}
+  scheduler:
+    tick-ms: ${AGENT_SCHEDULER_TICK_MS:15000}
 
 logging:
   level:

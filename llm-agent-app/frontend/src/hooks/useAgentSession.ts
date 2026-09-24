@@ -1992,6 +1992,36 @@ export function useAgentSession(): AgentSession {
     activeIdRef.current = activeId;
   }, [activeId]);
 
+  // Подписка на SSE активной сессии (GET /api/sessions/{id}/events): результат
+  // запланированного задания агента (событие scheduler_result) превращается в сообщение
+  // ассистента прямо в чате активной вкладки. Подписка пересоздаётся при смене активной
+  // сессии (закрытие предыдущего EventSource) и закрывается на размонтировании.
+  useEffect(() => {
+    if (activeId == null) return;
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(activeId)}/events`);
+    es.addEventListener('scheduler_result', (e) => {
+      const data = (e as MessageEvent<string>).data;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (parsed == null || typeof parsed !== 'object') return;
+      const payload = (parsed as { payload?: { text?: unknown } }).payload;
+      const text = payload?.text;
+      if (typeof text === 'string' && text.trim() !== '') {
+        updateSessionMessages(activeId, (prev) => [
+          ...prev,
+          { id: newId(), role: 'assistant', content: text, streaming: false },
+        ]);
+      }
+    });
+    return () => es.close();
+    // updateSessionMessages функционально стабильна (роутинг через activeIdRef, сеттеры
+    // стабильны) — подписку пересоздаём только при смене активной вкладки.
+  }, [activeId]);
+
   // Зеркало активного проекта для колбэков (фоновые стримы, загрузки каталога).
   useEffect(() => {
     activeProjectIdRef.current = activeProjectId;

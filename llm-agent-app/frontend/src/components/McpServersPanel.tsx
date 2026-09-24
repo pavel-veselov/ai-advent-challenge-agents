@@ -18,8 +18,8 @@ interface McpServersPanelProps {
  * грузит список на монтировании и перечитывает его после каждой мутации (add/toggle/
  * delete): REST-мутации MCP бэкенд SSE-событием не сопровождает.
  * Форма добавления (name + url) и список: название, url, переключатель
- * «Активен/Неактивен» (PUT …/enabled — при активации бэкенд подключается и заполняет
- * tools), обнаруженные инструменты (чипы name + description) и кнопка удаления.
+ * «Активен/Неактивен» (PUT …/enabled — при активации бэкенд подключается, список
+ * инструментов в панели намеренно не выводится) и кнопка удаления.
  * Ошибки бэкенда ({error: "…"}) показываются инлайном, без alert.
  */
 export default function McpServersPanel({ disabled }: McpServersPanelProps) {
@@ -168,20 +168,6 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
                 <div className="mcp-server-url" title={server.url}>
                   {server.url}
                 </div>
-                {/* Инструменты, обнаруженные при активации (пусто у неактивных). */}
-                {server.tools.length > 0 ? (
-                  <div className="mcp-tools">
-                    {server.tools.map((tool) => (
-                      <span
-                        key={tool.name}
-                        className="mcp-tool-chip"
-                        title={tool.description !== '' ? tool.description : tool.name}
-                      >
-                        {tool.name}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
               </div>
             );
           })}

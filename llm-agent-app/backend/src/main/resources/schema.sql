@@ -232,3 +232,20 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Периодические задачи планировщика (см. AgentSchedulerStore, инструменты агента
+-- agent_scheduler_* и REST /api/agent-scheduler): имя задачи, интервал в секундах,
+-- промпт для агента и флаг включения. next_run_at — следующий запуск (ISO-строка);
+-- NULL — задача никогда не запускалась (дуется при create/update как now + interval).
+-- Переживают перезапуск backend.
+CREATE TABLE IF NOT EXISTS agent_scheduler_jobs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    prompt           TEXT NOT NULL,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    last_run_at      TEXT,
+    next_run_at      TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);

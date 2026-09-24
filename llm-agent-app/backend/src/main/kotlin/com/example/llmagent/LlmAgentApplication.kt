@@ -3,10 +3,12 @@ package com.example.llmagent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan
 import org.springframework.boot.runApplication
+import org.springframework.scheduling.annotation.EnableScheduling
 import java.io.File
 
 @SpringBootApplication
 @ConfigurationPropertiesScan
+@EnableScheduling
 class LlmAgentApplication
 
 fun main(args: Array<String>) {

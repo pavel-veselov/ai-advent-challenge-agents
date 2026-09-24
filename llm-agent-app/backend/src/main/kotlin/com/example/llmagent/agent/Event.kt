@@ -249,3 +249,16 @@ data class WorkflowStageFinished(
     override val stepId = "workflow-stage"
     override val payload = mapOf("stage" to stage, "output" to output)
 }
+
+/**
+ * Результат периодической задачи планировщика (Day-17/18): агент выполнил scheduled-промпт
+ * и финальный текст доставляется активной сессии по SSE. Эмитится в фоновый SSE-канал
+ * сессии (SessionEventBus) после `AgentFinished`, а сам текст уже сохранён в историю чата —
+ * фронтенд по типу `scheduler_result` помечает сообщение как автоматическое (не user-вопрос).
+ * stepId фиксирован ("scheduler").
+ */
+data class SchedulerResult(val text: String) : AgentEvent {
+    override val type = "scheduler_result"
+    override val stepId = "scheduler"
+    override val payload = mapOf("text" to text)
+}

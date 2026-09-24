@@ -18,6 +18,8 @@ Thumbs.db
 # Local data / logs
 data/
 *.log
+# SQLite-файл планировщика (Day-18) — создаётся при запуске, не в git.
+scheduler.db
 
 # Env / secrets
 .env

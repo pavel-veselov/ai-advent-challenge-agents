@@ -1,6 +1,11 @@
 spring:
   application:
     name: papkin-helper
+  # SQLite-хранилище планировщика (Day-18): файл scheduler.db в рабочем каталоге,
+  # таблицы создаются идемпотентно в SchedulerStore (CREATE TABLE IF NOT EXISTS).
+  datasource:
+    url: jdbc:sqlite:scheduler.db
+    driver-class-name: org.sqlite.JDBC
   ai:
     mcp:
       server:

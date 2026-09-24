@@ -144,12 +144,12 @@ class AgentImpl(
             ?: ContextStrategySettings(sessionId).windowSize
         logStep(
             "Выбираю, как собрать контекст для модели (стратегия=\"$contextStrategy\"): возьму последние $strategyWindowSize сообщений, " +
-                "не больше ${agentProperties.maxToolCallIterations} шагов цикла. Умения агента (инструменты): ${toolRegistry.names().sorted()}.",
+                "не больше ${agentProperties.maxToolCallIterations} шагов цикла. Умения агента (инструменты): ${visibleToolNames()}.",
         )
 
         send(AgentStarted(userMessage, runSettings.settings() + mapOf(
             "maxToolCallIterations" to agentProperties.maxToolCallIterations,
-            "tools" to toolRegistry.names().sorted(),
+            "tools" to visibleToolNames(),
             "contextStrategy" to contextStrategy,
         )))
 
@@ -548,7 +548,7 @@ class AgentImpl(
                 var responseBody: String? = null
                 // Тело запроса приходит из колбэка синхронно при построении streamChat(),
                 // поэтому строка шага появляется ДО HTTP-вызова — в т.ч. при ошибке API.
-                val flux = llmClient.streamChat(messages, toolRegistry.definitions(), runSettings) { requestBody = it }
+                val flux = llmClient.streamChat(messages, visibleToolDefinitions(), runSettings) { requestBody = it }
                 send(LlmRequestStarted(iteration, promptSnapshot(messages), requestBody = requestBody))
                 val events = flux.collectList().awaitSingle()
                 for (e in events) {
@@ -865,6 +865,19 @@ class AgentImpl(
      * Ошибки валидации — ToolResult(isError=true) с подсказкой допустимых значений,
      * чтобы модель сама скорректировала аргументы на следующей итерации.
      */
+    /** Инструменты, видимые модели: при выключенном воркфлоу (workflow.enabled=false) инструмент
+     *  состояния задачи (TaskStateTool) убирается, чтобы модель не предлагала workflow-действия,
+     *  когда следование воркфлоу отключено пользователем. */
+    private fun visibleToolNames(): List<String> {
+        val workflowEnabled = workflowSettings?.isEnabled() ?: false
+        return toolRegistry.names().sorted().filter { it != TaskStateTool.TOOL_NAME || workflowEnabled }
+    }
+
+    private fun visibleToolDefinitions(): List<ToolDefinition> {
+        val workflowEnabled = workflowSettings?.isEnabled() ?: false
+        return toolRegistry.definitions().filter { it.name != TaskStateTool.TOOL_NAME || workflowEnabled }
+    }
+
     private fun handleTaskState(sessionId: String, args: Map<String, Any?>): ToolResult {
         val store = taskStateStore
             ?: return ToolResult("Хранилище состояния задачи не подключено (task_state недоступен)", true)

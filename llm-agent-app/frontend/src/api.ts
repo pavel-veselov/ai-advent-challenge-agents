@@ -1,6 +1,9 @@
 ﻿import type {
   ActiveProfileResponse,
   AgentEvent,
+  AgentSchedulerCreateRequest,
+  AgentSchedulerJob,
+  AgentSchedulerPatch,
   BranchInfo,
   BranchesState,
   ChatRequest,
@@ -18,6 +21,10 @@
   Project,
   ProjectSessionCreated,
   RunSettings,
+  SchedulerCreateRequest,
+  SchedulerIntervalPatch,
+  SchedulerSummary,
+  SchedulerTask,
   SessionCompression,
   SessionCompressionPatch,
   SessionContextStrategyPatch,
@@ -698,4 +705,118 @@ export async function deleteMcpServer(id: number): Promise<DeleteResponse> {
   const res = await fetch(`/api/mcp-servers/${id}`, { method: 'DELETE' });
   if (!res.ok) await raiseMcpError(res, 'mcp-servers DELETE');
   return (await res.json()) as DeleteResponse;
+}
+
+// ---- Планировщик (Day-17): периодические задачи сбора данных + сводка ----
+// Контракт планировщика — snake_case (см. SchedulerTask/SchedulerCreateRequest в types.ts).
+
+/** Список периодических задач: GET /api/scheduler/tasks. */
+export async function fetchSchedulerTasks(): Promise<SchedulerTask[]> {
+  const res = await fetch('/api/scheduler/tasks');
+  if (!res.ok) await raiseMcpError(res, 'scheduler tasks');
+  return (await res.json()) as SchedulerTask[];
+}
+
+/**
+ * Создание периодической задачи: POST /api/scheduler/tasks
+ * {name, source, interval_seconds, params?}; 400 — пустое имя/невалидный период.
+ */
+export async function createSchedulerTask(body: SchedulerCreateRequest): Promise<SchedulerTask> {
+  const res = await fetch('/api/scheduler/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'scheduler tasks POST');
+  return (await res.json()) as SchedulerTask;
+}
+
+/**
+ * Смена периода задачи: PATCH /api/scheduler/tasks/{id}/interval {interval_seconds};
+ * 404 — задача не найдена, 400 — период меньше минимума. Возвращает обновлённую задачу.
+ */
+export async function setSchedulerTaskInterval(
+  id: number,
+  body: SchedulerIntervalPatch,
+): Promise<SchedulerTask> {
+  const res = await fetch(`/api/scheduler/tasks/${id}/interval`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'scheduler interval PATCH');
+  return (await res.json()) as SchedulerTask;
+}
+
+/** Удаление задачи: DELETE /api/scheduler/tasks/{id} → {deleted: true}; 404 — не найдена. */
+export async function deleteSchedulerTask(id: number): Promise<DeleteResponse> {
+  const res = await fetch(`/api/scheduler/tasks/${id}`, { method: 'DELETE' });
+  if (!res.ok) await raiseMcpError(res, 'scheduler tasks DELETE');
+  return (await res.json()) as DeleteResponse;
+}
+
+/**
+ * Сборка сводки: POST /api/scheduler/summary {task_id?, since_hours?}.
+ * task_id null — сводка по всем задачам; вернёт агрегаты + человекочитаемый текст.
+ */
+export async function fetchSchedulerSummary(
+  body: { task_id?: number; since_hours?: number } = {},
+): Promise<SchedulerSummary> {
+  const res = await fetch('/api/scheduler/summary', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'scheduler summary POST');
+  return (await res.json()) as SchedulerSummary;
+}
+
+// ---- Планировщик заданий агента (agent-scheduler): периодические промпты агента ----
+// Контракт — snake_case (см. AgentSchedulerJob в types.ts). Базовый путь /api/agent-scheduler.
+
+/** Список заданий агента: GET /api/agent-scheduler. */
+export async function fetchAgentScheduler(): Promise<AgentSchedulerJob[]> {
+  const res = await fetch('/api/agent-scheduler');
+  if (!res.ok) await raiseMcpError(res, 'agent-scheduler');
+  return (await res.json()) as AgentSchedulerJob[];
+}
+
+/**
+ * Создание задания агента: POST /api/agent-scheduler
+ * {name, interval_seconds, prompt}; 400 — пустое имя/невалидный период.
+ */
+export async function createAgentSchedulerJob(
+  body: AgentSchedulerCreateRequest,
+): Promise<AgentSchedulerJob> {
+  const res = await fetch('/api/agent-scheduler', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'agent-scheduler POST');
+  return (await res.json()) as AgentSchedulerJob;
+}
+
+/**
+ * Обновление задания агента: PATCH /api/agent-scheduler/{id} (частичное тело
+ * {name?, interval_seconds?, prompt?, enabled?}); 404 — задание не найдено.
+ */
+export async function updateAgentSchedulerJob(
+  id: number,
+  body: AgentSchedulerPatch,
+): Promise<AgentSchedulerJob> {
+  const res = await fetch(`/api/agent-scheduler/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'agent-scheduler PATCH');
+  return (await res.json()) as AgentSchedulerJob;
+}
+
+/** Удаление задания агента: DELETE /api/agent-scheduler/{id} → { ok: boolean }; 404 — не найдено. */
+export async function deleteAgentSchedulerJob(id: number): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/agent-scheduler/${id}`, { method: 'DELETE' });
+  if (!res.ok) await raiseMcpError(res, 'agent-scheduler DELETE');
+  return (await res.json()) as { ok: boolean };
 }

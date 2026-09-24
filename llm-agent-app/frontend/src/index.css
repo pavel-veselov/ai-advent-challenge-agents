@@ -2932,3 +2932,89 @@ button:disabled {
   white-space: nowrap;
   cursor: help;
 }
+
+/* ===== Планировщик (day17): карточки задач переиспользуют .mcp-* каркас —
+   добавлены только частные элементы: глиф источника, редактор периода, сводка ===== */
+
+/* Глиф источника в шапке карточки задачи — монохромная табличка, как .collapsible-icon. */
+.scheduler-task-icon {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+/* Строка метаданных задачи: подпись источника + редактор периода + кнопка «✓». */
+.scheduler-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Редактор периода «каждые [N] с»: подписи моно-гравировкой, узкий числовой инпут
+   (каркас — общий .mem-input, раскладка — ширина под 3–4 цифры). */
+.scheduler-interval-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
+}
+
+.scheduler-interval-input {
+  flex: none;
+  width: 58px;
+  padding: 2px 5px;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* Кнопка подтверждения периода: компактная пилюля .mem-btn без авто-маржинала
+   (он у .mem-btn-primary — здесь не нужен). */
+.scheduler-interval-save {
+  flex: none;
+  padding: 2px 8px;
+}
+
+/* Блок сводки: колонка — кнопка «Собрать сводку», под ней агрегаты + строки задач. */
+.scheduler-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+/* Тело сводки: строка агрегатов + список человекочитаемых строк по задачам. */
+.scheduler-summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.scheduler-summary-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Одна строка сводки (имя задачи + последнее значение; у погоды — температура). */
+.scheduler-summary-line {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}

@@ -5,7 +5,6 @@ import com.example.llmagent.agent.AgentEvent
 import com.example.llmagent.agent.ErrorEvent
 import com.example.llmagent.agent.TaskState
 import com.example.llmagent.agent.TaskStateStore
-import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -19,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Flux
-import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -201,16 +199,6 @@ class TaskStateController(
     }
 
     /** Обертка события агента в контракт SSE {type, runId, stepId, timestamp, payload, sequence}. */
-    private fun sse(ev: AgentEvent, runId: String, seq: Int): ServerSentEvent<String> {
-        val node = om.createObjectNode()
-        node.put("type", ev.type)
-        node.put("runId", runId)
-        node.put("stepId", ev.stepId)
-        node.put("timestamp", Instant.now().toString())
-        node.set<JsonNode>("payload", om.valueToTree(ev.payload))
-        node.put("sequence", seq)
-        return ServerSentEvent.builder<String>(om.writeValueAsString(node))
-            .event(ev.type)
-            .build()
-    }
+    private fun sse(ev: AgentEvent, runId: String, seq: Int): ServerSentEvent<String> =
+        SseEnvelope.sse(om, ev, runId, seq)
 }

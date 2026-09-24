@@ -1,5 +1,6 @@
 package com.example.mcpserver.tools
 
+import com.example.mcpserver.collector.HttpSourceCollector
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -25,7 +26,7 @@ class ToolParsingTest {
             }
         """.trimIndent()
 
-        val result = CurrencyTool.parseRates(mapper.readTree(json), "USD")
+        val result = HttpSourceCollector.parseRates(mapper.readTree(json), "USD")
 
         assertEquals("RUB", result["base"])
         assertEquals("2024-05-20", result["date"])
@@ -48,7 +49,7 @@ class ToolParsingTest {
             }
         """.trimIndent()
 
-        val result = CurrencyTool.parseRates(mapper.readTree(json), null)
+        val result = HttpSourceCollector.parseRates(mapper.readTree(json), null)
         @Suppress("UNCHECKED_CAST")
         val rates = result["rates"] as Map<String, Any>
         assertEquals(2, rates.size)
@@ -58,25 +59,36 @@ class ToolParsingTest {
     fun `weather buildWeather собирает текущую погоду`() {
         val json = """
             {
-              "current": {
-                "temperature_2m": 18.5,
-                "apparent_temperature": 17.0,
-                "weather_code": 2,
-                "wind_speed_10m": 11.2,
-                "time": "2024-05-20T12:00"
-              },
-              "current_units": {
-                "temperature_2m": "°C",
-                "wind_speed_10m": "km/h"
-              }
+              "current_condition": [
+                {
+                  "temp_C": "18.5",
+                  "temp_F": "65.3",
+                  "FeelsLikeC": "17.0",
+                  "FeelsLikeF": "62.6",
+                  "windspeedKmph": "11.2",
+                  "windspeedMiles": "7.0",
+                  "weatherCode": "2",
+                  "weatherDesc": [ { "value": "Небольшая облачность" } ],
+                  "localObsDateTime": "2024-05-20 12:00 PM"
+                }
+              ],
+              "nearest_area": [
+                {
+                  "areaName": [ { "value": "Москва" } ],
+                  "country": [ { "value": "Россия" } ]
+                }
+              ]
             }
         """.trimIndent()
 
-        val result = WeatherTool.buildWeather(mapper.readTree(json), "Москва", "Россия", "celsius")
+        val result = HttpSourceCollector.buildWeather(mapper.readTree(json), "celsius")
 
         assertEquals("Москва", result["city"])
+        assertEquals("Россия", result["country"])
         assertEquals(18.5, result["temperature"])
+        assertEquals("°C", result["temperature_unit"])
         assertEquals("Небольшая облачность", result["weather"])
+        assertEquals("wttr.in", result["source"])
     }
 
     @Test
@@ -93,7 +105,7 @@ class ToolParsingTest {
             }
         """.trimIndent()
 
-        val result = NewsTool(webClient = anyWebClient()).buildItem(mapper.readTree(json))
+        val result = HttpSourceCollector.buildItem(mapper.readTree(json))
 
         assertEquals("Show HN: My MCP server", result["title"])
         assertEquals("alice", result["author"])
@@ -101,7 +113,4 @@ class ToolParsingTest {
         assertEquals("https://example.com", result["url"])
         assertTrue((result["time_iso"] as String).startsWith("2024-05-20"))
     }
-
-    private fun anyWebClient(): org.springframework.web.reactive.function.client.WebClient =
-        org.springframework.web.reactive.function.client.WebClient.builder().build()
 }

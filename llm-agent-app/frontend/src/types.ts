@@ -498,6 +498,104 @@ export interface McpServerRequest {
   url: string;
 }
 
+// ---- Планировщик (Day-17): GET/POST /api/scheduler/tasks, PATCH .../{id}/interval, DELETE /{id}, POST /api/scheduler/summary ----
+
+/** Источник данных периодической задачи планировщика. */
+export type SchedulerSource = 'weather' | 'currency' | 'news';
+
+/**
+ * Периодическая задача планировщика: бэкенд сам собирает данные из источника
+ * каждые interval_seconds секунд и хранит историю запусков (last_run_at/runs_count).
+ * Контракт планировщика — snake_case (в отличие от camelCase остальных сущностей).
+ */
+export interface SchedulerTask {
+  id: number;
+  name: string;
+  source: SchedulerSource;
+  /** Период запуска в секундах (минимум 5 — валидирует бэкенд). */
+  interval_seconds: number;
+  /** Доп. параметры источника (город для погоды и т.п.); null — не заданы. */
+  params: Record<string, string> | null;
+  /** ISO-время последнего запуска; null — задача ещё ни разу не выполнялась. */
+  last_run_at: string | null;
+  /** Сколько раз задача уже выполнялась. */
+  runs_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Тело POST /api/scheduler/tasks: name/source/interval_seconds обязательны, params опционален. */
+export interface SchedulerCreateRequest {
+  name: string;
+  source: SchedulerSource;
+  interval_seconds: number;
+  params?: Record<string, string>;
+}
+
+/** Частичное тело PATCH /api/scheduler/tasks/{id}/interval: новый период в секундах. */
+export interface SchedulerIntervalPatch {
+  interval_seconds: number;
+}
+
+/**
+ * Агрегированная сводка периодических задач (POST /api/scheduler/summary):
+ * count/min/max/avg частоты + текст сводки (совпадает с payload события
+ * summary_pushed); items — человекочитаемые строки по каждой задаче.
+ */
+export interface SchedulerSummary {
+  /** Задача, по которой собрана сводка; null — сводка по всем задачам. */
+  task_id: number | null;
+  /** Горизонт отбора запусков в часах; null — без ограничения. */
+  since_hours: number | null;
+  task_count: number;
+  min_interval_seconds: number | null;
+  max_interval_seconds: number | null;
+  avg_interval_seconds: number | null;
+  /** Строки сводки по задачам (имя + последнее значение); пусто — задач нет. */
+  items: string[];
+  /** Человекочитаемый текст сводки. */
+  text: string;
+  generated_at: string;
+}
+
+// ---- Планировщик заданий агента (agent-scheduler): GET/POST /api/agent-scheduler, PATCH/DELETE .../{id} ----
+
+/**
+ * Периодическое задание агента: агент сам выполняет prompt каждые interval_seconds секунд
+ * (echo события scheduler_result в чат активной сессии). Контракт — snake_case.
+ */
+export interface AgentSchedulerJob {
+  id: number;
+  name: string;
+  /** Период запуска в секундах. */
+  interval_seconds: number;
+  /** Промпт, который агент выполняет по расписанию. */
+  prompt: string;
+  /** true — задание активно (выполняется по расписанию). */
+  enabled: boolean;
+  /** ISO-время последнего запуска; null — ещё ни разу не выполнялось. */
+  last_run_at: string | null;
+  /** ISO-время следующего запуска; null — задание выключено. */
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Тело POST /api/agent-scheduler: name/interval_seconds/prompt обязательны. */
+export interface AgentSchedulerCreateRequest {
+  name: string;
+  interval_seconds: number;
+  prompt: string;
+}
+
+/** Частичное тело PATCH /api/agent-scheduler/{id}. */
+export interface AgentSchedulerPatch {
+  name?: string;
+  interval_seconds?: number;
+  prompt?: string;
+  enabled?: boolean;
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */

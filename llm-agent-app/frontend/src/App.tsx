@@ -4,6 +4,7 @@ import InvariantsPanel from './components/InvariantsPanel';
 import LlmSettings from './components/LlmSettings';
 import McpServersPanel from './components/McpServersPanel';
 import ProfileSelect from './components/ProfileSelect';
+import SchedulerPanel from './components/SchedulerPanel';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
 import WorkflowSettings from './components/WorkflowSettings';
@@ -270,6 +271,8 @@ export default function App() {
       />
       {/* MCP-серверы Day-16: управление внешними источниками инструментов (глобально). */}
       <McpServersPanel disabled={tabDisabled} />
+      {/* Планировщик Day-17: периодические задачи сбора данных + сводка (глобально). */}
+      <SchedulerPanel disabled={tabDisabled} />
     </div>
   );
 

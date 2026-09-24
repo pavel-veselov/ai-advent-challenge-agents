@@ -13,6 +13,11 @@ Docker и доступен как обычный HTTP-хост в интерне
 | `get_exchange_rate` | Курс валюты к рублю; без кода — все курсы за день | ЦБ РФ (`cbr-xml-daily.ru`) |
 | `get_weather` | Текущая погода в городе (температура, влажность, ветер, код погоды) | Open-Meteo (+ геокодер) |
 | `get_top_news` | Топ новостей (заголовки + ссылки) | Hacker News (Firebase API) |
+| `scheduler_add_task` | Создать задачу периодического сбора (`weather`/`currency`/`news`); `interval_seconds` (мин. 5), `params` — параметры источника | SQLite `scheduled_tasks` |
+| `scheduler_list_tasks` | Список задач: интервал, активность, число запусков | SQLite `scheduled_tasks` + `task_runs` |
+| `scheduler_update_interval` | Изменить период опроса задачи (`interval_seconds` >= 5); исполнитель перенастраивается | SQLite `scheduled_tasks` |
+| `scheduler_remove_task` | Отменить и удалить задачу; историю запусков не трогает | SQLite `scheduled_tasks` |
+| `scheduler_summary` | Агрегировать собранные данные за окно (`since_hours`, по умолчанию 24): weather — min/max/avg температуры, currency — последние курсы, news — последние заголовки | SQLite `task_runs` |
 
 ## Требования
 

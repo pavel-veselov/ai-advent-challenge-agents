@@ -57,6 +57,10 @@ dependencies {
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 
+	// SQLite-персистентность планировщика (Day-18): JdbcTemplate поверх файла scheduler.db.
+	implementation("org.springframework.boot:spring-boot-starter-jdbc")
+	implementation("org.xerial:sqlite-jdbc:3.53.4.0")
+
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("io.projectreactor:reactor-test")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
