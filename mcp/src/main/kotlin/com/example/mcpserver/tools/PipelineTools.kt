@@ -11,13 +11,13 @@ import java.nio.file.Path
 import java.time.Instant
 
 /**
- * РљРѕРјРїРѕР·РёС†РёСЏ MCP-РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ (Day-19): РїР°Р№РїР»Р°Р№РЅ РёР· С‚СЂС‘С… РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ, РіРґРµ РєР°Р¶РґС‹Р№ СЃР»РµРґСѓСЋС‰РёР№
- * РїРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ РѕС‚ РїСЂРµРґС‹РґСѓС‰РµРіРѕ вЂ” search (РїРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ) в†’ summarize (РѕР±СЂР°Р±Р°С‚С‹РІР°РµС‚) в†’
- * save_to_file (СЃРѕС…СЂР°РЅСЏРµС‚ СЂРµР·СѓР»СЊС‚Р°С‚). РРЅСЃС‚СЂСѓРјРµРЅС‚ [runPipeline] РІС‹РїРѕР»РЅСЏРµС‚ РІСЃСЋ С†РµРїРѕС‡РєСѓ РђР’РўРћРњРђРўРР§Р•РЎРљР
- * Р·Р° РѕРґРёРЅ РІС‹Р·РѕРІ Рё РІРѕР·РІСЂР°С‰Р°РµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ РєР°Р¶РґРѕРіРѕ С€Р°РіР° (РєРѕСЂСЂРµРєС‚РЅРѕСЃС‚СЊ РїРµСЂРµРґР°С‡Рё РґР°РЅРЅС‹С… РјРµР¶РґСѓ Р·РІРµРЅСЊСЏРјРё).
+ * Композиция MCP-инструментов (Day-19): пайплайн из трёх инструментов, где каждый следующий
+ * получает данные от предыдущего — search (получает данные) → summarize (обрабатывает) →
+ * save_to_file (сохраняет результат). Инструмент [runPipeline] выполняет всю цепочку АВТОМАТИЧЕСКИ
+ * за один вызов и возвращает результат каждого шага (корректность передачи данных между звеньями).
  *
- * РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С… [search] вЂ” top-РЅРѕРІРѕСЃС‚Рё Hacker News С‡РµСЂРµР· [SourceCollector] (fail-open).
- * Р§РёСЃС‚С‹Рµ С„СѓРЅРєС†РёРё (С„РёР»СЊС‚СЂ/СЃРІРѕРґРєР°/Р·Р°РїРёСЃСЊ) РІС‹РЅРµСЃРµРЅС‹ РІ companion Рё РїРѕРєСЂС‹РІР°СЋС‚СЃСЏ С‚РµСЃС‚Р°РјРё Р±РµР· СЃРµС‚Рё.
+ * Источник данных [search] — top-новости Hacker News через [SourceCollector] (fail-open).
+ * Чистые функции (фильтр/сводка/запись) вынесены в companion и покрываются тестами без сети.
  */
 @Component
 class PipelineTools(
@@ -25,53 +25,53 @@ class PipelineTools(
     private val om: ObjectMapper,
 ) {
 
-    /** РџРµСЂРІРѕРµ Р·РІРµРЅРѕ РїР°Р№РїР»Р°Р№РЅР°: РїРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ РїРѕ Р·Р°РїСЂРѕСЃСѓ (С‚РѕРї-РЅРѕРІРѕСЃС‚Рё, С„РёР»СЊС‚СЂ РїРѕ query). */
+    /** Первое звено пайплайна: получает данные по запросу (топ-новости, фильтр по query). */
     @McpTool(
         name = "search",
-        title = "РџРѕРёСЃРє",
-        description = "РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ: С‚РѕРїРѕРІС‹Рµ РёСЃС‚РѕСЂРёРё Hacker News, РѕС‚С„РёР»СЊС‚СЂРѕРІР°РЅРЅС‹Рµ РїРѕ Р·Р°РїСЂРѕСЃСѓ (query вЂ” " +
-            "РїРѕРґСЃС‚СЂРѕРєР° РІ Р·Р°РіРѕР»РѕРІРєРµ). Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ {id, title, author, score, comments, url, time}.",
+        title = "Поиск",
+        description = "Получает данные: топовые истории Hacker News, отфильтрованные по запросу (query — " +
+            "подстрока в заголовке). Возвращает список результатов {id, title, author, score, comments, url, time}.",
     )
     fun search(
-        @McpToolParam(description = "РџРѕРёСЃРєРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ вЂ” РїРѕРґСЃС‚СЂРѕРєР° Р·Р°РіРѕР»РѕРІРєР°.", required = true) query: String,
-        @McpToolParam(description = "РЎРєРѕР»СЊРєРѕ СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ РІРµСЂРЅСѓС‚СЊ (1..25, РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ 10).", required = false) limit: Int?,
+        @McpToolParam(description = "Поисковый запрос — подстрока заголовка.", required = true) query: String,
+        @McpToolParam(description = "Сколько результатов вернуть (1..25, по умолчанию 10).", required = false) limit: Int?,
     ): Mono<List<Map<String, Any>>> =
         source.news(limit).map { items -> filterResults(items, query, limit ?: DEFAULT_LIMIT) }
 
-    /** Р’С‚РѕСЂРѕРµ Р·РІРµРЅРѕ РїР°Р№РїР»Р°Р№РЅР°: РѕР±СЂР°Р±Р°С‚С‹РІР°РµС‚ СЃРїРёСЃРѕРє СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ РІ РєРѕРјРїР°РєС‚РЅСѓСЋ СЃРІРѕРґРєСѓ. */
+    /** Второе звено пайплайна: обрабатывает список результатов в компактную сводку. */
     @McpTool(
         name = "summarize",
-        title = "РЎРІРѕРґРєР°",
-        description = "РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ СЃРїРёСЃРѕРє СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ (РёР· search) РІ СЃРІРѕРґРєСѓ: С‡РёСЃР»Рѕ Р·Р°РїРёСЃРµР№, С‚РѕРї-N Р·Р°РіРѕР»РѕРІРєРѕРІ, " +
-            "РјР°РєСЃРёРјР°Р»СЊРЅС‹Р№ СЂРµР№С‚РёРЅРі. Р’РѕР·РІСЂР°С‰Р°РµС‚ {count, titles, topScore, source}.",
+        title = "Сводка",
+        description = "Обрабатывает список результатов (из search) в сводку: число записей, топ-N заголовков, " +
+            "максимальный рейтинг. Возвращает {count, titles, topScore, source}.",
     )
     fun summarize(
-        @McpToolParam(description = "РЎРїРёСЃРѕРє СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ (РёР· search).", required = true) items: List<Map<String, Any>>,
-        @McpToolParam(description = "РЎРєРѕР»СЊРєРѕ Р·Р°РіРѕР»РѕРІРєРѕРІ РІРєР»СЋС‡РёС‚СЊ РІ СЃРІРѕРґРєСѓ (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ 5).", required = false) top: Int?,
+        @McpToolParam(description = "Список результатов (из search).", required = true) items: List<Map<String, Any>>,
+        @McpToolParam(description = "Сколько заголовков включить в сводку (по умолчанию 5).", required = false) top: Int?,
     ): Mono<Map<String, Any?>> = Mono.just(buildSummary(items, top ?: DEFAULT_TOP))
 
-    /** РўСЂРµС‚СЊРµ Р·РІРµРЅРѕ РїР°Р№РїР»Р°Р№РЅР°: СЃРѕС…СЂР°РЅСЏРµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ РІ С„Р°Р№Р» Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РїСѓС‚СЊ/СЂР°Р·РјРµСЂ. */
+    /** Третье звено пайплайна: сохраняет результат в файл и возвращает путь/размер. */
     @McpTool(
         name = "save_to_file",
-        title = "РЎРѕС…СЂР°РЅРёС‚СЊ РІ С„Р°Р№Р»",
-        description = "РЎРѕС…СЂР°РЅСЏРµС‚ С‚РµРєСЃС‚ РІ С„Р°Р№Р» РІ РєР°С‚Р°Р»РѕРіРµ РІС‹РІРѕРґР° Рё РІРѕР·РІСЂР°С‰Р°РµС‚ {filename, path, bytes, writtenAt}.",
+        title = "Сохранить в файл",
+        description = "Сохраняет текст в файл в каталоге вывода и возвращает {filename, path, bytes, writtenAt}.",
     )
     fun saveToFile(
-        @McpToolParam(description = "РЎРѕРґРµСЂР¶РёРјРѕРµ С„Р°Р№Р»Р°.", required = true) content: String,
-        @McpToolParam(description = "РРјСЏ С„Р°Р№Р»Р° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ pipeline-<timestamp>.txt).", required = false) filename: String?,
+        @McpToolParam(description = "Содержимое файла.", required = true) content: String,
+        @McpToolParam(description = "Имя файла (по умолчанию pipeline-<timestamp>.txt).", required = false) filename: String?,
     ): Mono<Map<String, Any?>> = Mono.just(writeFile(content, filename))
 
-    /** РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРёР№ РїР°Р№РїР»Р°Р№РЅ: search в†’ summarize в†’ save_to_file (РѕРґРёРЅ РІС‹Р·РѕРІ, РїРµСЂРµРґР°С‡Р° РґР°РЅРЅС‹С…). */
+    /** Автоматический пайплайн: search → summarize → save_to_file (один вызов, передача данных). */
     @McpTool(
         name = "run_pipeline",
-        title = "РџР°Р№РїР»Р°Р№РЅ search в†’ summarize в†’ save_to_file",
-        description = "РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІС‹РїРѕР»РЅСЏРµС‚ С†РµРїРѕС‡РєСѓ: search(query) в†’ summarize(СЂРµР·СѓР»СЊС‚Р°С‚) в†’ save_to_file(СЃРІРѕРґРєР°). " +
-            "Р”РµРјРѕРЅСЃС‚СЂРёСЂСѓРµС‚ РєРѕСЂСЂРµРєС‚РЅСѓСЋ РїРµСЂРµРґР°С‡Сѓ РґР°РЅРЅС‹С… РјРµР¶РґСѓ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°РјРё. Р’РѕР·РІСЂР°С‰Р°РµС‚ {query, resultsCount, summary, file, steps}.",
+        title = "Пайплайн search → summarize → save_to_file",
+        description = "Автоматически выполняет цепочку: search(query) → summarize(результат) → save_to_file(сводка). " +
+            "Демонстрирует корректную передачу данных между инструментами. Возвращает {query, resultsCount, summary, file, steps}.",
     )
     fun runPipeline(
-        @McpToolParam(description = "РџРѕРёСЃРєРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ.", required = true) query: String,
-        @McpToolParam(description = "Р›РёРјРёС‚ СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ (1..25, РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ 10).", required = false) limit: Int?,
-        @McpToolParam(description = "РРјСЏ С„Р°Р№Р»Р° РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРІРѕРґРєРё.", required = false) filename: String?,
+        @McpToolParam(description = "Поисковый запрос.", required = true) query: String,
+        @McpToolParam(description = "Лимит результатов (1..25, по умолчанию 10).", required = false) limit: Int?,
+        @McpToolParam(description = "Имя файла для сохранения сводки.", required = false) filename: String?,
     ): Mono<Map<String, Any?>> =
         source.news(limit).map { items ->
             val results = filterResults(items, query, limit ?: DEFAULT_LIMIT)
@@ -91,7 +91,7 @@ class PipelineTools(
         private const val DEFAULT_TOP = 5
         private const val MAX_LIMIT = 25
 
-        /** Р¤РёР»СЊС‚СЂ СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ РїРѕ РїРѕРґСЃС‚СЂРѕРєРµ РІ Р·Р°РіРѕР»РѕРІРєРµ + Р»РёРјРёС‚ (С‡РёСЃС‚Р°СЏ С„СѓРЅРєС†РёСЏ, С‚РµСЃС‚РёСЂСѓРµРјР°). */
+        /** Фильтр результатов по подстроке в заголовке + лимит (чистая функция, тестируема). */
         fun filterResults(items: List<Map<String, Any>>, query: String, limit: Int): List<Map<String, Any>> {
             val q = query.trim().lowercase()
             val filtered = if (q.isEmpty()) items
@@ -99,7 +99,7 @@ class PipelineTools(
             return filtered.take(limit.coerceIn(1, MAX_LIMIT))
         }
 
-        /** Р­РєСЃС‚СЂР°РєС‚РёРІРЅР°СЏ СЃРІРѕРґРєР° СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ (С‡РёСЃС‚Р°СЏ С„СѓРЅРєС†РёСЏ, С‚РµСЃС‚РёСЂСѓРµРјР° Р±РµР· СЃРµС‚Рё). */
+        /** Экстрактивная сводка результатов (чистая функция, тестируема без сети). */
         fun buildSummary(items: List<Map<String, Any>>, top: Int): Map<String, Any?> {
             val titles = items.take(top.coerceAtLeast(1)).mapNotNull { it["title"] as? String }
             val topScore = items.mapNotNull { (it["score"] as? Number)?.toInt() }.maxOrNull()
@@ -111,7 +111,7 @@ class PipelineTools(
             )
         }
 
-        /** Р—Р°РїРёСЃСЊ СЂРµР·СѓР»СЊС‚Р°С‚Р° РІ С„Р°Р№Р» РІ РєР°С‚Р°Р»РѕРіРµ РІС‹РІРѕРґР° (С‡РёСЃС‚Р°СЏ С„СѓРЅРєС†РёСЏ РѕС‚ РїР°СЂР°РјРµС‚СЂРѕРІ). */
+        /** Запись результата в файл в каталоге вывода (чистая функция от параметров). */
         fun writeFile(content: String, filename: String?): Map<String, Any?> {
             val dir = Path.of(System.getProperty("java.io.tmpdir"), "papkin-helper-out")
             Files.createDirectories(dir)
