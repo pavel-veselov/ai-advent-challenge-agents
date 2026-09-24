@@ -49,6 +49,11 @@ function parseEventData(line: string): AgentEvent | null {
   }
 }
 
+/** URL скачивания файла, сохранённого MCP-пайплайном (Day-19): бэкенд отдаёт байты attachment. */
+export function downloadToolFileUrl(filename: string): string {
+  return `/api/mcp/file/download?filename=${encodeURIComponent(filename)}`;
+}
+
 /** Р—Р°РіСЂСѓР·РєР° РёСЃС‚РѕСЂРёРё РґРёР°Р»РѕРіР° РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РїРѕСЃР»Рµ РїРµСЂРµР·Р°РіСЂСѓР·РєРё. */
 export async function fetchHistory(sessionId: string): Promise<HistoryResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/history`);

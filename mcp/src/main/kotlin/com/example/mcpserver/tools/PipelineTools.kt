@@ -86,6 +86,17 @@ class PipelineTools(
             )
         }
 
+    /** Загрузка файла по клику (Day-19): читает файл из каталога вывода и возвращает содержимое. */
+    @McpTool(
+        name = "read_file",
+        title = "Прочитать файл",
+        description = "Читает файл из каталога вывода (papkin-helper-out) по имени и возвращает содержимое. " +
+            "Используется бэкендом для скачивания сохранённого файла в браузере.",
+    )
+    fun readFile(
+        @McpToolParam(description = "Имя файла в каталоге вывода.", required = true) filename: String,
+    ): Mono<Map<String, Any?>> = Mono.fromCallable { readFileContent(filename) }
+
     companion object {
         private const val DEFAULT_LIMIT = 10
         private const val DEFAULT_TOP = 5
@@ -125,6 +136,18 @@ class PipelineTools(
                 "bytes" to Files.size(path),
                 "writtenAt" to Instant.now().toString(),
             )
+        }
+
+        /** Читает файл из каталога вывода по санитизированному имени (чистая функция, тестируема). */
+        fun readFileContent(filename: String): Map<String, Any?> {
+            val dir = Path.of(System.getProperty("java.io.tmpdir"), "papkin-helper-out")
+            val name = filename.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val path = dir.resolve(name)
+            return if (!Files.exists(path)) {
+                mapOf("error" to "Файл не найден: $name", "filename" to name)
+            } else {
+                mapOf("filename" to name, "content" to Files.readString(path), "bytes" to Files.size(path))
+            }
         }
     }
 }

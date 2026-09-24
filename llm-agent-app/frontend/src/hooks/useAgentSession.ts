@@ -1184,7 +1184,24 @@ export function useAgentSession(): AgentSession {
         await startStream(controller.signal, (e) => {
           receivedAny = true;
           handleEvent(e, sid);
-          if (e.type === 'llm_token') {
+          if (e.type === 'llm_request_started') {
+            // Day-19: КАЖДЫЙ вызов LLM (в т.ч. итерации tool-цикла) — отдельное сообщение
+            // ассистента. Иначе все токены копятся в одном пузыре, а agent_finished ЗАТИРАЕТ его
+            // финальным ответом — промежуточные реплики модели теряются. Финализируем предыдущий
+            // пузырь (уже наполненный токенами) и открываем новый под эту итерацию.
+            const curState = getRunState(sid);
+            const cur = curState.messages.find((m) => m.id === curState.assistantId);
+            // Пустой пузырь ещё не стримился — это первая итерация, переиспользуем заглушку.
+            if (cur && cur.content.trim() !== '') {
+              finalizeAssistant(sid);
+              const nextId = newId();
+              curState.assistantId = nextId;
+              updateSessionMessages(sid, (prev) => [
+                ...prev,
+                { id: nextId, role: 'assistant', content: '', streaming: true },
+              ]);
+            }
+          } else if (e.type === 'llm_token') {
             updateSessionMessages(sid, (prev, state) => {
               const idx = prev.findIndex((m) => m.id === state.assistantId);
               if (idx === -1) return prev;

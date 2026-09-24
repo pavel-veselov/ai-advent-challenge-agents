@@ -76,4 +76,20 @@ class PipelineToolsTest {
         assertFalse(name.contains("/"), "слэш должен быть вырезан")
         Files.deleteIfExists(Path.of(res["path"] as String?))
     }
+
+    @Test
+    fun `readFileContent возвращает содержимое существующего файла`() {
+        val w = PipelineTools.writeFile("hello-day19", "read-test.txt")
+        val read = PipelineTools.readFileContent("read-test.txt")
+        assertEquals("hello-day19", read["content"])
+        assertEquals("read-test.txt", read["filename"])
+        assertTrue((read["error"] as String?) == null)
+        Files.deleteIfExists(Path.of(w["path"] as String?))
+    }
+
+    @Test
+    fun `readFileContent отсутствующего файла возвращает error`() {
+        val read = PipelineTools.readFileContent("no-such-file-12345.txt")
+        assertTrue((read["error"] as String?) != null)
+    }
 }
