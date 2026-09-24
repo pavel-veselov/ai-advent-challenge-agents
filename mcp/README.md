@@ -18,6 +18,10 @@ Docker и доступен как обычный HTTP-хост в интерне
 | `scheduler_update_interval` | Изменить период опроса задачи (`interval_seconds` >= 5); исполнитель перенастраивается | SQLite `scheduled_tasks` |
 | `scheduler_remove_task` | Отменить и удалить задачу; историю запусков не трогает | SQLite `scheduled_tasks` |
 | `scheduler_summary` | Агрегировать собранные данные за окно (`since_hours`, по умолчанию 24): weather — min/max/avg температуры, currency — последние курсы, news — последние заголовки | SQLite `task_runs` |
+| `search` | Поиск новостей по запросу (`query`), с лимитом `limit` (1–25) | Hacker News |
+| `summarize` | Собрать сводку по списку результатов (`items`), взять топ-N (`top`, по умолчанию 5) по баллам | Локальная агрегация |
+| `save_to_file` | Записать текст в файл (`content`, имя `filename`, по умолчанию `papkin-helper.out`) в папку `papkin-helper-out` | Файловая система (в `%TEMP%`) |
+| `run_pipeline` | Сквозной пайплайн: `search` → `summarize` → `save_to_file` за один вызов | Hacker News + локальные шаги |
 
 ## Требования
 
