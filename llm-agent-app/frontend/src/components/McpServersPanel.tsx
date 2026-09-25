@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createMcpServer, deleteMcpServer, fetchMcpServers, setMcpServerEnabled } from '../api';
+import { createMcpServer, deleteMcpServer, fetchMcpServers, setMcpServerEnabled, updateMcpServer } from '../api';
 import type { McpServer } from '../types';
 import CollapsibleSection from './CollapsibleSection';
 
@@ -15,13 +15,13 @@ interface McpServersPanelProps {
 /**
  * Панель «MCP-серверы» (Day-16): управление внешними источниками инструментов агента
  * (Model Context Protocol). Глобальная сущность (вне проектов/сессий) — панель сама
- * грузит список на монтировании и перечитывает его после каждой мутации (add/toggle/
- * delete): REST-мутации MCP бэкенд SSE-событием не сопровождает.
+ * грузит список на монтировании и перечитывает его после каждой мутации (add/edit/
+ * toggle/delete): REST-мутации MCP бэкенд SSE-событием не сопровождает.
  * Форма добавления (name + url) и список: название, url, переключатель
  * «Активен/Неактивен» (PUT …/enabled — при активации бэкенд подключается и
  * заполняет tools), сворачиваемый список инструментов активных серверов
- * (нативный <details>, по умолчанию закрыт; чипы: имя в чипе, описание — в title)
- * и кнопка удаления.
+ * (нативный <details>, по умолчанию закрыт; чипы: имя в чипе, описание — в title),
+ * кнопка ✎ инлайн-редактирования имени/url (PUT …/{id}) и кнопка удаления.
  * Ошибки бэкенда ({error: "…"}) показываются инлайном, без alert.
  */
 export default function McpServersPanel({ disabled }: McpServersPanelProps) {
@@ -31,6 +31,13 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
   const [addBusy, setAddBusy] = useState(false);
   /** id сервера, над которым сейчас идёт мутация (toggle/delete) — блокируем только его строку. */
   const [rowBusyId, setRowBusyId] = useState<number | null>(null);
+  /** id сервера в режиме инлайн-редактирования (не более одного одновременно). */
+  const [editingId, setEditingId] = useState<number | null>(null);
+  /** Черновики имени/url редактируемого сервера (пре-заполняются из строки). */
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+  /** Сохранение инлайн-формы в полёте — блокируем Save/Cancel и инпуты. */
+  const [editBusy, setEditBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Ошибка API показывается «коротко»: гасим через ERROR_VISIBLE_MS (вместо alert).
@@ -108,6 +115,37 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
     }
   };
 
+  /** Вход в режим редактирования строки: черновики пре-заполняются текущими значениями. */
+  const startEdit = (server: McpServer) => {
+    setEditingId(server.id);
+    setEditName(server.name);
+    setEditUrl(server.url);
+  };
+
+  /** Выход из редактирования без сохранения (форма схлопывается в обычный показ). */
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName('');
+    setEditUrl('');
+  };
+
+  /** Сохранение инлайн-формы: PUT …/{id} {name, url}; после успеха — перечитывание
+   *  каталога и выход из режима. При ошибке остаёмся в форме (текст — в mem-error). */
+  const handleEditSave = async () => {
+    if (editingId == null) return;
+    setEditBusy(true);
+    setError(null);
+    try {
+      await updateMcpServer(editingId, { name: editName.trim(), url: editUrl.trim() });
+      setEditingId(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
   return (
     // Единственная из сворачиваемых панелей, развёрнутая по умолчанию (defaultOpen).
     <CollapsibleSection
@@ -117,7 +155,8 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
       hint="внешние инструменты агента"
       defaultOpen
     >
-      {/* Список серверов: имя + url + переключатель активности + инструменты + удаление. */}
+      {/* Список серверов: имя + url + переключатель активности + инструменты +
+          ✎ инлайн-редактирование (имя/url) + удаление. */}
       {servers === null ? (
         <div className="mem-hint">Загрузка…</div>
       ) : servers.length === 0 ? (
@@ -127,6 +166,11 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
           {servers.map((server) => {
             const rowBusy = rowBusyId === server.id;
             const connecting = rowBusy && !server.enabled;
+            // Инлайн-редактирование: форма открыта только у editingId-строки,
+            // остальные показываются как обычно (кнопки ✎ у них заблокированы,
+            // чтобы переключение не молча теряло недосохранённый черновик).
+            const isEditing = editingId === server.id;
+            const editLockedByOther = editingId !== null && !isEditing;
             return (
               <div key={server.id} className="mcp-server">
                 <div className="mcp-server-top">
@@ -137,7 +181,7 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
                     aria-checked={server.enabled}
                     aria-label={`Сервер «${server.name}»: ${server.enabled ? 'активен' : 'неактивен'}`}
                     className={`llm-switch mcp-switch${server.enabled ? ' is-on' : ''}`}
-                    disabled={disabled || rowBusy}
+                    disabled={disabled || rowBusy || isEditing}
                     title={
                       server.enabled
                         ? 'Деактивировать сервер (инструменты пропадут из набора агента)'
@@ -153,23 +197,91 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
                   >
                     {connecting ? 'Подключение…' : server.enabled ? 'Активен' : 'Неактивен'}
                   </span>
-                  <span className="mcp-server-name" title={server.name}>
-                    {server.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="mem-entry-del"
-                    title="Удалить сервер"
-                    aria-label={`Удалить сервер «${server.name}»`}
-                    disabled={disabled || rowBusy}
-                    onClick={() => void handleDelete(server.id)}
+                  {isEditing ? null : (
+                    <>
+                      <span className="mcp-server-name" title={server.name}>
+                        {server.name}
+                      </span>
+                      {/* ✎ инлайн-редактирование имени/url — общий идиом круглой кнопки
+                         строк (.mem-entry-del база, янтарный ховер .profile-edit как у ✎ профиля). */}
+                      <button
+                        type="button"
+                        className="mem-entry-del profile-edit"
+                        title="Редактировать имя и URL сервера"
+                        aria-label={`Редактировать сервер «${server.name}»`}
+                        disabled={disabled || rowBusyId !== null || editLockedByOther}
+                        onClick={() => startEdit(server)}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="mem-entry-del"
+                        title="Удалить сервер"
+                        aria-label={`Удалить сервер «${server.name}»`}
+                        disabled={disabled || rowBusy}
+                        onClick={() => void handleDelete(server.id)}
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
+                </div>
+                {isEditing ? (
+                  /* Инлайн-форма редактирования: заменяет строку имени и url-гравировку;
+                     стили — те же mem-form/mem-input/mem-btn, что у формы добавления. */
+                  <form
+                    className="mem-form"
+                    onSubmit={(e: FormEvent<HTMLFormElement>) => {
+                      e.preventDefault();
+                      void handleEditSave();
+                    }}
                   >
-                    ×
-                  </button>
-                </div>
-                <div className="mcp-server-url" title={server.url}>
-                  {server.url}
-                </div>
+                    <input
+                      className="mem-input"
+                      placeholder="Имя сервера"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      disabled={editBusy}
+                      aria-label="Новое имя MCP-сервера"
+                      maxLength={80}
+                    />
+                    <input
+                      className="mem-input"
+                      placeholder="http://localhost:8787/mcp"
+                      value={editUrl}
+                      onChange={(e) => setEditUrl(e.target.value)}
+                      disabled={editBusy}
+                      aria-label="Новый URL MCP-сервера"
+                      maxLength={300}
+                    />
+                    <div className="mem-form-row">
+                      <button
+                        type="submit"
+                        className="mem-btn mem-btn-primary"
+                        disabled={
+                          editName.trim() === '' || editUrl.trim() === '' || editBusy || disabled
+                        }
+                        title="Сохранить: PUT /api/mcp-servers/{id}"
+                      >
+                        {editBusy ? 'Сохранение…' : 'Сохранить'}
+                      </button>
+                      <button
+                        type="button"
+                        className="mem-btn"
+                        disabled={editBusy}
+                        title="Выйти из редактирования без сохранения"
+                        onClick={cancelEdit}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="mcp-server-url" title={server.url}>
+                    {server.url}
+                  </div>
+                )}
                 {server.enabled && server.tools.length > 0 ? (
                   /* Инструменты активного сервера: нативный <details> (по умолчанию
                      закрыт, без React-состояния) — чип-табличка на каждый tool,

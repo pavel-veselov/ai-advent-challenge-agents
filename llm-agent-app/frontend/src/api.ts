@@ -667,7 +667,7 @@ export async function updateWorkflowSettings(patch: WorkflowSettings): Promise<W
   return (await res.json()) as WorkflowSettings;
 }
 
-// ---- MCP-серверы (GET/POST /api/mcp-servers, PUT .../{id}/enabled, DELETE /{id}) ----
+// ---- MCP-серверы (GET/POST /api/mcp-servers, PUT .../{id}, PUT .../{id}/enabled, DELETE /{id}) ----
 
 /**
  * Разбирает JSON-ошибку бэкенда вида {error: "..."} и возвращает Error с её текстом;
@@ -703,6 +703,21 @@ export async function createMcpServer(body: McpServerRequest): Promise<McpServer
     body: JSON.stringify(body),
   });
   if (!res.ok) await raiseMcpError(res, 'mcp-servers POST');
+  return (await res.json()) as McpServer;
+}
+
+/**
+ * Редактирование MCP-сервера (имя/url): PUT /api/mcp-servers/{id} {name, url}.
+ * Возвращает обновлённую запись; 404 — сервер не найден, 400 — пустые поля,
+ * 409 — имя занято другим сервером.
+ */
+export async function updateMcpServer(id: number, body: McpServerRequest): Promise<McpServer> {
+  const res = await fetch(`/api/mcp-servers/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await raiseMcpError(res, 'mcp-servers PUT');
   return (await res.json()) as McpServer;
 }
 

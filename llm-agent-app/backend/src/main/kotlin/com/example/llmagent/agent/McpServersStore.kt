@@ -144,6 +144,41 @@ class McpServersStore(private val jdbc: JdbcTemplate) {
         }
     }
 
+    /**
+     * Обновляет имя и URL сервера (updated_at перезаписывается). Пустые/blank name или
+     * url — null (fail-open). Нет такой записи или сбой БД — null. Возвращает итоговую
+     * строку из БД.
+     */
+    fun update(id: Long, name: String, url: String): McpServer? {
+        val safeName = name.trim()
+        val safeUrl = url.trim()
+        if (safeName.isBlank() || safeUrl.isBlank()) return null
+        return try {
+            val updated = jdbc.update(
+                "UPDATE mcp_servers SET name = ?, url = ?, updated_at = ? WHERE id = ?",
+                safeName,
+                safeUrl,
+                OffsetDateTime.now().toString(),
+                id,
+            )
+            if (updated > 0) {
+                jdbc.query(
+                    """
+                    SELECT id, name, url, enabled, created_at, updated_at
+                    FROM mcp_servers WHERE id = ?
+                    """.trimIndent(),
+                    { rs, _ -> mapRow(rs) },
+                    id,
+                ).firstOrNull()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("McpServers.update({}, {}) не удался: {}", id, safeName, e.message)
+            null
+        }
+    }
+
     /** Удаляет сервер по id; true — удалён, false — нет такой записи (или сбой БД). */
     fun delete(id: Long): Boolean {
         return try {

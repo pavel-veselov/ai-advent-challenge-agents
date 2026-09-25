@@ -23,6 +23,10 @@ import org.springframework.web.bind.annotation.RestController
  *   PUT    /api/mcp-servers/{id}/enabled — включить/отключить `{enabled}`: 404 — нет сервера;
  *                                          при включении инструменты активируются, при
  *                                          отключении — снимаются из реестра.
+ *   PUT    /api/mcp-servers/{id}      — изменить сервер `{name,url}`: blank → 400; 404 — нет
+ *                                          сервера; дубликат имени у другого сервера → 409;
+ *                                          включённый сервер деактивируется и активируется
+ *                                          заново (список инструментов перечитывается).
  *   DELETE /api/mcp-servers/{id}      — удалить сервер: 404 — нет; иначе `{deleted:true}`.
  *
  * Транспорт не знает про MCP-протокол — всё делегируется [McpToolsManager] (активация)
@@ -96,6 +100,31 @@ class McpServersController(
             manager.activate(updated)
         } else {
             manager.deactivate(id)
+        }
+        return ResponseEntity.ok(toDto(updated))
+    }
+
+    @PutMapping("/{id}")
+    suspend fun edit(
+        @PathVariable id: Long,
+        @RequestBody body: McpServerRequest,
+    ): ResponseEntity<Any> {
+        val name = body.name?.trim()
+        val url = body.url?.trim()
+        if (name.isNullOrBlank() || url.isNullOrBlank()) {
+            return ResponseEntity.badRequest().body(ErrorResponse("name и url не должны быть пустыми"))
+        }
+        val existing = store.findById(id)
+            ?: return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse("MCP-сервер не найден: $id"))
+        if (store.list().any { it.id != id && it.name == name }) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse("MCP-сервер с именем '$name' уже существует"))
+        }
+        val updated = store.update(id, name, url)
+            ?: return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErrorResponse("Не удалось сохранить MCP-сервер"))
+        if (existing.enabled) {
+            // URL мог измениться — снимаем старые инструменты и регистрируем заново
+            manager.deactivate(id)
+            manager.activate(updated)
         }
         return ResponseEntity.ok(toDto(updated))
     }
