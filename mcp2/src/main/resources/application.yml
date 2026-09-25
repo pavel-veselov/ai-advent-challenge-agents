@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: mcp2-server
+  ai:
+    mcp:
+      server:
+        protocol: STREAMABLE
+        name: MCP-2
+        version: 0.1.0
+        # ASYNC -> @McpTool методы могут возвращать Mono/Flux (реактивно, без блокировки event loop).
+        type: ASYNC
+        streamable-http:
+          # Путь Streamable HTTP endpoint, по которому подключается MCP-клиент.
+          mcp-endpoint: /mcp
+# server.port оставлен НЕ заданным по умолчанию (8080), чтобы можно было переопределить
+# через переменную окружения SERVER_PORT.

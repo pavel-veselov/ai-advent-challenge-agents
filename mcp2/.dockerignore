@@ -1,0 +1,11 @@
+.gradle/
+build/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+data/
+*.log
+.env
+.git/

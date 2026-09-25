@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+.kotlin/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local data / logs
+data/
+*.log
+# SQLite-файл планировщика (Day-18) — создаётся при запуске, не в git.
+scheduler.db
+
+# Env / secrets
+.env

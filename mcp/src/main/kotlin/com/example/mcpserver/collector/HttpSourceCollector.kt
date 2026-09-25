@@ -5,7 +5,6 @@ import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import java.net.URLEncoder
 import java.time.Instant
 
 /**
@@ -20,18 +19,53 @@ import java.time.Instant
 class HttpSourceCollector(private val webClient: WebClient) : SourceCollector {
 
     /**
-     * Текущая погода от wttr.in (бесплатно, без ключа, принимает название города напрямую —
-     * не нужен отдельный геокодинг). Формат j1 отдаёт и метрические, и имперские поля.
+     * Текущая погода: геокодинг города через Open-Meteo (geocoding-api.open-meteo.com,
+     * принимает названия и кириллицей, и латиницей), затем текущая погода от met.no
+     * locationforecast (api.met.no, формат GeoJSON). met.no требует осмысленный
+     * User-Agent — без него запрос отклоняется.
+     * Отказоустойчивость: любая ошибка (неизвестный город, недоступность API, сбой
+     * разбора) превращается в дружелюбную карту с ключом "error" — поток не падает.
      */
     override fun weather(city: String, units: String?): Mono<Map<String, Any>> {
         val unit = units?.lowercase() ?: "celsius"
-        val cityEncoded = URLEncoder.encode(city.trim(), "UTF-8")
         return webClient.get()
-            .uri("https://wttr.in/$cityEncoded?format=j1")
+            .uri("$GEOCODING_URL?name={city}&count=1&language=ru", city.trim())
             .retrieve()
             .bodyToMono(JsonNode::class.java)
-            .map { root -> buildWeather(root, unit) }
+            .flatMap { geo ->
+                val place = geo.path("results").path(0)
+                if (place.isMissingNode || place.path("latitude").isMissingNode) {
+                    Mono.error(IllegalStateException("Не удалось найти город: $city"))
+                } else {
+                    fetchMetNo(place, place.path("latitude").asDouble(), place.path("longitude").asDouble(), unit)
+                }
+            }
+            .onErrorResume { e ->
+                Mono.just(
+                    linkedMapOf(
+                        "error" to (e.message ?: "Не удалось получить погоду"),
+                        "city" to city,
+                        "source" to MET_NO_SOURCE,
+                    )
+                )
+            }
     }
+
+    /** Запрос текущей погоды к met.no для уже найденных координат (User-Agent обязателен). */
+    private fun fetchMetNo(place: JsonNode, lat: Double, lon: Double, unit: String): Mono<Map<String, Any>> =
+        webClient.get()
+            .uri("$MET_NO_URL?lat=$lat&lon=$lon")
+            .header("User-Agent", MET_NO_USER_AGENT)
+            .retrieve()
+            .bodyToMono(JsonNode::class.java)
+            .map { root ->
+                buildWeather(
+                    root,
+                    unit,
+                    place.path("name").asText(""),
+                    place.path("country").asText(""),
+                )
+            }
 
     /** Курс валюты (или все курсы) от ЦБ РФ. */
     override fun currency(code: String?): Mono<Map<String, Any>> =
@@ -83,28 +117,68 @@ class HttpSourceCollector(private val webClient: WebClient) : SourceCollector {
 
     companion object {
         private const val CBR_URL = "https://www.cbr-xml-daily.ru/daily_json.js"
+        private const val GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+        private const val MET_NO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+        private const val MET_NO_USER_AGENT = "ai-advent-challenge/0.1.0 (info@pavelveselov.ru)"
+        private const val MET_NO_SOURCE = "met.no"
         private const val DEFAULT_LIMIT = 10
         private const val MIN_LIMIT = 1
         private const val MAX_LIMIT = 25
         private const val DEFAULT_CITY = "Москва"
 
-        /** Чистая функция сборки ответа о погоде из формата wttr.in (j1) — покрывается тестами без сети. */
-        fun buildWeather(root: JsonNode, unit: String): Map<String, Any> {
-            val condition = root.path("current_condition").path(0)
-            val area = root.path("nearest_area").path(0)
+        /** Человеческие подписи для базовых symbol_code met.no (суффикс _day/_night отбрасывается). */
+        private val SYMBOL_LABELS = mapOf(
+            "clearsky" to "Ясно",
+            "fair" to "Малооблачно",
+            "partlycloudy" to "Переменная облачность",
+            "cloudy" to "Облачно",
+            "fog" to "Туман",
+            "lightrain" to "Небольшой дождь",
+            "rain" to "Дождь",
+            "heavyrain" to "Сильный дождь",
+            "lightrainshowers" to "Небольшие дожди",
+            "rainshowers" to "Ливни",
+            "heavyrainshowers" to "Сильные ливни",
+            "lightsnow" to "Небольшой снег",
+            "snow" to "Снег",
+            "heavysnow" to "Сильный снег",
+            "lightsnowshowers" to "Небольшой снег",
+            "snowshowers" to "Снегопад",
+            "heavysnowshowers" to "Сильный снегопад",
+            "sleet" to "Мокрый снег",
+            "lightsleet" to "Небольшой мокрый снег",
+            "heavysleet" to "Сильный мокрый снег",
+            "thunderstorm" to "Гроза",
+        )
+
+        /** Короткая русская подпись погоды по symbol_code met.no; фолбэк — сырой код. */
+        private fun describeSymbol(symbolCode: String): String {
+            if (symbolCode.isBlank()) return "нет данных"
+            return SYMBOL_LABELS[symbolCode.substringBefore("_")] ?: symbolCode
+        }
+
+        /**
+         * Чистая функция сборки ответа о погоде из формата met.no (GeoJSON) — покрывается
+         * тестами без сети. Город и страна приходят из геокодинга Open-Meteo.
+         */
+        fun buildWeather(root: JsonNode, unit: String, city: String, country: String): Map<String, Any> {
             val fahrenheit = unit.lowercase() in setOf("fahrenheit", "f")
+            val slot = root.path("properties").path("timeseries").path(0)
+            val details = slot.path("data").path("instant").path("details")
+            val symbolCode = slot.path("data").path("next_1_hours").path("summary").path("symbol_code").asText("")
+
+            val tempC = details.path("air_temperature").asDouble()
             return linkedMapOf(
-                "city" to area.path("areaName").path(0).path("value").asText(""),
-                "country" to area.path("country").path(0).path("value").asText(""),
-                "temperature" to condition.path(if (fahrenheit) "temp_F" else "temp_C").asDouble(),
+                "city" to city,
+                "country" to country,
+                "temperature" to (if (fahrenheit) round2(tempC * 9.0 / 5.0 + 32.0) else tempC),
                 "temperature_unit" to (if (fahrenheit) "°F" else "°C"),
-                "apparent_temperature" to condition.path(if (fahrenheit) "FeelsLikeF" else "FeelsLikeC").asDouble(),
-                "wind_speed" to condition.path(if (fahrenheit) "windspeedMiles" else "windspeedKmph").asDouble(),
-                "wind_speed_unit" to (if (fahrenheit) "mph" else "km/h"),
-                "weather_code" to condition.path("weatherCode").asInt(),
-                "weather" to condition.path("weatherDesc").path(0).path("value").asText(""),
-                "time" to condition.path("localObsDateTime").asText(""),
-                "source" to "wttr.in",
+                "humidity" to details.path("relative_humidity").asDouble(),
+                "wind_speed" to details.path("wind_speed").asDouble(),
+                "wind_speed_unit" to "m/s",
+                "weather" to describeSymbol(symbolCode),
+                "time" to slot.path("time").asText(""),
+                "source" to MET_NO_SOURCE,
             )
         }
 

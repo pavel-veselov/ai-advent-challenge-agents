@@ -231,7 +231,7 @@ export default function App() {
   };
 
   // Левая колонка панелей (sidebar-column): профиль, настройки LLM, воркфлоу, инварианты,
-  // MCP-серверы. Стоит левее рабочей зоны (проект-бар → вкладки → чат); ширина фиксированная
+  // планировщик, MCP-серверы. Стоит левее рабочей зоны (проект-бар → вкладки → чат); ширина фиксированная
   // (PANELS_WIDTH). Лог шагов переехал в правую колонку (stepsArea) — на бывшее место
   // sidebar-column.
   const panelsArea = (
@@ -269,10 +269,10 @@ export default function App() {
         refreshInvariants={handleInvariantsRefreshed}
         disabled={tabDisabled || activeProjectId == null}
       />
-      {/* MCP-серверы Day-16: управление внешними источниками инструментов (глобально). */}
-      <McpServersPanel disabled={tabDisabled} />
       {/* Планировщик Day-17: периодические задачи сбора данных + сводка (глобально). */}
       <SchedulerPanel disabled={tabDisabled} />
+      {/* MCP-серверы Day-16: управление внешними источниками инструментов (глобально). */}
+      <McpServersPanel disabled={tabDisabled} />
     </div>
   );
 

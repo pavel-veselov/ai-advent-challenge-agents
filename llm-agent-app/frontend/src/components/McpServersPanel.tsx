@@ -18,8 +18,10 @@ interface McpServersPanelProps {
  * грузит список на монтировании и перечитывает его после каждой мутации (add/toggle/
  * delete): REST-мутации MCP бэкенд SSE-событием не сопровождает.
  * Форма добавления (name + url) и список: название, url, переключатель
- * «Активен/Неактивен» (PUT …/enabled — при активации бэкенд подключается, список
- * инструментов в панели намеренно не выводится) и кнопка удаления.
+ * «Активен/Неактивен» (PUT …/enabled — при активации бэкенд подключается и
+ * заполняет tools), сворачиваемый список инструментов активных серверов
+ * (нативный <details>, по умолчанию закрыт; чипы: имя в чипе, описание — в title)
+ * и кнопка удаления.
  * Ошибки бэкенда ({error: "…"}) показываются инлайном, без alert.
  */
 export default function McpServersPanel({ disabled }: McpServersPanelProps) {
@@ -168,6 +170,23 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
                 <div className="mcp-server-url" title={server.url}>
                   {server.url}
                 </div>
+                {server.enabled && server.tools.length > 0 ? (
+                  /* Инструменты активного сервера: нативный <details> (по умолчанию
+                     закрыт, без React-состояния) — чип-табличка на каждый tool,
+                     имя — в чипе, описание — в title (у .mcp-tool-chip cursor: help). */
+                  <details className="mcp-tools-details">
+                    <summary className="mcp-tools-summary" title="Список инструментов сервера">
+                      Инструменты ({server.tools.length})
+                    </summary>
+                    <div className="mcp-tools">
+                      {server.tools.map((tool) => (
+                        <span key={tool.name} className="mcp-tool-chip" title={tool.description}>
+                          {tool.name}
+                        </span>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
               </div>
             );
           })}

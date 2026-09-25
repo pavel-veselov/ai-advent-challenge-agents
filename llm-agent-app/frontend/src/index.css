@@ -2856,21 +2856,19 @@ button:disabled {
 
 /* ===== MCP-серверы (day16): список серверов + переключатель активности + инструменты ===== */
 
-/* Список серверов: колонка карточек — как .mem-entries (внутренний скролл при
-   переполнении: max-height 200px + overflow-y, раньше список рос неограниченно). */
+/* Список серверов: колонка карточек — как .mem-entries, но без внутреннего скролла:
+   серверов мало — список растёт свободно, скроллит сама sidebar-column при нехватке высоты. */
 .mcp-servers {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 200px;
-  overflow-y: auto;
   min-width: 0;
 }
 
 /* Карточка одного сервера — вставка на панели, ровно как .mem-entry: плотная заливка
    --panel-2 и сплошная окантовка --border (были полупрозрачные mix-версии — карточки
    «Инвариантов» и «MCP» отличались весом), flex-shrink: 0 — карточки не сминаются,
-   список скроллится, как у .mem-entries. */
+   список растёт свободно без внутреннего скролла. */
 .mcp-server {
   display: flex;
   flex-direction: column;
@@ -2943,6 +2941,54 @@ button:disabled {
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
+}
+
+/* Сворачиваемый список инструментов: нативный <details> (без React-состояния),
+   по умолчанию закрыт. Маркер <summary> убран — вместо него моно-гравировка
+   «Инструменты (N)» с каретой ▸, раскрывается в ▾ (rotate 90°) и зеленеет. */
+.mcp-tools-details {
+  min-width: 0;
+}
+
+.mcp-tools-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+}
+
+.mcp-tools-summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-tools-summary::before {
+  content: '▸';
+  font-size: 9px;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+.mcp-tools-summary:hover {
+  color: var(--green);
+}
+
+.mcp-tools-details[open] .mcp-tools-summary {
+  color: var(--green);
+}
+
+.mcp-tools-details[open] .mcp-tools-summary::before {
+  transform: rotate(90deg);
+}
+
+/* Чипы инструментов живут внутри details — небольшой отступ от summary (шаг сетки карточки). */
+.mcp-tools-details[open] .mcp-tools {
+  padding-top: 3px;
 }
 
 .mcp-tool-chip {

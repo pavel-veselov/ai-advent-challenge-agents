@@ -59,36 +59,69 @@ class ToolParsingTest {
     fun `weather buildWeather собирает текущую погоду`() {
         val json = """
             {
-              "current_condition": [
-                {
-                  "temp_C": "18.5",
-                  "temp_F": "65.3",
-                  "FeelsLikeC": "17.0",
-                  "FeelsLikeF": "62.6",
-                  "windspeedKmph": "11.2",
-                  "windspeedMiles": "7.0",
-                  "weatherCode": "2",
-                  "weatherDesc": [ { "value": "Небольшая облачность" } ],
-                  "localObsDateTime": "2024-05-20 12:00 PM"
-                }
-              ],
-              "nearest_area": [
-                {
-                  "areaName": [ { "value": "Москва" } ],
-                  "country": [ { "value": "Россия" } ]
-                }
-              ]
+              "type": "Feature",
+              "geometry": { "coordinates": [37.6173, 55.7558, 150] },
+              "properties": {
+                "meta": { "units": { "air_temperature": "celsius", "wind_speed": "m/s" } },
+                "timeseries": [
+                  {
+                    "time": "2026-09-25T13:00:00Z",
+                    "data": {
+                      "instant": {
+                        "details": {
+                          "air_temperature": 12.6,
+                          "wind_speed": 2.2,
+                          "cloud_area_fraction": 100.0,
+                          "relative_humidity": 81.5,
+                          "wind_from_direction": 175.0,
+                          "air_pressure_at_sea_level": 1022.2
+                        }
+                      },
+                      "next_1_hours": { "summary": { "symbol_code": "partlycloudy_day" } }
+                    }
+                  }
+                ]
+              }
             }
         """.trimIndent()
 
-        val result = HttpSourceCollector.buildWeather(mapper.readTree(json), "celsius")
+        val result = HttpSourceCollector.buildWeather(mapper.readTree(json), "celsius", "Москва", "Россия")
 
         assertEquals("Москва", result["city"])
         assertEquals("Россия", result["country"])
-        assertEquals(18.5, result["temperature"])
+        assertEquals(12.6, result["temperature"])
         assertEquals("°C", result["temperature_unit"])
-        assertEquals("Небольшая облачность", result["weather"])
-        assertEquals("wttr.in", result["source"])
+        assertEquals(2.2, result["wind_speed"])
+        assertEquals("m/s", result["wind_speed_unit"])
+        assertEquals("Переменная облачность", result["weather"])
+        assertEquals("2026-09-25T13:00:00Z", result["time"])
+        assertEquals("met.no", result["source"])
+    }
+
+    @Test
+    fun `weather buildWeather конвертирует фаренгейты из цельсиев`() {
+        val json = """
+            {
+              "properties": {
+                "timeseries": [
+                  {
+                    "time": "2026-09-25T13:00:00Z",
+                    "data": {
+                      "instant": { "details": { "air_temperature": 12.6, "wind_speed": 2.2 } },
+                      "next_1_hours": { "summary": { "symbol_code": "lightrain" } }
+                    }
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val result = HttpSourceCollector.buildWeather(mapper.readTree(json), "fahrenheit", "London", "Великобритания")
+
+        assertEquals(54.68, result["temperature"]) // 12.6 °C -> 54.68 °F
+        assertEquals("°F", result["temperature_unit"])
+        assertEquals("Небольшой дождь", result["weather"])
+        assertEquals("met.no", result["source"])
     }
 
     @Test

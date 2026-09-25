@@ -7,7 +7,9 @@ import org.springframework.stereotype.Component
 import reactor.core.publisher.Mono
 
 /**
- * Инструмент «Погода» — прогноз погоды по открытому API Open-Meteo.
+ * Инструмент «Погода» — текущая погода по открытым API: геокодинг города через
+ * Open-Meteo (geocoding-api.open-meteo.com), затем данные met.no locationforecast
+ * (api.met.no, формат GeoJSON; met.no требует осмысленный User-Agent).
  *
  * Сетевая логика (геокодинг + текущая погода) вынесена в общий [SourceCollector],
  * чтобы её переиспользовали и планировщик (Day-18). Сам инструмент остаётся тонким

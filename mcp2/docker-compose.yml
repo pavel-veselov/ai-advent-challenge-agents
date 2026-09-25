@@ -1,0 +1,17 @@
+services:
+  mcp2-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp2-server:0.1.0
+    container_name: mcp2-server
+    ports:
+      # host:container -- MCP-2 is available at http://<host>:8790/mcp (Streamable HTTP).
+      - "8790:8080"
+    environment:
+      # Spring Boot reacts to SERVER_PORT; the only visible mapping is host port 8790.
+      SERVER_PORT: "8080"
+      # Spring relaxed binding: SPRING_AI_MCP_SERVER_NAME -> spring.ai.mcp.server.name.
+      SPRING_AI_MCP_SERVER_NAME: "MCP-2"
+      SPRING_AI_MCP_SERVER_VERSION: "0.1.0"
+    restart: unless-stopped
