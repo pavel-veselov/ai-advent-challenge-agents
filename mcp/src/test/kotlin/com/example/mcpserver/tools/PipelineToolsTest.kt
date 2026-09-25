@@ -58,6 +58,29 @@ class PipelineToolsTest {
     }
 
     @Test
+    fun `buildSummaryText рендерит человекочитаемую сводку с нумерацией`() {
+        val items = listOf(item("Заголовок A", 10), item("Заголовок B", 20), item("Заголовок C", 30))
+        val text = PipelineTools.buildSummaryText(items, 2)
+        assertTrue(text.contains("Сводка по hacker-news"), "источник должен быть в шапке")
+        assertTrue(text.contains("Найдено: 3"), "должно быть количество записей")
+        assertTrue(text.contains("Лучший рейтинг: 30"), "должен быть максимальный рейтинг")
+        assertTrue(text.contains("Топ-2 заголовков:"), "должен быть заголовок блока")
+        assertTrue(text.contains("1. Заголовок A"), "нумерованный элемент 1")
+        assertTrue(text.contains("2. Заголовок B"), "нумерованный элемент 2")
+        assertFalse(text.contains("3. Заголовок C"), "топ-2 должен ограничить список")
+        assertFalse(text.contains("{"), "не должно быть JSON-скобок")
+    }
+
+    @Test
+    fun `buildSummaryText пустой список рендерит нули без рейтинга`() {
+        val text = PipelineTools.buildSummaryText(emptyList(), 5)
+        assertTrue(text.contains("Сводка по hacker-news"))
+        assertTrue(text.contains("Найдено: 0"))
+        assertFalse(text.contains("Лучший рейтинг"), "при пустом списке нет рейтинга")
+        assertTrue(text.contains("(нет заголовков)"), "пустой блок заголовков")
+    }
+
+    @Test
     fun `writeFile пишет файл и возвращает путь размер и имя`() {
         val content = "сводка: 3 записи"
         val res = PipelineTools.writeFile(content, "pipeline-test.txt")

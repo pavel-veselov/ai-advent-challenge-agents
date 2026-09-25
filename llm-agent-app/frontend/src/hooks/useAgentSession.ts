@@ -128,17 +128,25 @@ interface SessionRunState {
   files: { filename: string }[];
 }
 
-/** Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming). */
+/**
+ * Преобразует сообщения истории бэкенда в сообщения чата UI (свежие id, без streaming).
+ * Пустые assistant-сообщения пропускаем — это страховка: бэкенд не пишет в историю tool-calling
+ * ходы без повествования (см. AgentImpl: guard assistantReply.isNotEmpty()), но если пустой/белый
+ * assistant-пузырь всё же попадёт в историю, на reload он отрисуется как пустой баббл, которого
+ * не было на живом стриме (live-вид открывает пузырь только при content.trim() !== '').
+ */
 function historyToMessages(msgs: HistoryMessage[]): ChatMessage[] {
-  return msgs.map((m) => ({
-    id: newId(),
-    historyId: m.id,
-    role: m.role,
-    content: m.content,
-    streaming: false,
-    promptTokens: m.promptTokens ?? null,
-    completionTokens: m.completionTokens ?? null,
-  }));
+  return msgs
+    .filter((m) => m.role !== 'assistant' || (m.content ?? '').trim() !== '')
+    .map((m) => ({
+      id: newId(),
+      historyId: m.id,
+      role: m.role,
+      content: m.content,
+      streaming: false,
+      promptTokens: m.promptTokens ?? null,
+      completionTokens: m.completionTokens ?? null,
+    }));
 }
 
 /** Имя файла из результата MCP-инструмента (run_pipeline / save_to_file) или null. */
@@ -154,6 +162,42 @@ function fileRefFromToolResult(result: string): { filename: string } | null {
     /* не JSON — это не файл */
   }
   return null;
+}
+
+/** Ключ localStorage для файлов, созданных MCP-пайплайном в сессии (Day-19). */
+function filesKey(sid: string): string {
+  return `llm-agent-files-${sid}`;
+}
+
+/**
+ * Читает список файлов сессии из localStorage (переживает перезагрузку страницы, переключение
+ * вкладок и рестарт). Для ещё не записывавшейся сессии — пустой список.
+ */
+function readFilesFromStorage(sid: string): { filename: string }[] {
+  try {
+    const raw = localStorage.getItem(filesKey(sid));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (f): f is { filename: string } => !!f && typeof (f as { filename?: unknown }).filename === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Пишет список файлов сессии в localStorage (или стирает ключ при пустом списке). */
+function writeFilesToStorage(sid: string, files: { filename: string }[]): void {
+  try {
+    if (!files || files.length === 0) {
+      localStorage.removeItem(filesKey(sid));
+    } else {
+      localStorage.setItem(filesKey(sid), JSON.stringify(files));
+    }
+  } catch {
+    /* localStorage недоступен — файлы живут только в памяти */
+  }
 }
 
 /**
@@ -1188,7 +1232,14 @@ export function useAgentSession(): AgentSession {
    */
   function attachFilesToLastAssistant(sid: string) {
     const st = runStateRef.current.get(sid);
-    if (!st || !st.files || st.files.length === 0) return;
+    if (!st) return;
+    // st.files зависит только от живого стрима (события tool_call_finished). После перечитывания
+    // истории (reload страницы / переключение вкладки) буфер пуст — восстанавливаем список файлов,
+    // созданных пайплайном в ЭТОЙ сессии, из localStorage, иначе кнопка «Скачать файл» пропадала.
+    if (!st.files || st.files.length === 0) {
+      st.files = readFilesFromStorage(sid);
+    }
+    if (!st.files || st.files.length === 0) return;
     let lastIdx = -1;
     for (let i = st.messages.length - 1; i >= 0; i--) {
       if (st.messages[i].role === 'assistant') { lastIdx = i; break; }
@@ -1288,11 +1339,13 @@ export function useAgentSession(): AgentSession {
             attachFilesToLastAssistant(sid);
           } else if (e.type === 'tool_call_finished') {
             // Day-19: запоминаем файл из результата пайплайна — по нему в ответе ассистента
-            // появится кнопка «Скачать файл».
+            // появится кнопка «Скачать файл». Файл пишем и в localStorage: после перечитывания
+            // истории (reload/переключение вкладки) кнопка не пропадает.
             const ref = fileRefFromToolResult(e.payload.result);
             if (ref) {
               const stRun = getRunState(sid);
               stRun.files.push(ref);
+              writeFilesToStorage(sid, stRun.files);
             }
           } else if (e.type === 'workflow_stage_finished') {
             // Воркфлоу (auto): БЭКЕНД только что закоммитил повествование завершённого этапа
@@ -1370,6 +1423,7 @@ export function useAgentSession(): AgentSession {
       const assistantId = newId();
       st.assistantId = assistantId;
       st.files = [];
+      writeFilesToStorage(sid, []);
       st.messages = [
         ...st.messages,
         { id: newId(), role: 'user', content: trimmed },
@@ -1416,6 +1470,7 @@ export function useAgentSession(): AgentSession {
       const assistantId = newId();
       st.assistantId = assistantId;
       st.files = [];
+      writeFilesToStorage(sid, []);
       st.messages = [...st.messages, { id: assistantId, role: 'assistant', content: '', streaming: true }];
       st.isRunning = true;
       if (st.taskState != null) {

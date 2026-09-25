@@ -1,7 +1,6 @@
 ﻿package com.example.mcpserver.tools
 
 import com.example.mcpserver.collector.SourceCollector
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.springaicommunity.mcp.annotation.McpTool
 import org.springaicommunity.mcp.annotation.McpToolParam
 import org.springframework.stereotype.Component
@@ -22,7 +21,6 @@ import java.time.Instant
 @Component
 class PipelineTools(
     private val source: SourceCollector,
-    private val om: ObjectMapper,
 ) {
 
     /** Первое звено пайплайна: получает данные по запросу (топ-новости, фильтр по query). */
@@ -76,7 +74,7 @@ class PipelineTools(
         source.news(limit).map { items ->
             val results = filterResults(items, query, limit ?: DEFAULT_LIMIT)
             val summary = buildSummary(results, DEFAULT_TOP)
-            val file = writeFile(om.writeValueAsString(summary), filename)
+            val file = writeFile(buildSummaryText(results, DEFAULT_TOP), filename)
             mapOf(
                 "query" to query,
                 "resultsCount" to results.size,
@@ -120,6 +118,26 @@ class PipelineTools(
                 "topScore" to topScore,
                 "source" to "hacker-news",
             )
+        }
+
+        /** Человекочитаемая текстовая сводка для скачиваемого файла (чистая функция, тестируема без сети). */
+        fun buildSummaryText(items: List<Map<String, Any>>, top: Int): String {
+            val effectiveTop = top.coerceAtLeast(1)
+            val titles = items.take(effectiveTop).mapNotNull { it["title"] as? String }
+            val topScore = items.mapNotNull { (it["score"] as? Number)?.toInt() }.maxOrNull()
+            return buildString {
+                appendLine("Сводка по hacker-news")
+                appendLine()
+                appendLine("Найдено: ${items.size}")
+                topScore?.let { appendLine("Лучший рейтинг: $it") }
+                appendLine()
+                appendLine("Топ-$effectiveTop заголовков:")
+                if (titles.isEmpty()) {
+                    appendLine("(нет заголовков)")
+                } else {
+                    titles.forEachIndexed { index, title -> appendLine("${index + 1}. $title") }
+                }
+            }.trimEnd()
         }
 
         /** Запись результата в файл в каталоге вывода (чистая функция от параметров). */
