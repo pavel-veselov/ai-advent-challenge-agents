@@ -17,6 +17,15 @@ param(
 $javaExe = Join-Path $JavaHome "bin\java.exe"
 $log = Join-Path $env:TEMP "opencode\llm-agent-backend.log"
 
+# Канонический путь к БД: АБСОЛЮТНЫЙ и независимый от CWD. Иначе каждый запуск java из
+# другой рабочей директории создаёт СВОЙ файл llm-agent.db, и данные (история, MCP-серверы,
+# планировщик) «расщепляются» по нескольким файлам — после перезапуска всё выглядит пропавшим.
+# По умолчанию — ${PSScriptRoot}\..\data\llm-agent.db (т.е. llm-agent-app\data\llm-agent.db).
+# Явно заданный SQLITE_DB_PATH окружением уважается (переопределяет дефолт).
+if (-not $env:SQLITE_DB_PATH) {
+    $env:SQLITE_DB_PATH = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\data\llm-agent.db'))
+}
+
 if (-not (Test-Path -LiteralPath $javaExe)) {
     throw "java.exe не найден по пути: $javaExe. Передайте -JavaHome с каталогом JDK 21."
 }
