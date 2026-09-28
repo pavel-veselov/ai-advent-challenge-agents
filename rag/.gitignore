@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+.kotlin/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local data / logs (индекс появляется при первом реальном запуске index)
+data/
+*.log
+
+# Env / secrets
+.env
