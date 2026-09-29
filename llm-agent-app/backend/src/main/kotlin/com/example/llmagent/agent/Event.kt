@@ -134,11 +134,18 @@ data class ErrorEvent(val idx: Int, val message: String) : AgentEvent {
  * Строка «обычного» лога: каждое действие агентского цикла человекочитаемым текстом
  * (тот же текст, что в серверном логе с префиксом [AGENT]). Событие только для
  * отображения в панели «Логи» на фронтенде — на работу агента не влияет.
+ *
+ * [detail] — развёрнутая детализация записи (pretty JSON запроса/ответа LLM для записей
+ * «Запрос в …» / «Ответ от …»); в SSE-payload попадает ТОЛЬКО когда не null (время записи
+ * в text не вшивается — фронтенд рисует его из timestamp события).
  */
-data class LogEvent(val idx: Int, val text: String) : AgentEvent {
+data class LogEvent(val idx: Int, val text: String, val detail: String? = null) : AgentEvent {
     override val type = "log"
     override val stepId = "log-$idx"
-    override val payload = mapOf("text" to text)
+    override val payload: Map<String, Any?> = buildMap {
+        put("text", text)
+        if (detail != null) put("detail", detail)
+    }
 }
 
 /**

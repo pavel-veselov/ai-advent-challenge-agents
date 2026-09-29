@@ -1,8 +1,10 @@
 package com.example.llmagent.kb
 
+import com.example.llmagent.agent.LlmCallLog
 import com.example.llmagent.agent.SqliteTestSupport
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -30,6 +32,18 @@ class KbRagServiceTest {
                 calls.add(text)
                 vectors[text] ?: floatArrayOf(0f, 0f, 0f, 1f)
             }
+        }
+
+        /** Лог-обёртка: как в KbEmbeddingClient — запрос ДО вызова, ответ с маркером вектора. */
+        override fun embedAll(
+            texts: List<String>,
+            model: String,
+            onLlmLog: ((String, String) -> Unit)?,
+        ): List<FloatArray> {
+            onLlmLog?.invoke(LlmCallLog.KIND_EMBEDDING_REQUEST, """{"model":"$model"}""")
+            val result = embedAll(texts, model)
+            onLlmLog?.invoke(LlmCallLog.KIND_EMBEDDING_RESPONSE, """{"embedding":"[vector dim=${result.firstOrNull()?.size}]"}""")
+            return result
         }
     }
 
@@ -149,5 +163,86 @@ class KbRagServiceTest {
         assertEquals(0.0, KbRagService.cosine(floatArrayOf(1f, 0f), floatArrayOf(0f, 1f)), 1e-9)
         assertEquals(0.0, KbRagService.cosine(floatArrayOf(0f, 0f), floatArrayOf(1f, 1f)), 1e-9)
         assertEquals(0.0, KbRagService.cosine(floatArrayOf(1f), floatArrayOf(1f, 1f)), 1e-9)
+    }
+
+    @Test
+    fun `onLlmLog emits db request response and search result in order`() {
+        val repo = newRepo("rag-logs.db")
+        val fake = FakeEmbedder()
+        fake.vectors["вопрос"] = floatArrayOf(1f, 0f, 0f, 0f)
+        fake.vectors["чанк1"] = vec(0.9f)
+        fake.vectors["чанк2"] = vec(0.8f)
+        val kbId = repo.create("Ноутбуки", "fixed", null, null, "qwen3-vl-embedding-8b")!!.id
+        repo.addChunks(kbId, listOf(
+            row(kbId, "чанк1", fake.vectors["чанк1"]!!, section = "сек1"),
+            row(kbId, "чанк2", fake.vectors["чанк2"]!!, section = "сек2"),
+        ))
+        repo.setStatusIndexed(kbId)
+        repo.setActive(kbId, true)
+
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+        assertNotNull(result.block)
+
+        // Полный порядок RAG-вызова: БД(базы) → ответ БД → эмбеддинги → БД(чанки) → поиск.
+        // Ответ chunksOfBases в лог НЕ уходит (векторы чанков не логируются).
+        assertEquals(
+            listOf(
+                LlmCallLog.KIND_DB_REQUEST,
+                LlmCallLog.KIND_DB_RESPONSE,
+                LlmCallLog.KIND_EMBEDDING_REQUEST,
+                LlmCallLog.KIND_EMBEDDING_RESPONSE,
+                LlmCallLog.KIND_DB_REQUEST,
+                LlmCallLog.KIND_SEARCH_RESULT,
+            ),
+            logs.map { it.first },
+        )
+
+        val dbRequest1 = logs[0].second
+        assertTrue(dbRequest1.contains("\"listActiveIndexed\""), "первый запрос БД — listActiveIndexed")
+        assertTrue(dbRequest1.contains("kb.active = 1"), "в query — фактический SQL метода")
+        val dbResponse = logs[1].second
+        assertTrue(dbResponse.contains("\"Ноутбуки\""), "ответ БД — массив активных баз")
+        assertTrue(dbResponse.contains("\"embeddingModel\""))
+        val dbRequest2 = logs[4].second
+        assertTrue(dbRequest2.contains("\"chunksOfBases\""), "второй запрос БД — chunksOfBases")
+        assertTrue(dbRequest2.contains("\"kbIds\""), "params — id запрашиваемых баз")
+        assertTrue(dbRequest2.contains("c.kb_id IN"), "в query — фактический SQL запроса чанков")
+
+        // «Ответ поискового движка» — pretty JSON: парсим и проверяем поля,
+        // включая контент отобранных чанков (векторов в detail быть не должно).
+        val searchTree = com.fasterxml.jackson.databind.ObjectMapper().readTree(logs[5].second)
+        assertEquals(4, searchTree.get("topK").asInt())
+        assertEquals(2, searchTree.get("candidateChunks").asInt())
+        assertEquals(2, searchTree.get("usedChunks").asInt())
+        assertEquals("qwen3-vl-embedding-8b", searchTree.get("embeddingModel").asText())
+        val chunksNode = searchTree.get("chunks")
+        assertEquals(2, chunksNode.size())
+        assertEquals("чанк1", chunksNode[0].get("content").asText(), "content чанка целиком")
+        assertEquals("чанк2", chunksNode[1].get("content").asText(), "content чанка целиком")
+        assertEquals("Ноутбуки", chunksNode[0].get("kbName").asText())
+        assertEquals("notes.md", chunksNode[0].get("source").asText(), "source — имя файла")
+        assertEquals("сек1", chunksNode[0].get("section").asText())
+        assertTrue(chunksNode[0].get("score").isNumber, "score — число")
+        assertTrue(chunksNode[0].get("contentChars").asInt() == "чанк1".length)
+        assertFalse(chunksNode[0].has("embedding"), "вектор чанка в detail не попадает")
+    }
+
+    @Test
+    fun `no active bases logs db response with empty array before null`() {
+        val repo = newRepo("rag-logs-empty.db")
+        val fake = FakeEmbedder()
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }
+        assertNull(result, "без активных баз — null (без сетевых вызовов)")
+        assertEquals(
+            listOf(LlmCallLog.KIND_DB_REQUEST, LlmCallLog.KIND_DB_RESPONSE),
+            logs.map { it.first },
+        )
+        // Печатный Jackson-принтер пустой массив печатает как «[ ]».
+        assertEquals("[ ]", logs[1].second.trim(), "пустой ответ БД логируется пустым массивом")
+        assertTrue(fake.calls.isEmpty())
     }
 }

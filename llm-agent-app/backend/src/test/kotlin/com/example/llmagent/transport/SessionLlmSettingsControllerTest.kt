@@ -36,6 +36,8 @@ class SessionLlmSettingsControllerTest {
             registry.add("spring.datasource.url") {
                 "jdbc:sqlite:${File.createTempFile("llm-agent-it-", ".db").absolutePath.replace('\\', '/')}"
             }
+            // Фиксируем модель: тесты не должны зависеть от машинной переменной LLM_MODEL
+            registry.add("llm.model") { "default-coding" }
         }
     }
 

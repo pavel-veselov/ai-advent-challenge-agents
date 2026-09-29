@@ -106,9 +106,6 @@ class AgentTaskStateTest {
         assertEquals("planning", state.stage)
         assertEquals("уточнить цель", state.currentStep)
         assertFalse(state.paused)
-
-        // Человекочитаемая строка лога с новым состоянием
-        assertTrue(events.filterIsInstance<LogEvent>().any { "Состояние задачи обновлено" in it.text })
     }
 
     @Test

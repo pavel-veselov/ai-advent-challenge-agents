@@ -13,6 +13,7 @@ import com.knuddels.jtokkit.api.EncodingType
 import com.knuddels.jtokkit.api.Encoding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.withContext
@@ -114,16 +115,24 @@ class AgentImpl(
         var iteration = 0
         var errorIdx = 0
         var logIdx = 0
-        // «Обычное» логирование каждого действия: и в серверный лог (префикс [AGENT]),
-        // и событием type="log" на фронтенд — панель «Логи» (обучение/трассировка).
-        val logStep: suspend (String) -> Unit = { msg ->
-            log.info("[AGENT] session={} {}", sessionId, msg)
-            send(LogEvent(logIdx++, msg))
-        }
-        if (appendUser) {
-            logStep("Пользователь написал: «$userMessage». Сохраняю сообщение в историю сессии и начинаю обработку.")
-        } else {
-            logStep("Продолжение воркфлоу: запускаю следующий этап (новое user-сообщение не добавляется — агент читает историю и состояние задачи).")
+        // Панель «Логи»: ЕДИНСТВЕННЫЙ источник записей — обращения к chat-модели и
+        // к эмбеддинг-модели (RAG-поиск баз знаний). Каждый вызов перехватывается НА
+        // УРОВНЕ КЛИЕНТА (LlmCallLoggingClient — «Запрос в llm»/«Ответ от llm»,
+        // KbEmbeddingClient — «Запрос в эмбеддинги»/«Ответ от эмбеддингов») и фиксируется
+        // парой (kind, detail): text события = kind, detail = фактический JSON (время
+        // записи не вшивается — фронт рисует его из timestamp события). Колбэки вызываются
+        // на потоках reactor-стрима/IO, поэтому пары складываются в неблокирующую очередь
+        // (UNLIMITED — потеря записи недопустима) и вычитываются корутиной run'а через
+        // suspend send в SSE.
+        val llmLogQueue = Channel<Pair<String, String>>(Channel.UNLIMITED)
+        val llm = LlmCallLoggingClient(llmClient) { kind, json -> llmLogQueue.trySend(kind to json) }
+
+        /** Вычитывает накопившиеся записи LLM-лога и отправляет их в SSE (type="log"). */
+        suspend fun drainLlmLogs() {
+            while (true) {
+                val (kind, detail) = llmLogQueue.tryReceive().getOrNull() ?: break
+                send(LogEvent(logIdx++, kind, detail))
+            }
         }
 
         // Память агента (memory layers) пишется ТОЛЬКО пользователем (REST/UI): агент НЕ
@@ -148,11 +157,6 @@ class AgentImpl(
             ?: if (compressionEnabled) SessionContextStore.STRATEGY_SUMMARY else SessionContextStore.STRATEGY_NONE
         val strategyWindowSize = contextStore?.get(sessionId)?.windowSize
             ?: ContextStrategySettings(sessionId).windowSize
-        logStep(
-            "Выбираю, как собрать контекст для модели (стратегия=\"$contextStrategy\"): возьму последние $strategyWindowSize сообщений, " +
-                "не больше ${agentProperties.maxToolCallIterations} шагов цикла. Умения агента (инструменты): ${visibleToolNames()}.",
-        )
-
         send(AgentStarted(userMessage, runSettings.settings() + mapOf(
             "maxToolCallIterations" to agentProperties.maxToolCallIterations,
             "tools" to visibleToolNames(),
@@ -189,7 +193,7 @@ class AgentImpl(
                 val summaryPrompt = buildSummaryPrompt(foldable, previousSummary?.summary)
                 send(ContextSummaryStarted(foldable.size, promptSnapshot(summaryPrompt)))
                 try {
-                    val result = summarize(summaryPrompt, runSettings)
+                    val result = summarize(llm, summaryPrompt, runSettings)
                     compressionStore.saveSummary(sessionId, result.text, foldable.last().id)
                     // Оценка размера контекста (в токенах, эвристика — см. estimateTokens):
                     // «до» — контекст без сжатия (system + вся история с новым вопросом),
@@ -225,10 +229,6 @@ class AgentImpl(
                         "Сжатие контекста: ${foldable.size} старых сообщений свернуто в резюме. " +
                             "Контекст: $contextBefore → $contextAfter токенов.",
                     )
-                    logStep(
-                        "История стала длинной — сворачиваю ${foldable.size} старых сообщений в краткое резюме. " +
-                            "Резюме сохранено в сессии: в следующих запросах оно заменит старые сообщения в контексте.",
-                    )
                     contextSummary = result.text
                     compressionActive = true
                 } catch (e: CancellationException) {
@@ -240,10 +240,6 @@ class AgentImpl(
                     compressionActive = false
                 }
             } else {
-                logStep(
-                    "История пока короткая — сжатие не нужно (кандидатов на свёртывание ${foldable.size}, порог ${compression.summaryEvery}). " +
-                        "Отправляю контекст как есть.",
-                )
                 // Порог не достигнут — применяем прежнее резюме, если оно уже есть;
                 // если резюме ещё нет, шлём полную историю: иначе старые сообщения
                 // выпадали бы из контекста без суммаризации (молчаливая потеря данных).
@@ -265,11 +261,10 @@ class AgentImpl(
                     .filter { it.role != "system" }
                     .takeLast(strategyWindowSize)
                 val factsPrompt = buildFactsPrompt(window, facts)
-                val updated = extractFacts(factsPrompt, runSettings)
+                val updated = extractFacts(llm, factsPrompt, runSettings)
                 factsStoreInstance.replaceAll(sessionId, updated)
                 facts = updated
                 send(FactsUpdated(updated))
-                logStep("Обновляю «липкие факты» — важные сведения о пользователе и диалоге. Теперь их ${updated.size}: $updated")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -294,74 +289,36 @@ class AgentImpl(
             // молча пропускается (fail-open), run не ломается.
             val activeProfileId = appSettingsStore?.get(PROFILE_ACTIVE_KEY)
                 ?.trim()?.takeIf { it != PROFILE_ACTIVE_NONE }?.toLongOrNull()
-            if (appSettingsStore == null) {
-                logStep("Профиль пользователя: хранилище настроек не подключено — блок профиля пропускается.")
-            } else if (activeProfileId == null) {
-                logStep("Профиль пользователя: не выбран («Без профиля») — системный блок профиля в контекст не добавляется.")
-            } else {
+            if (activeProfileId != null) {
                 val profile = profileStore?.findById(activeProfileId)
                 if (profile != null) {
                     messages += LlmMessage("system", buildProfileSystem(profile))
-                    logStep(
-                        "Профиль пользователя: применяю активный профиль «${profile.name}» (прочитан из app_settings, ключ «profile.active»). " +
-                            "Блок «=== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ===» добавлен в контекст сразу после системного промпта: " +
-                            "Стиль: ${profile.position ?: "—"}; Формат ответа: ${profile.responseFormat ?: "—"}; " +
-                            "Предпочтения: ${profile.preferences ?: "—"}; Ограничения: ${profile.constraints ?: "—"}.",
-                    )
-                } else {
-                    logStep(
-                        "Профиль пользователя: активный профиль с id=$activeProfileId не найден в справочнике — " +
-                            "блок профиля пропускается (fail-open), run продолжается без персонализации.",
-                    )
                 }
             }
 
             val wm = workingMemoryStore?.get(wmKey) ?: WorkingMemory(task = null, notes = emptyList())
-            if (workingMemoryStore == null) {
-                logStep("Рабочая память: хранилище не подключено — блок рабочей памяти пропускается.")
-            } else {
-                val wmTaskLine =
-                    wm.task?.takeIf { it.isNotBlank() }?.let { "текущая задача — «$it»" } ?: "текущая задача не задана"
-                val wmNotesLine =
-                    if (wm.notes.isEmpty()) "заметок нет"
-                    else "заметки: " + wm.notes.mapIndexed { index, note -> "${index + 1}. $note" }.joinToString("; ")
-                logStep(
-                    "Рабочая память проекта (общая для всех сессий проекта, ключ «$wmKey»): $wmTaskLine, $wmNotesLine. " +
-                        "Заметки пользователь добавляет сам (REST/UI) — они уйдут модели системным блоком «=== РАБОЧАЯ ПАМЯТЬ ===».",
-                )
-            }
             val wmSections = mutableListOf<String>()
             if (!wm.task.isNullOrBlank()) wmSections += "Текущая задача: ${wm.task}"
             if (wm.notes.isNotEmpty()) {
                 wmSections += "Промежуточные результаты:\n" +
                     wm.notes.mapIndexed { index, note -> "${index + 1}. $note" }.joinToString("\n")
             }
-            if (wmSections.isNotEmpty()) {
-                messages += LlmMessage("system", "=== РАБОЧАЯ ПАМЯТЬ ===\n" + wmSections.joinToString("\n\n"))
+            val wmBlock = if (wmSections.isNotEmpty()) "=== РАБОЧАЯ ПАМЯТЬ ===\n" + wmSections.joinToString("\n\n") else null
+            if (wmBlock != null) {
+                messages += LlmMessage("system", wmBlock)
             }
 
             val longTerm = longTermMemoryStore?.listAll() ?: emptyList()
-            if (longTermMemoryStore == null) {
-                logStep("Долговременная память: хранилище не подключено — блок долговременной памяти пропускается.")
-            } else if (longTerm.isEmpty()) {
-                logStep("Долговременная память (глобальная, общая для всех сессий): записей нет — блок в контекст не добавляется.")
-            } else {
-                val shownLtm = longTerm.take(20)
-                logStep(
-                    "Долговременная память (глобальная, общая для всех сессий): загружено ${longTerm.size} записей, " +
-                        "в контекст пойдёт ${shownLtm.size}: " +
-                        shownLtm.joinToString("; ") { "${it.type} «${it.key}»" } +
-                        (if (longTerm.size > 20) "; …и ещё ${longTerm.size - 20}" else "") + ". " +
-                            "Записи пользователь добавляет сам (REST/UI); они уйдут модели системным блоком «=== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===».",
-                )
-            }
-            if (longTerm.isNotEmpty()) {
+            val ltmBlock = if (longTerm.isNotEmpty()) {
                 val shown = longTerm.take(20)
                 val lines = shown.map { "${it.type} | ${it.key}: ${it.value}" }.toMutableList()
                 if (longTerm.size > 20) {
                     lines += "…и ещё ${longTerm.size - 20} записей в долговременной памяти"
                 }
-                messages += LlmMessage("system", "=== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===\n" + lines.joinToString("\n"))
+                "=== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===\n" + lines.joinToString("\n")
+            } else null
+            if (ltmBlock != null) {
+                messages += LlmMessage("system", ltmBlock)
             }
 
             // Инварианты проекта (Day-14): обязательные ограничения (архитектура, технические
@@ -371,38 +328,33 @@ class AgentImpl(
             // памяти, для ВСЕХ стратегий контекста. Нет store / нет инвариантов / сбой чтения —
             // блок молча пропускается (fail-open), run не ломается.
             val invariants = invariantsStore?.list(wmKey) ?: emptyList()
-            if (invariantsStore == null) {
-                logStep("Инварианты: хранилище не подключено — блок инвариантов пропускается.")
-            } else if (invariants.isEmpty()) {
-                logStep("Инварианты проекта (ключ «$wmKey»): инвариантов нет — блок в контекст не добавляется.")
-            } else {
-                messages += LlmMessage("system", buildInvariantsSystem(invariants))
-                logStep(
-                    "Инварианты проекта (ключ «$wmKey»): загружено ${invariants.size} инвариантов — " +
-                        "системный блок «=== ИНВАРИАНТЫ ===» добавлен в контекст. Модель обязана соблюдать их " +
-                        "и отказываться от решений, которые их нарушают.",
-                )
+            if (invariants.isNotEmpty()) {
+                val invariantsBlock = buildInvariantsSystem(invariants)
+                messages += LlmMessage("system", invariantsBlock)
             }
 
             // Базы знаний (Day-22, RAG): по вопросу пользователя ищем top-K релевантных
             // чанков по всем АКТИВНЫМ ПРОИНДЕКСИРОВАННЫМ базам — системный блок
             // «### База знаний» рядом с блоками памяти, для ВСЕХ стратегий контекста.
             // Эмбеддинг-вызов — блокирующий HTTP + чтение БД: уводим в Dispatchers.IO.
-            // Нет активных баз → buildContextBlock вернёт null БЕЗ сетевых вызовов
+            // Нет активных баз → buildContextResult вернёт null БЕЗ сетевых вызовов
             // (нулевой оверхед, поведение агента не меняется — требование плана).
             val ragQuery = if (appendUser) userMessage
             else sessionStore.getStored(sessionId)
                 .lastOrNull { it.role == "user" }?.content ?: userMessage
-            val kbBlock = kbRagService?.let { service ->
-                withContext(Dispatchers.IO) { service.buildContextBlock(ragQuery) }
+            val kbRag = kbRagService?.let { service ->
+                withContext(Dispatchers.IO) {
+                    // Эмбеддинг-вызов RAG-поиска логируется в панель «Логи» наравне с
+                    // chat-моделью: колбэк складывает («Запрос в эмбеддинги»/«Ответ от
+                    // эмбеддингов», JSON) в ту же очередь, что и записи chat-модели.
+                    service.buildContextResult(ragQuery) { kind, json -> llmLogQueue.trySend(kind to json) }
+                }
             }
-            if (kbRagService == null) {
-                logStep("База знаний (RAG): сервис не подключён — блок базы знаний пропускается.")
-            } else if (kbBlock == null) {
-                logStep("База знаний (RAG): активных проиндексированных баз нет — блок «### База знаний» в контекст не добавляется.")
-            } else {
+            // block != null ⟺ сбоя не было, найдены чанки и блок собран (см. KbRagResult) —
+            // блок «### База знаний» добавляется в контекст после памяти, как раньше.
+            val kbBlock = kbRag?.block
+            if (kbBlock != null) {
                 messages += LlmMessage("system", kbBlock)
-                logStep("База знаний (RAG): релевантные чанки найдены — системный блок «### База знаний» добавлен в контекст после памяти.")
             }
         } catch (e: CancellationException) {
             throw e
@@ -416,17 +368,9 @@ class AgentImpl(
         // после памяти, перед сообщениями истории — для ВСЕХ стратегий контекста: модель
         // продолжает с текущего шага без повторного объяснения задачи.
         val taskState = taskStateStore?.get(sessionId)
-        if (taskStateStore == null) {
-            logStep("Состояние задачи (FSM): хранилище не подключено — блок состояния пропускается.")
-        } else if (taskState == null) {
-            logStep("Состояние задачи (FSM): задача не начата — блок состояния в контекст не добавляется; агент может начать её инструментом task_state.")
-        } else {
-            messages += LlmMessage("system", buildTaskStateSystem(taskState))
-            logStep(
-                "Состояние задачи (FSM): этап «${taskState.stage}», шаг: ${taskState.currentStep ?: "—"}; " +
-                    "ожидаемое действие: ${taskState.expectedAction ?: "—"}; пауза: ${if (taskState.paused) "ДА" else "нет"}. " +
-                    "Блок «=== СОСТОЯНИЕ ЗАДАЧИ ===» добавлен в контекст — продолжаю с текущего шага без повторного объяснения задачи.",
-            )
+        if (taskState != null) {
+            val taskStateBlock = buildTaskStateSystem(taskState)
+            messages += LlmMessage("system", taskStateBlock)
         }
 
         // Воркфлоу Day-14: глобальная настройка app_settings (workflow.enabled /
@@ -438,13 +382,8 @@ class AgentImpl(
         val workflowMode = workflowSettings?.mode() ?: WorkflowSettings.MODE_MANUAL
         val workflowStage = if (workflowEnabled) (taskState?.stage ?: TaskStateStore.STAGE_PLANNING) else null
         if (workflowEnabled && workflowStage != null) {
-            messages += LlmMessage("system", buildWorkflowDirective(workflowStage, workflowMode))
-            logStep(
-                "Воркфлоу: следовать workflow (режим «$workflowMode»). Этап «$workflowStage»: " +
-                    if (workflowMode == WorkflowSettings.MODE_MANUAL)
-                        "выполняю ТОЛЬКО этот этап и жду подтверждения перехода к следующему."
-                    else "прохожу все этапы подряд (планирование → выполнение → проверка → готово), без паузы.",
-            )
+            val workflowBlock = buildWorkflowDirective(workflowStage, workflowMode)
+            messages += LlmMessage("system", workflowBlock)
         }
 
         // AUTO-воркфлоу: отслеживаем этап, на котором модель находится, чтобы при смене
@@ -459,9 +398,6 @@ class AgentImpl(
             // Сжатый контекст (strategy=summary): [резюме как сообщение] + последние keepLast
             // сообщений «как есть» + новый вопрос (поведение сжатия не изменилось).
             compressionActive -> {
-                logStep(
-                    "Стратегия «summary»: контекст = резюме прежней истории + последние ${compression.keepLast} сообщений «как есть» + новый вопрос.",
-                )
                 if (contextSummary != null) {
                     messages += LlmMessage("system", "$SUMMARY_CONTEXT_PREFIX$contextSummary")
                 }
@@ -484,16 +420,11 @@ class AgentImpl(
                         "system",
                         "Известные факты:\n" + facts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" },
                     )
-                    logStep("Добавляю в контекст известные факты диалога (${facts.size} шт.) перед окном сообщений.")
                 }
                 val window = sessionStore.getStored(sessionId)
                     .filter { it.role != "system" }
                     .takeLast(strategyWindowSize)
                 window.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
-                logStep(
-                    "Стратегия «$contextStrategy»: беру окно последних $strategyWindowSize сообщений истории " +
-                        "(в окно попало ${window.size}, включая новый вопрос).",
-                )
             }
             // Цепочка активной ветки (strategy=branching): корень → … → вопрос (после append
             // вопрос — голова активной ветки); системные заметки фильтруются, порядок
@@ -506,30 +437,20 @@ class AgentImpl(
                 val branchChain = branchMessages
                     .filter { it.role != "system" }
                 branchChain.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
-                logStep(
-                    "Стратегия «branching»: контекст = цепочка сообщений активной ветки " +
-                        "(${branchChain.size} сообщений, от корня ветки к текущему вопросу).",
-                )
             }
             // Вся история целиком (strategy=none и любой непокрытый выше случай).
             else -> {
                 val storedAll = sessionStore.getStored(sessionId)
                     .filter { it.role != "system" }
                 storedAll.forEach { m -> messages.add(LlmMessage(m.role, m.content)) }
-                logStep("Стратегия «$contextStrategy»: отправляю историю диалога целиком — ${storedAll.size} сообщений.")
             }
         }
-        logStep(
-            "Контекст для LLM готов: ${messages.size} сообщений (стратегия=$contextStrategy). " +
-                "Это всё, что модель увидит: системный промпт, профиль и память — системными блоками, далее история диалога.",
-        )
 
         try {
             while (true) {
                 iteration++
                 if (iteration > agentProperties.maxToolCallIterations) {
                     val msg = "Превышен лимит итераций агента (${agentProperties.maxToolCallIterations})"
-                    logStep("Достигнут лимит шагов (${agentProperties.maxToolCallIterations}) — останавливаю цикл, чтобы агент не зациклился.")
                     log.warn("session={} {}", sessionId, msg)
                     send(ErrorEvent(errorIdx++, msg))
                     return@flux
@@ -544,10 +465,6 @@ class AgentImpl(
                 if (workflowEnabled && taskStateStore != null) {
                     val current = taskStateStore.get(sessionId)
                     if (current != null && current.paused) {
-                        logStep(
-                            "Воркфлоу: задача на паузе (пользователь поставил паузу) — останавливаю выполнение " +
-                                "на этапе «${current.stage}». Сняв паузу, выполнение продолжится с текущего шага.",
-                        )
                         send(
                             TaskStateChanged(
                                 current.stage, current.currentStep, current.expectedAction, paused = true,
@@ -563,10 +480,6 @@ class AgentImpl(
 
                 // Локальных оценок до отправки в LLM нет: переполнение контекста выявляет сам
                 // апстрим (обычно 400), его ответ пробрасывается дословно через error-событие.
-                logStep(
-                    "Шаг $iteration: отправляю запрос в LLM (контекст: ${messages.size} сообщений). " +
-                        "Модель сама решит — ответить текстом или попросить вызвать инструмент.",
-                )
                 val text = StringBuilder()
                 var toolCalls: List<LlmToolCall> = emptyList()
                 var finishReason = "stop"
@@ -575,7 +488,10 @@ class AgentImpl(
                 var responseBody: String? = null
                 // Тело запроса приходит из колбэка синхронно при построении streamChat(),
                 // поэтому строка шага появляется ДО HTTP-вызова — в т.ч. при ошибке API.
-                val flux = llmClient.streamChat(messages, visibleToolDefinitions(), runSettings) { requestBody = it }
+                val flux = llm.streamChat(messages, visibleToolDefinitions(), runSettings) { requestBody = it }
+                // «HH:mm:ss  Запрос в llm» — текст построен клиентом при сборке запроса;
+                // вычитываем очередь, чтобы запись ушла в SSE до llm_request_started.
+                drainLlmLogs()
                 send(LlmRequestStarted(iteration, promptSnapshot(messages), requestBody = requestBody))
                 val events = flux.collectList().awaitSingle()
                 for (e in events) {
@@ -592,20 +508,14 @@ class AgentImpl(
                         is LlmEvent.ResponseAssembled -> responseBody = e.body
                     }
                 }
+                // «HH:mm:ss  Ответ от llm» — записан в очередь при получении ResponseAssembled.
+                drainLlmLogs()
                 lastAssistantText = text.toString()
                 val costUsd = usage?.let {
                     (it.inputTokens * settings.priceInputPer1M() + it.outputTokens * settings.priceOutputPer1M()) /
                         1_000_000.0
                 }
                 send(LlmResponseFinished(iteration, finishReason, usage, costUsd = costUsd, responseBody = responseBody))
-                logStep(
-                    "Шаг $iteration: модель ответила (finishReason=$finishReason)." +
-                        when (finishReason) {
-                            "tool_calls" -> " Для ответа не хватает данных — модель запросила инструмент(ы)."
-                            "stop" -> " Данных достаточно — модель готова дать финальный ответ."
-                            else -> ""
-                        },
-                )
 
                 // Воркфлоу: пользователь мог поставить паузу, ПОКА модель генерировала ответ
                 // (REST PUT task-state {paused:true} легло в БД после проверки в топе цикла).
@@ -616,11 +526,6 @@ class AgentImpl(
                 if (workflowEnabled && taskStateStore != null) {
                     val cur = taskStateStore.get(sessionId)
                     if (cur != null && cur.paused) {
-                        logStep(
-                            "Воркфлоу: задача поставлена на паузу, пока модель генерировала ответ — " +
-                                "останавливаюсь на этапе «${cur.stage}» ДО перехода к следующему. " +
-                                "Результат этапа не сохраняю; сняв паузу, выполнение продолжится с текущего этапа.",
-                        )
                         send(
                             TaskStateChanged(
                                 cur.stage, cur.currentStep, cur.expectedAction, paused = true,
@@ -633,10 +538,6 @@ class AgentImpl(
                 }
 
                 if (finishReason == "tool_calls" && toolCalls.isNotEmpty()) {
-                    logStep(
-                        "Модель решила не отвечать сразу, а использовать инструмент(ы): ${toolCalls.mapNotNull { it.name }} — " +
-                            "ей нужны данные для точного ответа.",
-                    )
                     val assistantReply = text.toString().trim()
                     messages.add(LlmMessage("assistant", assistantReply.ifEmpty { null }, toolCalls = toolCalls))
                     // Day-19: сохраняем в историю КАЖДЫЙ ответ модели (не только финальный). Иначе
@@ -659,7 +560,6 @@ class AgentImpl(
                         toolCounters[name] = idx + 1
                         val args = parseArgs(tc.arguments)
                         send(ToolCallStarted(name, idx, args))
-                        logStep("Выполняю инструмент \"$name\" (вызов #$idx) с аргументами: $args.")
 
                         val tool = toolRegistry.get(name)
                         val result = if (name == TaskStateTool.TOOL_NAME) {
@@ -687,11 +587,6 @@ class AgentImpl(
                             }
                         }
                         send(ToolCallFinished(name, idx, if (result.isError) "error" else "success", result.result))
-                        logStep(
-                            "Инструмент \"$name\" вернул " +
-                                "${if (result.isError) "ОШИБКУ" else "результат"}: ${result.result}. " +
-                                "Кладу его в контекст, чтобы модель увидела его на следующем шаге.",
-                        )
                         // Day-13: после успешного task_state — событие task_state_changed
                         // (панель состояния на фронтенде обновляется в реальном времени)
                         // и строка лога с новым состоянием. При ошибке валидации FSM
@@ -704,10 +599,6 @@ class AgentImpl(
                                         saved.stage, saved.currentStep, saved.expectedAction, saved.paused,
                                         saved.plan, saved.implementation, saved.validation, saved.awaitConfirmation,
                                     )
-                                )
-                                logStep(
-                                    "Состояние задачи обновлено: этап «${saved.stage}» — шаг: ${saved.currentStep ?: "—"}; " +
-                                        "ожидаемое действие: ${saved.expectedAction ?: "—"}; пауза: ${if (saved.paused) "ДА" else "нет"}.",
                                 )
                             }
                         }
@@ -748,10 +639,6 @@ class AgentImpl(
                                 // закрыл пузырь этапа и открыл новый для следующего (live-вид
                                 // видит каждую стадию отдельным сообщением ассистента).
                                 send(WorkflowStageFinished(completed, stageText))
-                                logStep(
-                                    "Воркфлоу (авто): этап «$completed» завершён — результат сохранён " +
-                                        "(колонка «${TaskStateStore.stageOutputColumn(completed)}») и добавлен в историю чата.",
-                                )
                             }
                             lastWorkflowStage = after.stage
                         }
@@ -765,7 +652,6 @@ class AgentImpl(
                     sessionStore.append(sessionId, "assistant", finalText, usage?.inputTokens, usage?.outputTokens)
                     // Кумулятивная статистика «за всё время» — переживает удаление сессии.
                     sessionStore.addLifetimeTokens(usage?.inputTokens ?: 0, usage?.outputTokens ?: 0, costUsd ?: 0.0)
-                    logStep("Модель дала финальный ответ (${finalText.length} символов) за $iteration шаг(ов). Сохраняю его в историю сессии — обработка завершена.")
                     send(AgentFinished(finalText))
 
                     // AUTO-воркфлоу: модель могла дать финальный ответ, не дойдя до этапа
@@ -777,10 +663,6 @@ class AgentImpl(
                             lastWorkflowStage != null && lastWorkflowStage != TaskStateStore.STAGE_DONE
                         ) {
                             taskStateStore.setStageOutput(sessionId, current.stage, finalText, await = false)
-                            logStep(
-                                "Воркфлоу (авто): финальный ответ — результат этапа «${current.stage}» сохранён " +
-                                    "в колонку «${TaskStateStore.stageOutputColumn(current.stage)}».",
-                            )
                         }
                     }
 
@@ -801,13 +683,11 @@ class AgentImpl(
                                 )
                             )
                             send(WorkflowPaused(workflowStage, finalText, true))
-                            logStep(
-                                "Воркфлоу: этап «$workflowStage» завершён — результат сохранён в состояние задачи " +
-                                    "(колонка «${TaskStateStore.stageOutputColumn(workflowStage)}»), ожидаю подтверждения перехода. " +
-                                    "Дальше: «Продолжить» (следующий этап) или «Отмена» (пауза).",
-                            )
                         } else {
-                            logStep("Воркфлоу: не удалось сохранить результат этапа «$workflowStage» (сбой БД) — продолжаю без паузы.")
+                            log.warn(
+                                "session={} не удалось сохранить результат этапа «{}» — продолжаю без паузы",
+                                sessionId, workflowStage,
+                            )
                         }
                     }
                     return@flux
@@ -819,15 +699,22 @@ class AgentImpl(
         } catch (e: LlmApiException) {
             // 4xx/5xx от LLM API (неверный ключ/модель/тело, сбой апстрима) — понятное
             // событие со статусом и сообщением апстрима, если оно было в теле ответа.
+            // Запись запроса уже в очереди лога (запрос построен до HTTP-вызова) —
+            // вычитываем, чтобы «Запрос в llm» ушёл в панель и при сбое API.
+            drainLlmLogs()
             log.error("LLM API error (HTTP {}) for session {}: {}", e.status, sessionId, e.message)
             send(ErrorEvent(errorIdx++, "Ошибка LLM API (HTTP ${e.status}): ${e.message}"))
         } catch (e: TimeoutException) {
             // Таймаут ожидания ответа от LLM — понятная формулировка вместо внутреннего
             // Reactor-сообщения («Did not observe any item or terminal signal…»).
+            drainLlmLogs()
             val msg = "Превышен таймаут ожидания ответа от LLM (${settings.timeoutSeconds()} с). Попробуйте ещё раз или увеличьте «Таймаут» в настройках."
             log.error("LLM timeout for session {}: {}", sessionId, msg)
             send(ErrorEvent(errorIdx++, msg))
         } catch (e: Exception) {
+            // Сбой вызова LLM (в т.ч. на построении запроса) — запись «Запрос в llm»
+            // могла остаться в очереди: вычитываем, чтобы она не потерялась.
+            drainLlmLogs()
             log.error("Agent run failed for session {}: {}", sessionId, e.message)
             try {
                 // Ошибка соединения с сервером LLM — явное «нет связи» с сутью ошибки;
@@ -1098,16 +985,18 @@ class AgentImpl(
      * Инструменты не передаются: резюме — чисто текстовый ответ. Возвращает текст
      * резюме и usage (если провайдер прислал). Бросает [LlmSummaryException] при
      * ответе с ошибкой, вызовом инструмента или пустом тексте — вызывающий код
-     * переводит это в fail-open.
+     * переводит это в fail-open. Вызов идёт через обёрнутый клиент [client]
+     * (агентский run передаёт LlmCallLoggingClient — запись уходит в панель «Логи»).
      */
     private suspend fun summarize(
+        client: LlmClient,
         prompt: List<LlmMessage>,
         settings: LlmSettings,
     ): SummaryResult {
         val text = StringBuilder()
         var usage: LlmUsage? = null
         var finishReason = "stop"
-        val events = llmClient.streamChat(prompt, emptyList(), settings).collectList().awaitSingle()
+        val events = client.streamChat(prompt, emptyList(), settings).collectList().awaitSingle()
         for (e in events) {
             when (e) {
                 is LlmEvent.ContentDelta -> text.append(e.delta)
@@ -1171,20 +1060,28 @@ class AgentImpl(
      * молча пропускаются. Бросает [LlmSummaryException] при finishReason error/tool_calls,
      * пустом ответе или не-JSON-ответе — вызывающий код переводит это в fail-open.
      */
-    private suspend fun extractFacts(prompt: List<LlmMessage>, runSettings: LlmSettings): LinkedHashMap<String, String> {
+    private suspend fun extractFacts(
+        client: LlmClient,
+        prompt: List<LlmMessage>,
+        runSettings: LlmSettings,
+    ): LinkedHashMap<String, String> {
         // Один ретрай на пустой/сбойный ответ: модель изредка отдаёт пустоту на короткие
         // служебные промпты — повторная попытка обычно успешна (fail-open остаётся крайним случаем).
         return try {
-            extractFactsOnce(prompt, runSettings)
+            extractFactsOnce(client, prompt, runSettings)
         } catch (e: LlmSummaryException) {
-            extractFactsOnce(prompt, runSettings)
+            extractFactsOnce(client, prompt, runSettings)
         }
     }
 
-    private suspend fun extractFactsOnce(prompt: List<LlmMessage>, runSettings: LlmSettings): LinkedHashMap<String, String> {
+    private suspend fun extractFactsOnce(
+        client: LlmClient,
+        prompt: List<LlmMessage>,
+        runSettings: LlmSettings,
+    ): LinkedHashMap<String, String> {
         val text = StringBuilder()
         var finishReason = "stop"
-        val events = llmClient.streamChat(prompt, emptyList(), runSettings).collectList().awaitSingle()
+        val events = client.streamChat(prompt, emptyList(), runSettings).collectList().awaitSingle()
         for (e in events) {
             when (e) {
                 is LlmEvent.ContentDelta -> text.append(e.delta)

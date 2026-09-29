@@ -86,7 +86,7 @@ class AgentLoopTest {
                 "llm_response_finished",
                 "agent_finished",
             ),
-            // События «log» (панель «Логи», AgentImpl.logStep) идут вперемешку с основными
+            // События «log» (панель «Логи») идут вперемешку с основными
             // событиями потока — фильтруем их и проверяем контракт порядка агентских событий.
             events.map { it.type }.filterNot { it == "log" },
         )

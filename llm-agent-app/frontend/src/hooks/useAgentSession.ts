@@ -146,6 +146,8 @@ function historyToMessages(msgs: HistoryMessage[]): ChatMessage[] {
       streaming: false,
       promptTokens: m.promptTokens ?? null,
       completionTokens: m.completionTokens ?? null,
+      // У истории бэкенда поля времени нет — меткой становится момент загрузки.
+      createdAt: new Date(),
     }));
 }
 
@@ -805,15 +807,20 @@ export function useAgentSession(): AgentSession {
     void refreshSessionHistory(sid);
   }, [refreshSessionHistory]);
 
-  /** Добавляет служебное событие жизненного цикла UI в лог шагов (kind = system). */
-  const pushSystemEvent = useCallback((title: string) => {
+  /**
+   * Добавляет служебное событие жизненного цикла UI (kind = system) или строку лога
+   * агента (событие log) в лог шагов. detail — опциональный JSON вызова для «(детализация)»;
+   * ts — время события (формат ISO), по умолчанию «сейчас».
+   */
+  const pushSystemEvent = useCallback((title: string, detail?: string, ts?: string) => {
     const id = `system-${newId()}`;
     stepsRef.current.set(id, {
       id,
-      time: fmtTime(new Date().toISOString()),
+      time: fmtTime(ts ?? new Date().toISOString()),
       kind: 'system',
       title,
       status: 'success',
+      detail,
     });
     setSteps(Array.from(stepsRef.current.values()));
   }, []);
@@ -1009,8 +1016,10 @@ export function useAgentSession(): AgentSession {
     const key = `${e.runId}:${e.stepId}`;
     switch (e.type) {
       case 'log': {
-        // «Обычная» строка лога действия агента — служебная запись без раскрытия.
-        pushSystemEvent(e.payload.text);
+        // Строка лога действия агента: короткий kind («Запрос в llm», «Ответ от
+        // эмбеддингов»…) без времени/JSON; фактический JSON — в payload.detail
+        // (панель показывает по ссылке «(детализация)»). Время строки — из e.timestamp.
+        pushSystemEvent(e.payload.text, e.payload.detail, e.timestamp);
         break;
       }
       case 'agent_started': {
@@ -1021,37 +1030,34 @@ export function useAgentSession(): AgentSession {
         return;
       }
       case 'llm_request_started': {
-        const it = e.payload.iteration;
-        touchStep(sid, key, e.timestamp, {
-          kind: 'llm',
-          title: `LLM (итерация ${it})`,
-          iteration: it,
-          prompt: e.payload.prompt,
-          requestBody: e.payload.requestBody,
-          // Оценка токенов запроса приходит до самого запроса — сохраняем структурно сразу.
-          tokenUsage: {
-            estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
-          },
-          status: 'running',
-        });
+        // Шаг «LLM (итерация N)» больше не создаётся: поток запросов в LLM показывают
+        // события log («Запрос в llm»/«Ответ от llm») с detail-JSON. Итерация нужна
+        // только ниже — на llm_response_finished, где считаются итоги токенов.
         return;
       }
       case 'llm_response_finished': {
         const ok = e.payload.finishReason === 'stop' || e.payload.finishReason === 'tool_calls';
         const u = e.payload.usage;
-        touchStep(sid, key, e.timestamp, {
-          status: ok ? 'success' : 'error',
-          // Токены/стоимость в текст лога не дублируем: только служебный finish_reason,
-          // численные значения остаются в tokenUsage для сводки по сессии.
-          detail: `finish_reason: ${e.payload.finishReason}`,
-          responseBody: e.payload.responseBody,
-          // Данные о токенах храним структурно (для итогов токенов сессии).
-          tokenUsage: {
-            inputTokens: u?.inputTokens ?? null,
-            outputTokens: u?.outputTokens ?? null,
-            estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
-            costUsd: e.payload.costUsd ?? null,
-          },
+        // Обновляем только СУЩЕСТВУЮЩУЮ запись (например, «Сжатие контекста») —
+        // шаг «LLM (итерация N)» больше не создаётся, сироту не порождаем.
+        mutateSessionSteps(sid, (map) => {
+          const existing = map.get(key);
+          if (!existing) return;
+          map.set(key, {
+            ...existing,
+            status: ok ? 'success' : 'error',
+            // Токены/стоимость в текст лога не дублируем: только служебный finish_reason,
+            // численные значения остаются в tokenUsage для сводки по сессии.
+            detail: `finish_reason: ${e.payload.finishReason}`,
+            responseBody: e.payload.responseBody,
+            // Данные о токенах храним структурно (для итогов токенов сессии).
+            tokenUsage: {
+              inputTokens: u?.inputTokens ?? null,
+              outputTokens: u?.outputTokens ?? null,
+              estimatedRequestTokens: e.payload.estimatedRequestTokens ?? null,
+              costUsd: e.payload.costUsd ?? null,
+            },
+          });
         });
         // Накопительные итоги диалога сессии: суммируем usage и стоимость каждого ответа LLM.
         const st = runStateRef.current.get(sid);
@@ -1288,7 +1294,7 @@ export function useAgentSession(): AgentSession {
               curState.assistantId = nextId;
               updateSessionMessages(sid, (prev) => [
                 ...prev,
-                { id: nextId, role: 'assistant', content: '', streaming: true },
+                { id: nextId, role: 'assistant', content: '', streaming: true, createdAt: new Date() },
               ]);
             }
           } else if (e.type === 'llm_token') {
@@ -1326,7 +1332,7 @@ export function useAgentSession(): AgentSession {
               `Контекст: ${p.contextTokensBefore} → ${p.contextTokensAfter} токенов.`;
             updateSessionMessages(sid, (prev, state) => {
               const idx = prev.findIndex((m) => m.id === state.assistantId);
-              const noticeMsg: ChatMessage = { id: newId(), role: 'system', content: notice };
+              const noticeMsg: ChatMessage = { id: newId(), role: 'system', content: notice, createdAt: new Date() };
               if (idx === -1) return [...prev, noticeMsg];
               const next = [...prev];
               next.splice(idx, 0, noticeMsg);
@@ -1361,7 +1367,7 @@ export function useAgentSession(): AgentSession {
             st.assistantId = nextAssistantId;
             updateSessionMessages(sid, (prev) => [
               ...prev,
-              { id: nextAssistantId, role: 'assistant', content: '', streaming: true },
+              { id: nextAssistantId, role: 'assistant', content: '', streaming: true, createdAt: new Date() },
             ]);
           } else if (e.type === 'error') {
             finalizeRun(sid);
@@ -1426,8 +1432,8 @@ export function useAgentSession(): AgentSession {
       writeFilesToStorage(sid, []);
       st.messages = [
         ...st.messages,
-        { id: newId(), role: 'user', content: trimmed },
-        { id: assistantId, role: 'assistant', content: '', streaming: true },
+        { id: newId(), role: 'user', content: trimmed, createdAt: new Date() },
+        { id: assistantId, role: 'assistant', content: '', streaming: true, createdAt: new Date() },
       ];
       st.isRunning = true;
       // Оптимистичная подсветка текущего этапа: для первой задачи воркфлоу (строки состояния
@@ -1471,7 +1477,7 @@ export function useAgentSession(): AgentSession {
       st.assistantId = assistantId;
       st.files = [];
       writeFilesToStorage(sid, []);
-      st.messages = [...st.messages, { id: assistantId, role: 'assistant', content: '', streaming: true }];
+      st.messages = [...st.messages, { id: assistantId, role: 'assistant', content: '', streaming: true, createdAt: new Date() }];
       st.isRunning = true;
       if (st.taskState != null) {
         // «Продолжить»/«Выполнить» в ручном режиме — переход к СЛЕДУЮЩЕМУ линейному этапу
@@ -2136,7 +2142,7 @@ export function useAgentSession(): AgentSession {
       if (typeof text === 'string' && text.trim() !== '') {
         updateSessionMessages(activeId, (prev) => [
           ...prev,
-          { id: newId(), role: 'assistant', content: text, streaming: false },
+          { id: newId(), role: 'assistant', content: text, streaming: false, createdAt: new Date() },
         ]);
       }
     });

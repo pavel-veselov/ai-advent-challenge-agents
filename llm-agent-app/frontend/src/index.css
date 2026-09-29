@@ -664,6 +664,24 @@ button:disabled {
   word-break: break-word;
 }
 
+/* Время сообщения «HH:mm» у пузыря (user — справа, assistant — слева): мелкий серый
+   mono-текст в духе таймстемпов мессенджеров. */
+.chat-msg-time {
+  margin-top: 4px;
+  color: var(--text-dim);
+  opacity: 0.8;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.chat-msg.user .chat-msg-time {
+  text-align: right;
+}
+
 /* --- markdown в сообщениях ассистента --- */
 .chat-md {
   white-space: normal;
@@ -2058,6 +2076,36 @@ button:disabled {
 .detail-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Шапка лог-модалки «(детализация)»: заголовок слева, крестик справа */
+.log-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.detail-x:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .detail-close {

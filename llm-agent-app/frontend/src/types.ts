@@ -84,7 +84,7 @@ export type AgentEvent =
   | BaseEvent<'tool_call_started', { toolName: string; args: Record<string, unknown> }>
   | BaseEvent<'tool_call_finished', { result: string; status: 'success' | 'error' }>
   | BaseEvent<'agent_finished', { finalText: string }>
-  | BaseEvent<'log', { text: string }>
+  | BaseEvent<'log', { text: string; /** Фактический JSON вызова (опционален; показывается по ссылке «(детализация)»). */ detail?: string }>
   | BaseEvent<'context_summary_started', { foldCount: number; prompt: PromptMessage[] }>
   | BaseEvent<
       'context_summary_finished',
@@ -698,7 +698,11 @@ export interface StepLogEntry {
   args?: Record<string, unknown>;
   /** Результат инструмента или текст ошибки. */
   result?: string;
-  /** Служебная строка: finish_reason + входные/выходные токены. */
+  /**
+   * Для kind = 'llm': служебная строка finish_reason + входные/выходные токены.
+   * Для kind = 'system' (события log): фактический JSON вызова LLM/эмбеддингов —
+   * открывается по ссылке «(детализация)» (см. StepsLog).
+   */
   detail?: string;
   /**
    * Структурированные данные о токенах LLM-вызова (см. useAgentSession):
@@ -740,6 +744,12 @@ export interface ChatMessage {
    * кнопку «Скачать файл» в чате. Ссылка строится через downloadToolFileUrl(filename).
    */
   file?: { filename: string } | null;
+  /**
+   * Время появления сообщения в чате (HH:mm у пузыря). Фиксируется один раз при создании
+   * объекта сообщения: для живых реплик — момент добавления в состояние, для истории
+   * бэкенда (у HistoryMessage нет времени) — момент загрузки. На рендерах не пересчитывается.
+   */
+  createdAt: Date;
 }
 
 /**

@@ -405,11 +405,13 @@ export default function KnowledgeBasePanel({ disabled }: KnowledgeBasePanelProps
                     aria-checked={kb.active}
                     aria-label={`База «${kb.name}»: ${kb.active ? 'активна' : 'неактивна'}`}
                     className={`llm-switch kb-switch${kb.active ? ' is-on' : ''}`}
-                    disabled={disabled || rowBusy}
+                    disabled={disabled || rowBusy || kb.status === 'indexing'}
                     title={
-                      kb.active
-                        ? 'Исключить базу из ответов агента'
-                        : 'Включить: агент будет использовать базу при ответах'
+                      kb.status === 'indexing'
+                        ? 'Идёт индексация: переключение станет доступно после её завершения'
+                        : kb.active
+                          ? 'Исключить базу из ответов агента'
+                          : 'Включить: агент будет использовать базу при ответах'
                     }
                     onClick={() => void handleToggle(kb)}
                   >

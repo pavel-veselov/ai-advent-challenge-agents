@@ -147,13 +147,11 @@ export default function McpServersPanel({ disabled }: McpServersPanelProps) {
   };
 
   return (
-    // Единственная из сворачиваемых панелей, развёрнутая по умолчанию (defaultOpen).
     <CollapsibleSection
       className="llm-settings-block"
       title="MCP-серверы"
       icon="☢"
       hint="внешние инструменты агента"
-      defaultOpen
     >
       {/* Список серверов: имя + url + переключатель активности + инструменты +
           ✎ инлайн-редактирование (имя/url) + удаление. */}

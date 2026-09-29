@@ -129,16 +129,92 @@ function DetailModal({
   );
 }
 
-/** Служебная строка жизненного цикла (kind = system) + пояснение, если оно известно. */
-function SystemRow({ step }: { step: StepLogEntry }) {
+/** Служебная строка лога (kind = system) + пояснение, если оно известно. */
+function SystemRow({ step, onDetail }: { step: StepLogEntry; onDetail: (step: StepLogEntry) => void }) {
   const explanation = explainSystem(step);
+  // Защита от старых записей: если текст уже начинается со своего времени «HH:mm:ss …» —
+  // отдельный спан времени не рисуем, чтобы время не дублировалось.
+  const textHasOwnTime = /^\d{2}:\d{2}:\d{2}/.test(step.title);
   return (
     <div className="step-system">
       <div className="step-system-line">
-        <span className="step-time">{step.time}</span>
+        {textHasOwnTime ? null : <span className="step-time">{step.time}</span>}
         <span className="step-system-text">{step.title}</span>
+        {step.detail ? (
+          <button
+            type="button"
+            className="step-detail"
+            title="Показать фактический JSON вызова (LLM/эмбеддинги)"
+            onClick={() => onDetail(step)}
+          >
+            (детализация)
+          </button>
+        ) : null}
       </div>
       {explanation ? <div className="step-system-hint">{explanation}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Модалка «(детализация)» у строки лога: pretty JSON фактического вызова
+ * (при невалидном JSON — сырой текст). Тема — общие классы detail-* из index.css.
+ */
+function LogDetailModal({ title, detail, onClose }: { title: string; detail: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  // ESC закрывает диалог наравне с крестиком и кликом по затемнению.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Автосброс флажка «Скопировано» + очистка таймера при размонтировании.
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+
+  // Pretty JSON, если содержимое валидно; иначе — сырой текст без переформатирования.
+  let body = detail;
+  try {
+    body = JSON.stringify(JSON.parse(detail), null, 2);
+  } catch {
+    /* оставляем как есть */
+  }
+
+  const copy = () => {
+    navigator.clipboard.writeText(body).then(
+      () => setCopied(true),
+      () => {
+        /* копирование недоступно — молча игнорируем */
+      },
+    );
+  };
+
+  return (
+    <div className="detail-backdrop" onClick={onClose}>
+      <div className="detail-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="log-detail-head">
+          <div className="detail-title">{title}</div>
+          <button type="button" className="detail-x" aria-label="Закрыть" title="Закрыть" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <pre className="detail-code">{body}</pre>
+        <div className="detail-actions">
+          <button type="button" className="detail-close" onClick={copy}>
+            {copied ? 'Скопировано' : 'Копировать'}
+          </button>
+          <button type="button" className="detail-close" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -153,6 +229,8 @@ export default function StepsLog({
   const listRef = useRef<HTMLDivElement | null>(null);
   /** Шаг + тип детализации, для которого открыт диалог (запрос/ответ LLM). */
   const [detail, setDetail] = useState<{ step: StepLogEntry; mode: 'request' | 'response' } | null>(null);
+  /** Строка лога с JSON-детализацией, для которой открыта модалка «(детализация)». */
+  const [logDetail, setLogDetail] = useState<{ title: string; detail: string } | null>(null);
 
   // Автопрокрутка к последнему шагу
   useEffect(() => {
@@ -193,7 +271,11 @@ export default function StepsLog({
           // Полный хронологический лог: простые текстовые строки шагов + служебные строки.
           steps.map((s) =>
             s.kind === 'system' ? (
-              <SystemRow key={s.id} step={s} />
+              <SystemRow
+                key={s.id}
+                step={s}
+                onDetail={(step) => setLogDetail({ title: `Детализация: ${step.title}`, detail: step.detail ?? '' })}
+              />
             ) : (
               <StepLine key={s.id} step={s} onDetail={(step, mode) => setDetail({ step, mode })} />
             ),
@@ -201,6 +283,7 @@ export default function StepsLog({
         )}
       </div>
       {detail ? <DetailModal step={detail.step} mode={detail.mode} onClose={() => setDetail(null)} /> : null}
+      {logDetail ? <LogDetailModal title={logDetail.title} detail={logDetail.detail} onClose={() => setLogDetail(null)} /> : null}
     </section>
   );
 }

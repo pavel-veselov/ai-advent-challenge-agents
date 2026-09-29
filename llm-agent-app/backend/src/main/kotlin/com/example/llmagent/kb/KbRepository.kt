@@ -146,7 +146,7 @@ class KbRepository(private val jdbc: JdbcTemplate) {
     /** Активные ПРОИНДЕКСИРОВАННЫЕ базы (для RAG-инъекции); сбой БД — пустой список. */
     fun listActiveIndexed(): List<KnowledgeBase> {
         return try {
-            jdbc.query("$SELECT_SQL WHERE kb.active = 1 AND kb.status = 'indexed' ORDER BY kb.id", ::mapRow)
+            jdbc.query(SELECT_ACTIVE_INDEXED_SQL, ::mapRow)
         } catch (e: Exception) {
             log.warn("KbRepository.listActiveIndexed() не удался: {}", e.message)
             emptyList()
@@ -275,16 +275,10 @@ class KbRepository(private val jdbc: JdbcTemplate) {
     /** Чанки с эмбеддингами перечисленных баз (для поиска top-K); без эмбеддинга — пропускаются. */
     fun chunksOfBases(kbIds: List<Long>): List<KbChunkRow> {
         if (kbIds.isEmpty()) return emptyList()
-        val placeholders = kbIds.joinToString(",") { "?" }
+        val sql = CHUNKS_SQL.replace("{placeholders}", kbIds.joinToString(",") { "?" })
         return try {
             jdbc.query(
-                """
-                SELECT c.kb_id, b.name AS kb_name, c.source, c.title, c.section, c.strategy,
-                       c.content, c.embedding, c.model
-                FROM kb_chunks c JOIN knowledge_bases b ON b.id = c.kb_id
-                WHERE c.kb_id IN ($placeholders) AND c.embedding IS NOT NULL
-                ORDER BY c.id
-                """.trimIndent(),
+                sql,
                 { rs, _ ->
                     KbChunkRow(
                         kbId = rs.getLong("kb_id"),
@@ -333,12 +327,32 @@ class KbRepository(private val jdbc: JdbcTemplate) {
 
         private const val ERROR_MAX_LENGTH = 1000
 
-        private val SELECT_SQL = """
+        /** Базовый SELECT по `knowledge_bases` со счётчиками документов/чанков. */
+        internal val SELECT_SQL = """
             SELECT kb.*,
                    (SELECT COUNT(*) FROM kb_documents d WHERE d.kb_id = kb.id) AS documents_count,
                    (SELECT COUNT(*) FROM kb_chunks c WHERE c.kb_id = kb.id) AS chunks_count
             FROM knowledge_bases kb
         """.trimIndent()
+
+        /**
+         * Фактический SQL [listActiveIndexed] — уходит в лог RAG-файла (kind «Запрос в БД»).
+         */
+        internal val SELECT_ACTIVE_INDEXED_SQL =
+            SELECT_SQL + " WHERE kb.active = 1 AND kb.status = 'indexed' ORDER BY kb.id"
+
+        /**
+         * Шаблон фактического SQL [chunksOfBases]: `{placeholders}` заменяется на столько
+         * `?`, сколько id баз в вызове. В лог RAG-файла уходит именно этот SQL (с подставленными
+         * `?`) — сам ответ (~сотни чанков с векторами) в лог НЕ пишется.
+         */
+        internal const val CHUNKS_SQL = """
+            SELECT c.kb_id, b.name AS kb_name, c.source, c.title, c.section, c.strategy,
+                   c.content, c.embedding, c.model
+            FROM kb_chunks c JOIN knowledge_bases b ON b.id = c.kb_id
+            WHERE c.kb_id IN ({placeholders}) AND c.embedding IS NOT NULL
+            ORDER BY c.id
+        """
 
         /** FloatArray → BLOB: байты IEEE-754 LITTLE_ENDIAN (формат дня 21, побитово точный roundtrip). */
         fun floatsToBlob(floats: FloatArray): ByteArray {

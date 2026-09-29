@@ -20,6 +20,18 @@ function tokenLabel(m: ChatMessage): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+/**
+ * Время сообщения «HH:mm» (24ч, локальное) для метки у пузыря. Берётся из createdAt,
+ * зафиксированного один раз при создании сообщения (для истории — момент загрузки);
+ * у служебных system-заметок метки времени нет.
+ */
+function timeLabel(m: ChatMessage): string | null {
+  if (m.role === 'system' || m.createdAt == null) return null;
+  const hh = String(m.createdAt.getHours()).padStart(2, '0');
+  const mm = String(m.createdAt.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 /** Тип сохранения сообщения: в рабочую память проекта (wm) или долговременную память (ltm). */
 type SaveKind = 'wm' | 'ltm';
 
@@ -258,6 +270,7 @@ export default function ChatPanel({
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                     {!m.content && m.streaming && <span className="streaming-cursor" />}
                   </div>
+                  {timeLabel(m) ? <div className="chat-msg-time">{timeLabel(m)}</div> : null}
                   {tokenLabel(m) ? (
                     <div
                       className="chat-msg-tokens"
@@ -310,10 +323,13 @@ export default function ChatPanel({
                 // приглушённая строка между репликами, без пузыря.
                 <span className="chat-msg-text chat-msg-system">{m.content}</span>
               ) : (
-                <span className="chat-msg-text">
-                  {m.content}
-                  {m.streaming && <span className="streaming-cursor" />}
-                </span>
+                <>
+                  <span className="chat-msg-text">
+                    {m.content}
+                    {m.streaming && <span className="streaming-cursor" />}
+                  </span>
+                  {timeLabel(m) ? <div className="chat-msg-time">{timeLabel(m)}</div> : null}
+                </>
               )}
               {savable ? (
                 <div className="chat-msg-save">

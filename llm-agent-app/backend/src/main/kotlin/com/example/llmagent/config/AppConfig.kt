@@ -4,6 +4,8 @@ import com.example.llmagent.agent.Agent
 import com.example.llmagent.agent.AgentImpl
 import com.example.llmagent.agent.GpuStackLlmClient
 import com.example.llmagent.agent.InvariantsStore
+import com.example.llmagent.agent.LlmCallLog
+import com.example.llmagent.agent.LlmCallLoggingClient
 import com.example.llmagent.agent.LlmClient
 import com.example.llmagent.agent.LongTermMemoryStore
 import com.example.llmagent.agent.ProfileStore
@@ -32,6 +34,12 @@ class AppConfig {
      * (model, temperature, top_p, top_k, max_tokens, timeout) клиент берёт из динамических
      * настроек [LlmSettings] на каждый запрос.
      * Приложение не стартует без LLM_BASE_URL и LLM_API_KEY — fail-fast на этапе конфигурации.
+     *
+     * Клиент обёрнут в [LlmCallLoggingClient] с slf4j-листенером: КАЖДЫЙ вызов chat-модели
+     * (пользовательский, агентские сжатие/факты) фиксируется парой записей
+     * «HH:mm:ss  Запрос в llm» / «HH:mm:ss  Ответ от llm» с фактическим JSON запроса/ответа.
+     * Вне агентского run записи идут в серверный лог (INFO); внутри run агент оборачивает
+     * этот бин ещё раз и уводит записи в SSE (панель «Логи»).
      */
     @Bean
     fun llmClient(props: LlmProperties, om: ObjectMapper, settings: LlmSettings): LlmClient {
@@ -41,7 +49,7 @@ class AppConfig {
         require(props.apiKey.isNotBlank()) {
             "LLM_API_KEY не задан: реальная интеграция с GPUStack обязательна (env LLM_API_KEY)."
         }
-        return GpuStackLlmClient(props, om, settings)
+        return LlmCallLoggingClient(GpuStackLlmClient(props, om, settings), LlmCallLog.slf4jListener())
     }
 
     @Bean
