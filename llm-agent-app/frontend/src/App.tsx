@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import ChatPanel from './components/ChatPanel';
 import InvariantsPanel from './components/InvariantsPanel';
+import KnowledgeBasePanel from './components/KnowledgeBasePanel';
 import LlmSettings from './components/LlmSettings';
 import McpServersPanel from './components/McpServersPanel';
 import ProfileSelect from './components/ProfileSelect';
@@ -14,7 +15,7 @@ import type { Invariant, MemoryState, Profile } from './types';
 
 /** Дефолтная ширина правой колонки — лог шагов (steps-panel) (px). */
 const DEFAULT_STEPS_WIDTH = 320;
-/** Ширина левой колонки панелей (профиль · настройки LLM · воркфлоу · инварианты · MCP) — px. */
+/** Ширина левой колонки панелей (профиль · настройки LLM · воркфлоу · инварианты · MCP · база знаний) — px. */
 const PANELS_WIDTH = 320;
 /** Минимальная ширина правой колонки (px). */
 const MIN_STEPS_WIDTH = 200;
@@ -231,7 +232,7 @@ export default function App() {
   };
 
   // Левая колонка панелей (sidebar-column): профиль, настройки LLM, воркфлоу, инварианты,
-  // планировщик, MCP-серверы. Стоит левее рабочей зоны (проект-бар → вкладки → чат); ширина фиксированная
+  // планировщик, MCP-серверы, база знаний. Стоит левее рабочей зоны (проект-бар → вкладки → чат); ширина фиксированная
   // (PANELS_WIDTH). Лог шагов переехал в правую колонку (stepsArea) — на бывшее место
   // sidebar-column.
   const panelsArea = (
@@ -273,6 +274,8 @@ export default function App() {
       <SchedulerPanel disabled={tabDisabled} />
       {/* MCP-серверы Day-16: управление внешними источниками инструментов (глобально). */}
       <McpServersPanel disabled={tabDisabled} />
+      {/* База знаний Day-22 (RAG): базы документов, индексация, активность для агента (глобально). */}
+      <KnowledgeBasePanel disabled={tabDisabled} />
     </div>
   );
 

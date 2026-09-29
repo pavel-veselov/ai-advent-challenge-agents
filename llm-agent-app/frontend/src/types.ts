@@ -596,6 +596,84 @@ export interface AgentSchedulerPatch {
   enabled?: boolean;
 }
 
+// ---- База знаний / RAG (Day-22): GET/POST /api/kb, PUT .../{id}/active, DELETE .../{id}, GET /api/kb/models ----
+
+/** Статус индексации базы знаний. */
+export type KnowledgeBaseStatus = 'indexing' | 'indexed' | 'failed';
+
+/** Стратегия chunking: fixed — по размеру с перекрытием; structural — по заголовкам/разделам/файлам. */
+export type KbChunkingStrategy = 'fixed' | 'structural';
+
+/**
+ * Прогресс индексации (только для status=indexing; иначе null):
+ * processedDocs/totalDocs — документы, percent — 0..100, etaSeconds — оценка остатка.
+ */
+export interface KbProgress {
+  processedDocs: number;
+  totalDocs: number;
+  percent: number;
+  /** Оценка оставшегося времени в секундах; null — бэкенд ещё не оценил. */
+  etaSeconds: number | null;
+}
+
+/**
+ * База знаний (RAG): документы → чанки → векторный индекс. Активные базы (active=true)
+ * агент использует при ответах. chunkSize/overlap значимы для strategy=fixed;
+ * chunksCount/progress/error могут быть null (не посчитано/не идёт индексация/нет ошибки).
+ */
+export interface KnowledgeBase {
+  id: number;
+  name: string;
+  status: KnowledgeBaseStatus;
+  /** true — агент подставляет базу в контекст при ответах. */
+  active: boolean;
+  strategy: KbChunkingStrategy;
+  chunkSize: number | null;
+  overlap: number | null;
+  embeddingModel: string;
+  documentsCount: number;
+  chunksCount: number | null;
+  progress: KbProgress | null;
+  error: string | null;
+  createdAt: string;
+}
+
+/** Ответ GET /api/kb. */
+export interface KnowledgeBasesResponse {
+  knowledgeBases: KnowledgeBase[];
+}
+
+/** Модель эмбеддингов из каталога GET /api/kb/models. */
+export interface KbEmbeddingModel {
+  id: string;
+  dimension: number;
+  description: string | null;
+}
+
+/** Ответ GET /api/kb/models. */
+export interface KbModelsResponse {
+  models: KbEmbeddingModel[];
+}
+
+/** Ответ PUT /api/kb/{id}/active: эхо id + применённого флага. */
+export interface KbActiveResponse {
+  id: number;
+  active: boolean;
+}
+
+/**
+ * Параметры создания базы (POST /api/kb, multipart): name/strategy/files обязательны;
+ * chunkSize/overlap — только для strategy=fixed; embeddingModel опционален.
+ */
+export interface KnowledgeBaseCreateParams {
+  name: string;
+  strategy: KbChunkingStrategy;
+  chunkSize?: number;
+  overlap?: number;
+  embeddingModel?: string;
+  files: File[];
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */

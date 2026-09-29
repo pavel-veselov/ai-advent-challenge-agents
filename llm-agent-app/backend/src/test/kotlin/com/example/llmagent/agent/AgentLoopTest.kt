@@ -86,7 +86,9 @@ class AgentLoopTest {
                 "llm_response_finished",
                 "agent_finished",
             ),
-            events.map { it.type },
+            // События «log» (панель «Логи», AgentImpl.logStep) идут вперемешку с основными
+            // событиями потока — фильтруем их и проверяем контракт порядка агентских событий.
+            events.map { it.type }.filterNot { it == "log" },
         )
 
         val toolStarted = events.filterIsInstance<ToolCallStarted>().single()

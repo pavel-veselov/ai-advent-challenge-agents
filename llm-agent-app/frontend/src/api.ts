@@ -13,6 +13,12 @@
   HistoryResponse,
   Invariant,
   InvariantRequest,
+  KbActiveResponse,
+  KbEmbeddingModel,
+  KbModelsResponse,
+  KnowledgeBase,
+  KnowledgeBaseCreateParams,
+  KnowledgeBasesResponse,
   McpServer,
   McpServerRequest,
   MemoryState,
@@ -858,4 +864,80 @@ export async function deleteAgentSchedulerJob(id: number): Promise<{ ok: boolean
   const res = await fetch(`/api/agent-scheduler/${id}`, { method: 'DELETE' });
   if (!res.ok) await raiseMcpError(res, 'agent-scheduler DELETE');
   return (await res.json()) as { ok: boolean };
+}
+
+// ---- База знаний / RAG (Day-22): /api/kb (список/создание/active/удаление) + /api/kb/models ----
+
+/**
+ * Разбирает JSON-ошибку бэкенда вида {message: "..."} (контракт KB) и возвращает Error
+ * с её текстом; fallback — {error: "..."} (идиома raiseMcpError), затем «<prefix> http <status>».
+ */
+async function raiseKbError(res: Response, prefix: string): Promise<never> {
+  let message = `${prefix} http ${res.status}`;
+  try {
+    const body = (await res.json()) as { message?: unknown; error?: unknown };
+    if (typeof body.message === 'string' && body.message !== '') message = body.message;
+    else if (typeof body.error === 'string' && body.error !== '') message = body.error;
+  } catch {
+    /* тело не разбирается — остаётся fallback */
+  }
+  throw new Error(message);
+}
+
+/** Каталог баз знаний: GET /api/kb. */
+export async function fetchKnowledgeBases(): Promise<KnowledgeBase[]> {
+  const res = await fetch('/api/kb');
+  if (!res.ok) await raiseKbError(res, 'kb');
+  const body = (await res.json()) as KnowledgeBasesResponse;
+  return body.knowledgeBases;
+}
+
+/**
+ * Создание базы и запуск индексации: POST /api/kb (multipart/form-data).
+ * Поля: name, strategy, chunkSize/overlap (только fixed), embeddingModel, files[] —
+ * все выбранные файлы под одним именем поля files. 200 — созданная база
+ * (status=indexing, progress 0/N); 400 {message} — невалидная форма.
+ */
+export async function createKnowledgeBase(params: KnowledgeBaseCreateParams): Promise<KnowledgeBase> {
+  const fd = new FormData();
+  fd.append('name', params.name);
+  fd.append('strategy', params.strategy);
+  if (params.chunkSize != null) fd.append('chunkSize', String(params.chunkSize));
+  if (params.overlap != null) fd.append('overlap', String(params.overlap));
+  if (params.embeddingModel != null && params.embeddingModel !== '') {
+    fd.append('embeddingModel', params.embeddingModel);
+  }
+  for (const file of params.files) fd.append('files', file);
+  const res = await fetch('/api/kb', { method: 'POST', body: fd });
+  if (!res.ok) await raiseKbError(res, 'kb POST');
+  return (await res.json()) as KnowledgeBase;
+}
+
+/**
+ * Включение/выключение базы для ответов агента: PUT /api/kb/{id}/active {active}.
+ * 404 — база не найдена. Возвращает эхо {id, active}.
+ */
+export async function setKnowledgeBaseActive(id: number, active: boolean): Promise<KbActiveResponse> {
+  const res = await fetch(`/api/kb/${id}/active`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  if (!res.ok) await raiseKbError(res, 'kb active PUT');
+  return (await res.json()) as KbActiveResponse;
+}
+
+/** Удаление базы вместе с документами и индексом: DELETE /api/kb/{id} → {deleted: true}; 404 — не найдена. */
+export async function deleteKnowledgeBase(id: number): Promise<DeleteResponse> {
+  const res = await fetch(`/api/kb/${id}`, { method: 'DELETE' });
+  if (!res.ok) await raiseKbError(res, 'kb DELETE');
+  return (await res.json()) as DeleteResponse;
+}
+
+/** Каталог моделей эмбеддингов: GET /api/kb/models. */
+export async function fetchKbModels(): Promise<KbEmbeddingModel[]> {
+  const res = await fetch('/api/kb/models');
+  if (!res.ok) await raiseKbError(res, 'kb models');
+  const body = (await res.json()) as KbModelsResponse;
+  return body.models;
 }

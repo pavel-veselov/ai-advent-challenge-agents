@@ -249,3 +249,52 @@ CREATE TABLE IF NOT EXISTS agent_scheduler_jobs (
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- День 22: базы знаний (RAG в агенте, см. пакет kb). status — жизненный цикл
+-- индексации (indexing → indexed | failed); progress — колонки processed_docs/
+-- total_docs/eta_seconds (обновляются индексатором по ходу работы, eta_seconds
+-- NULL, пока не обработан ни один документ). active — флаг использования базы
+-- агентом (RAG-инъекция только для active=1 AND status='indexed').
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK(status IN ('indexing','indexed','failed')),
+    strategy        TEXT NOT NULL CHECK(strategy IN ('fixed','structural')),
+    chunk_size      INTEGER,
+    overlap         INTEGER,
+    embedding_model TEXT NOT NULL,
+    active          INTEGER NOT NULL DEFAULT 0,
+    error           TEXT,
+    processed_docs  INTEGER NOT NULL DEFAULT 0,
+    total_docs      INTEGER NOT NULL DEFAULT 0,
+    eta_seconds     INTEGER,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Документы базы знаний (загруженные файлы; файлы на диске — data/kb/<kbId>/).
+-- Каскадное удаление с базой (см. KbRepository.delete — явное удаление строк).
+CREATE TABLE IF NOT EXISTS kb_documents (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kb_id      INTEGER NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    filename   TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Чанки базы знаний с эмбеддингами (BLOB — сырые байты float LITTLE_ENDIAN,
+-- ровно 4 байта на компоненту; формат как в rag/store/ChunkStore дня 21).
+CREATE TABLE IF NOT EXISTS kb_chunks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kb_id      INTEGER NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    source     TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    section    TEXT NOT NULL,
+    strategy   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    embedding  BLOB,
+    model      TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_documents_kb_id ON kb_documents (kb_id);
+CREATE INDEX IF NOT EXISTS idx_kb_chunks_kb_id ON kb_chunks (kb_id);

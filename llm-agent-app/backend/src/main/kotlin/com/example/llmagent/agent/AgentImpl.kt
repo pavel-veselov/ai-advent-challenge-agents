@@ -6,13 +6,16 @@ import com.example.llmagent.config.AppSettingsStore
 import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.example.llmagent.config.WorkflowSettings
+import com.example.llmagent.kb.KbRagService
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.EncodingType
 import com.knuddels.jtokkit.api.Encoding
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.flux
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Flux
 import java.net.ConnectException
@@ -73,6 +76,9 @@ class AgentImpl(
      *  имеет права нарушать; null — инварианты не подключены (юнит-тесты/старая
      *  обвязка): блок «=== ИНВАРИАНТЫ ===» молча пропускается (fail-open). */
     private val invariantsStore: InvariantsStore? = null,
+    /** Базы знаний (Day-22, RAG): null — RAG-инъекция отключена (юнит-тесты/старая
+     *  обвязка): блок «### База знаний» молча пропускается (fail-open). */
+    private val kbRagService: KbRagService? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -376,6 +382,27 @@ class AgentImpl(
                         "системный блок «=== ИНВАРИАНТЫ ===» добавлен в контекст. Модель обязана соблюдать их " +
                         "и отказываться от решений, которые их нарушают.",
                 )
+            }
+
+            // Базы знаний (Day-22, RAG): по вопросу пользователя ищем top-K релевантных
+            // чанков по всем АКТИВНЫМ ПРОИНДЕКСИРОВАННЫМ базам — системный блок
+            // «### База знаний» рядом с блоками памяти, для ВСЕХ стратегий контекста.
+            // Эмбеддинг-вызов — блокирующий HTTP + чтение БД: уводим в Dispatchers.IO.
+            // Нет активных баз → buildContextBlock вернёт null БЕЗ сетевых вызовов
+            // (нулевой оверхед, поведение агента не меняется — требование плана).
+            val ragQuery = if (appendUser) userMessage
+            else sessionStore.getStored(sessionId)
+                .lastOrNull { it.role == "user" }?.content ?: userMessage
+            val kbBlock = kbRagService?.let { service ->
+                withContext(Dispatchers.IO) { service.buildContextBlock(ragQuery) }
+            }
+            if (kbRagService == null) {
+                logStep("База знаний (RAG): сервис не подключён — блок базы знаний пропускается.")
+            } else if (kbBlock == null) {
+                logStep("База знаний (RAG): активных проиндексированных баз нет — блок «### База знаний» в контекст не добавляется.")
+            } else {
+                messages += LlmMessage("system", kbBlock)
+                logStep("База знаний (RAG): релевантные чанки найдены — системный блок «### База знаний» добавлен в контекст после памяти.")
             }
         } catch (e: CancellationException) {
             throw e

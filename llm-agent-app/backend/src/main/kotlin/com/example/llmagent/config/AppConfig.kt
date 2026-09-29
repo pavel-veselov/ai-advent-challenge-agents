@@ -15,6 +15,11 @@ import com.example.llmagent.agent.SessionStore
 import com.example.llmagent.agent.TaskStateStore
 import com.example.llmagent.agent.ToolRegistry
 import com.example.llmagent.agent.WorkingMemoryStore
+import com.example.llmagent.kb.KbEmbedder
+import com.example.llmagent.kb.KbEmbeddingClient
+import com.example.llmagent.kb.KbModelCatalog
+import com.example.llmagent.kb.KbRagService
+import com.example.llmagent.kb.KbRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -58,11 +63,25 @@ class AppConfig {
         taskStateStore: TaskStateStore,
         workflowSettings: WorkflowSettings,
         invariantsStore: InvariantsStore,
+        kbRagService: KbRagService,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
         workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore, taskStateStore,
-        workflowSettings, invariantsStore,
+        workflowSettings, invariantsStore, kbRagService,
     )
+
+    /**
+     * RAG-сервис баз знаний (Day-22): сборка блока «### База знаний» для промпта агента.
+     * Эмбеддинг-клиент ходит в тот же GPUStack (env LLM_BASE_URL / LLM_API_KEY), что и
+     * LLM-клиент; ключи не хардкодятся в коде и никогда не попадают в логи.
+     */
+    @Bean
+    fun kbEmbeddingClient(props: LlmProperties): KbEmbedder =
+        KbEmbeddingClient(props.baseUrl, props.apiKey)
+
+    @Bean
+    fun kbRagService(repo: KbRepository, embedder: KbEmbedder): KbRagService =
+        KbRagService(repo, embedder, KbModelCatalog.default.id)
 }

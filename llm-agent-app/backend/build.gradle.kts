@@ -42,6 +42,8 @@ dependencies {
 	implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
 	// BPE-токенизатор (o200k_base): фактический подсчёт токенов контекста при сжатии.
 	implementation("com.knuddels:jtokkit:1.1.0")
+	// Извлечение текста из PDF (база знаний, Day-22; в rag/ использовалась ветка 2.0.x).
+	implementation("org.apache.pdfbox:pdfbox:3.0.5")
 
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("io.projectreactor:reactor-test")
