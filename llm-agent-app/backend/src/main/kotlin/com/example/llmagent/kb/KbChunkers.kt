@@ -7,6 +7,8 @@ import java.nio.file.Paths
  * Порт RAG-чанкеров дня 21 (rag/chunk) под пакет kb backend'а. Логика сохранена:
  * fixed — скользящее окно по абзацам с перекрытием; structural — рез по собственной
  * разметке документа (markdown-заголовки / объявления в коде / страницы PDF).
+ * Субразбиение длинных секций в structural — по абзацам, с фолбэком на границы слов
+ * для отдельного абзаца длиннее лимита.
  */
 
 /** Тип документа (определяется по расширению; TEXT обрабатывается как markdown без заголовков). */
@@ -140,8 +142,9 @@ class KbFixedSizeChunker(
 
 /**
  * Структурный чанкер: режет документ по его собственной разметке — markdown-заголовкам,
- * объявлениям в коде и страницам PDF. Секция длиннее [maxChars] дожимается разбиением
- * по границам слов.
+ * объявлениям в коде и страницам PDF. Секция длиннее [maxChars] дожимается субразбиением
+ * по абзацам (жадная упаковка целых абзацев без перекрытия); отдельный абзац длиннее
+ * [maxChars] режется по границам слов.
  */
 class KbStructuralChunker(
     private val maxChars: Int = 1000,
@@ -271,8 +274,38 @@ class KbStructuralChunker(
         return name.ifEmpty { null }
     }
 
-    /** Жёсткое деление длинного текста на части <= limit (предпочтение — последний пробел в окне). */
+    /**
+     * Субразбиение длинной секции: жадно упаковывает целые абзацы («\n\n») в части <= [limit]
+     * без перекрытия; отдельный абзац длиннее [limit] уходит в [hardSplit] (границы слов).
+     */
     private fun splitLong(text: String, limit: Int): List<String> {
+        if (text.length <= limit) return listOf(text)
+        val paragraphs = text.split("\n\n").map { it.trim() }.filter { it.isNotEmpty() }
+        val parts = mutableListOf<String>()
+        var current = ""
+        for (p in paragraphs) {
+            when {
+                p.length > limit -> {
+                    if (current.isNotEmpty()) {
+                        parts.add(current)
+                        current = ""
+                    }
+                    parts.addAll(hardSplit(p, limit))
+                }
+                current.isEmpty() || current.length + PARAGRAPH_SEPARATOR.length + p.length <= limit ->
+                    current = if (current.isEmpty()) p else current + PARAGRAPH_SEPARATOR + p
+                else -> {
+                    parts.add(current)
+                    current = p
+                }
+            }
+        }
+        if (current.isNotEmpty()) parts.add(current)
+        return parts
+    }
+
+    /** Жёсткое деление длинного текста на части <= limit (предпочтение — последний пробел в окне). */
+    private fun hardSplit(text: String, limit: Int): List<String> {
         if (text.length <= limit) return listOf(text)
         val parts = mutableListOf<String>()
         var rest = text
@@ -290,6 +323,7 @@ class KbStructuralChunker(
     companion object {
         private const val SECTION_FILE = "file"
         private const val SINGLE_FILE_LIMIT = 1500
+        private const val PARAGRAPH_SEPARATOR = "\n\n"
         private val WHITESPACE = charArrayOf(' ', '\n', '\t', '\r')
         private val NAME_STOP_CHARS = charArrayOf('(', '{', ':')
         private val KEYWORDS = listOf(

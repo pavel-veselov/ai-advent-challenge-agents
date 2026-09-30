@@ -104,6 +104,43 @@ class KbChunkersTest {
     }
 
     @Test
+    fun `structural long section splits at paragraph boundaries`() {
+        // Три абзаца ~350 символов: поодиночке и парой влезают в 1000, вместе — нет
+        val raw = "## Раздел\n" + (1..3).joinToString("\n\n") { para(it) }
+        val chunks = KbStructuralChunker(maxChars = 1000)
+            .chunk(KbDoc("dir/paras.md", KbDocType.MD, "paras", raw))
+        assertEquals(2, chunks.size, "пара абзацев в первый чанк, третий — во второй")
+        assertTrue(chunks.all { it.content.length <= 1000 }, "все чанки <= maxChars")
+        assertTrue(chunks.all { it.section == "Раздел" })
+        assertTrue(chunks[0].content.startsWith("## Раздел"), "строка заголовка остаётся в первом чанке")
+        assertTrue(chunks[0].content.contains("Абзац 1") && chunks[0].content.contains("конец1"))
+        assertTrue(chunks[0].content.contains("Абзац 2") && chunks[0].content.contains("конец2"))
+        assertTrue(chunks[1].content.contains("Абзац 3") && chunks[1].content.contains("конец3"))
+    }
+
+    @Test
+    fun `structural oversize paragraph falls back to word-boundary split`() {
+        val hugePara = (1..200).joinToString(" ") { "слово$it" } // > 1000 символов одним абзацем
+        val raw = "## Раздел\nКороткий вводный абзац.\n\n$hugePara"
+        val chunks = KbStructuralChunker(maxChars = 1000)
+            .chunk(KbDoc("dir/huge.md", KbDocType.MD, "huge", raw))
+        assertTrue(chunks.size >= 2, "гигантский абзац должен разбиться на части")
+        assertTrue(chunks.all { it.content.length <= 1000 }, "все части <= maxChars")
+        assertTrue(chunks.all { it.section == "Раздел" })
+        val joined = chunks.joinToString(" ") { it.content }
+        assertTrue(joined.contains("слово1") && joined.contains("слово200"), "контент не потерян")
+    }
+
+    @Test
+    fun `structural section within limit stays single part`() {
+        val raw = "## Раздел\nПервый абзац.\n\nВторой абзац."
+        val chunks = KbStructuralChunker(maxChars = 1000)
+            .chunk(KbDoc("dir/small.md", KbDocType.MD, "small", raw))
+        assertEquals(1, chunks.size, "секция <= maxChars не должна делиться")
+        assertTrue(chunks[0].content.contains("Первый абзац") && chunks[0].content.contains("Второй абзац"))
+    }
+
+    @Test
     fun `structural pdf splits by page markers`() {
         val raw = "Текст первой\n\n[PAGE 2]\n\nВторая\n\n[PAGE 3]\n\nТретья"
         val chunks = KbStructuralChunker().chunk(KbDoc("dir/book.pdf", KbDocType.PDF, "book", raw))
