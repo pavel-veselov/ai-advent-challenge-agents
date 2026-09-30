@@ -674,6 +674,20 @@ export interface KnowledgeBaseCreateParams {
   files: File[];
 }
 
+/**
+ * Настройки реранкинга/фильтрации RAG (Day-23): GET /api/kb/settings, PUT — эхо тех же полей.
+ * filterEnabled — отсекать чанки ниже minScore; candidateK — сколько искать до фильтрации,
+ * topK — сколько чанков подставить в контекст; rewriteEnabled — переформулировать вопрос
+ * вспомогательным LLM-вызовом перед поиском.
+ */
+export interface KbRagSettings {
+  filterEnabled: boolean;
+  minScore: number;
+  candidateK: number;
+  topK: number;
+  rewriteEnabled: boolean;
+}
+
 // ---- Состояние UI ----
 
 /** Одна запись в логе шагов (панель «Лог шагов» справа). */

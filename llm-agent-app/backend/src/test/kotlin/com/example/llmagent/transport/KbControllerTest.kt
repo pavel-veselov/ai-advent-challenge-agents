@@ -179,4 +179,108 @@ class KbControllerTest {
             .jsonPath("$.name").isEqualTo("e2e")
             .jsonPath("$.status").isEqualTo("indexing")
     }
+
+    @Test
+    @Order(12)
+    fun `GET settings on fresh store returns defaults`() {
+        client.get().uri("/api/kb/settings")
+            .exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.filterEnabled").isEqualTo(false)
+            .jsonPath("$.minScore").isEqualTo(0.35)
+            .jsonPath("$.candidateK").isEqualTo(8)
+            .jsonPath("$.topK").isEqualTo(4)
+            .jsonPath("$.rewriteEnabled").isEqualTo(false)
+    }
+
+    @Test
+    @Order(13)
+    fun `PUT settings roundtrip persists and echoes saved values`() {
+        client.put().uri("/api/kb/settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"filterEnabled":true,"minScore":0.5,"candidateK":10,"topK":3,"rewriteEnabled":true}""")
+            .exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.filterEnabled").isEqualTo(true)
+            .jsonPath("$.minScore").isEqualTo(0.5)
+            .jsonPath("$.candidateK").isEqualTo(10)
+            .jsonPath("$.topK").isEqualTo(3)
+            .jsonPath("$.rewriteEnabled").isEqualTo(true)
+        // Персистентность: GET (service.load()) видит сохранённые значения.
+        client.get().uri("/api/kb/settings")
+            .exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.filterEnabled").isEqualTo(true)
+            .jsonPath("$.minScore").isEqualTo(0.5)
+            .jsonPath("$.candidateK").isEqualTo(10)
+            .jsonPath("$.topK").isEqualTo(3)
+            .jsonPath("$.rewriteEnabled").isEqualTo(true)
+    }
+
+    @Test
+    @Order(14)
+    fun `PUT settings with minScore outside 0 to 1 returns 400 with russian message`() {
+        client.put().uri("/api/kb/settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"filterEnabled":false,"minScore":1.5,"candidateK":8,"topK":4,"rewriteEnabled":false}""")
+            .exchange()
+            .expectStatus().isBadRequest
+            .expectBody()
+            .jsonPath("$.message")
+            .isEqualTo("minScore должен быть в диапазоне от 0 до 1: 1.5")
+    }
+
+    @Test
+    @Order(15)
+    fun `PUT settings with candidateK outside 1 to 100 returns 400 with russian message`() {
+        client.put().uri("/api/kb/settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"filterEnabled":false,"minScore":0.35,"candidateK":0,"topK":4,"rewriteEnabled":false}""")
+            .exchange()
+            .expectStatus().isBadRequest
+            .expectBody()
+            .jsonPath("$.message")
+            .isEqualTo("candidateK должен быть в диапазоне от 1 до 100: 0")
+    }
+
+    @Test
+    @Order(16)
+    fun `PUT settings with topK greater than candidateK returns 400 with russian message`() {
+        client.put().uri("/api/kb/settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"filterEnabled":false,"minScore":0.35,"candidateK":8,"topK":9,"rewriteEnabled":false}""")
+            .exchange()
+            .expectStatus().isBadRequest
+            .expectBody()
+            .jsonPath("$.message")
+            .isEqualTo("topK должен быть в диапазоне от 1 до candidateK=8: 9")
+    }
+
+    @Test
+    @Order(17)
+    fun `PUT settings with malformed JSON returns 400`() {
+        client.put().uri("/api/kb/settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"filterEnabled": """)
+            .exchange()
+            .expectStatus().isBadRequest
+    }
+
+    @Test
+    @Order(18)
+    fun `failed PUT settings do not persist changes`() {
+        // После невалидных PUT (Orders 14-17) в хранилище остаются значения Order 13.
+        client.get().uri("/api/kb/settings")
+            .exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.filterEnabled").isEqualTo(true)
+            .jsonPath("$.minScore").isEqualTo(0.5)
+            .jsonPath("$.candidateK").isEqualTo(10)
+            .jsonPath("$.topK").isEqualTo(3)
+            .jsonPath("$.rewriteEnabled").isEqualTo(true)
+    }
 }

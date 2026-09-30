@@ -25,12 +25,16 @@ data class KbChunkHit(
  * Расширенный результат RAG-поиска: блок для промпта + диагностика.
  *
  * @param block           собранный блок «### База знаний»; null — блок не собран
- *                        (нет чанков / ни один не влез / сбой — см. [error])
- * @param chunks          top-[KbRagService.TOP_K] найденных чанков со score (даже если
- *                        они не поместились в блок — для полного трейса поиска)
+ *                        (нет чанков / ни один не прошёл порог фильтра / не влез /
+ *                        сбой — см. [error])
+ * @param chunks          итоговые чанки воронки (sort → candidateK → порог → topK)
+ *                        со score — даже если они не поместились в блок (полный трейс)
  * @param bases           имена АКТИВНЫХ ПРОИНДЕКСИРОВАННЫХ баз, по которым шёл поиск
- * @param candidateChunks всего чанков-кандидатов в активных базах (до top-K)
+ * @param candidateChunks всего чанков-кандидатов в активных базах (до воронки)
  * @param usedChunks      сколько чанков реально вошло в [block]
+ * @param topK            лимит промпта из настроек на момент вызова ([KbRagSettings.topK])
+ * @param maxBlockChars   лимит размера блока
+ * @param embeddingModel  модель эмбеддингов
  * @param error           человекочитаемая причина сбоя (fail-open), null — сбоя не было
  */
 data class KbRagResult(
@@ -47,8 +51,15 @@ data class KbRagResult(
 
 /**
  * RAG-инъекция знаний в промпт агента (Day-22): по последнему сообщению пользователя
- * ищем top-K релевантных чанков по всем АКТИВНЫМ ПРОИНДЕКСИРОВАННЫМ базам и собираем
+ * ищем релевантные чанки по всем АКТИВНЫМ ПРОИНДЕКСИРОВАННЫМ базам и собираем
  * текстовый блок «### База знаний» — тот же механизм, что блоки памяти дня 11.
+ *
+ * Day-23: параметры отбора читаются из [KbRagSettingsService] при КАЖДОМ вызове
+ * (изменения применяются без рестарта backend). Воронка: все чанки → sort desc →
+ * top `candidateK` → порог `minScore` (только если `filterEnabled`) → top `topK`.
+ * Если после порога не осталось ни одного чанка — блок не собирается
+ * ([KbRagResult.block] = null, в логе поискового движка `passedFilter: 0`).
+ * Дефолтные настройки = поведение дня 22 (фильтр выключен, topK=4).
  *
  * Нет активных баз → null без единого сетевого вызова (нулевой оверхед, поведение
  * агента не меняется — требование плана). Любой сбой → warn + null (fail-open),
@@ -61,6 +72,7 @@ class KbRagService(
     private val repo: KbRepository,
     private val embedder: KbEmbedder,
     private val embeddingModel: String,
+    private val settingsService: KbRagSettingsService,
 ) {
 
     private val log = LoggerFactory.getLogger(KbRagService::class.java)
@@ -69,8 +81,15 @@ class KbRagService(
     private val mapper = ObjectMapper().registerKotlinModule()
 
     /**
+     * Есть ли хотя бы одна АКТИВНАЯ ПРОИНДЕКСИРОВАННАЯ база знаний (Day-23 query rewrite):
+     * гейт перед LLM-перезаписью запроса в AgentImpl — нет активных баз, поиск не
+     * запустится вовсе, поэтому и вызывать LLM ради перезаписи не нужно.
+     */
+    fun hasActiveIndexed(): Boolean = repo.listActiveIndexed().isNotEmpty()
+
+    /**
      * Блок контекста для промпта или null. Ровно 1 вызов эмбеддинга запроса + поиск
-     * по чанкам активных баз (cosine, top-[TOP_K]).
+     * по чанкам активных баз (cosine, воронка candidateK → minScore → topK).
      */
     fun buildContextBlock(userMessage: String): String? = buildContextResult(userMessage)?.block
 
@@ -78,21 +97,31 @@ class KbRagService(
      * Расширенный вариант [buildContextBlock]: тот же поиск, но с диагностикой для
      * лог-трейса агента (панель «Логи»). null — ТОЛЬКО когда нет активных
      * проиндексированных баз (без сетевых вызовов); в остальных случаях возвращается
-     * результат, где [KbRagResult.block] может быть null (нет чанков / не влезли /
-     * сбой — причина в [KbRagResult.error]), чтобы вызывавший код отличал «нет баз»
-     * от «базы есть, но блок не собран».
+     * результат, где [KbRagResult.block] может быть null (нет чанков / всё отсечено
+     * фильтром / не влезли / сбой — причина в [KbRagResult.error]), чтобы вызывавший
+     * код отличал «нет баз» от «базы есть, но блок не собран».
+     *
+     * Настройки воронки ([KbRagSettings]) читаются из [KbRagSettingsService] при
+     * КАЖДОМ вызове — изменения из меню настроек применяются без рестарта.
+     *
+     * Day-23 pre-wire query rewrite (Task 3): [rewrittenQuery] + [rewriteUsed].
+     * При [rewriteUsed]=true и непустом [rewrittenQuery] эмбеддится именно он;
+     * иначе (fallback / rewrite выключен) — исходное сообщение пользователя.
+     * Оба значения всегда попадают в лог поиска (KIND_SEARCH_RESULT).
      *
      * [onLlmLog] — опциональный слушатель RAG-вызова: получает (kind, detail) —
      * («Запрос в эмбеддинги»/«Ответ от эмбеддингов», фактический JSON) + записи RAG-поиска:
      * «Запрос в БД» (каждое обращение к KbRepository, detail — {method, params, query}),
      * «Ответ БД» (только ответ listActiveIndexed — массив активных баз; ответ chunksOfBases
      * НЕ логируется — сотни чанков с векторами по 4000 чисел), «Ответ поискового движка»
-     * (итог top-K: topK/candidateChunks/usedChunks/embeddingModel + отобранные чанки
-     * с content, score до 4 знаков; вектора чанков в detail не попадают).
+     * (итог воронки: scored/candidates/passedFilter/usedChunks + настройки + отобранные
+     * чанки с content, score до 4 знаков; вектора чанков в detail не попадают).
      * null (вызовы вне agent-run) — логирование на уровне клиента (slf4j/нет).
      */
     fun buildContextResult(
         userMessage: String,
+        rewrittenQuery: String? = null,
+        rewriteUsed: Boolean = false,
         onLlmLog: ((String, String) -> Unit)? = null,
     ): KbRagResult? {
         onLlmLog?.invoke(
@@ -121,8 +150,15 @@ class KbRagService(
         )
         if (bases.isEmpty()) return null
         val baseNames = bases.map { it.name }
+        // Свежие настройки на каждый вызов ретривала: load() не бросает исключений
+        // (порченые значения → дефолты поля), кросс-проверка topK<=candidateK на load
+        // не выполняется — воронка ниже сама ограничивает итог размером кандидатов.
+        val settings = settingsService.load()
+        // Query rewrite (Day-23): переписанный запрос эмбеддится только если AgentImpl
+        // подтвердил rewrite (rewriteUsed=true); иначе — исходное сообщение (день 22).
+        val retrievalQuery = rewrittenQuery?.takeIf { rewriteUsed && it.isNotBlank() } ?: userMessage
         return try {
-            val queryEmbedding = embedder.embed(userMessage, embeddingModel, onLlmLog)
+            val queryEmbedding = embedder.embed(retrievalQuery, embeddingModel, onLlmLog)
             onLlmLog?.invoke(
                 LlmCallLog.KIND_DB_REQUEST,
                 LlmCallLog.cap(
@@ -141,16 +177,23 @@ class KbRagService(
             if (chunks.isEmpty()) {
                 return KbRagResult(
                     block = null, chunks = emptyList(), bases = baseNames,
-                    candidateChunks = 0, usedChunks = 0, topK = TOP_K,
+                    candidateChunks = 0, usedChunks = 0, topK = settings.topK,
                     maxBlockChars = MAX_BLOCK_CHARS, embeddingModel = embeddingModel,
                 )
             }
 
-            val top = chunks.asSequence()
+            // Воронка Day-23: все оценённые → sort desc → candidateK → порог → topK.
+            val scored = chunks.asSequence()
                 .map { it to cosine(queryEmbedding, it.embedding) }
                 .sortedByDescending { it.second }
-                .take(TOP_K)
                 .toList()
+            val candidates = scored.take(settings.candidateK)
+            val passed = if (settings.filterEnabled) {
+                candidates.filter { it.second >= settings.minScore }
+            } else {
+                candidates
+            }
+            val top = passed.take(settings.topK)
 
             val hits = top.map { (chunk, score) ->
                 KbChunkHit(
@@ -171,17 +214,26 @@ class KbRagService(
                 total += entry.length + 2
                 used++
             }
-            // Итог поиска логируем ПОСЛЕ top-K и подсчёта used: метаданные отобранных
-            // чанков + текст целиком, без векторов (KbChunkHit-поля + content).
+            // Итог поиска логируем ПОСЛЕ воронки и подсчёта used: метаданные отобранных
+            // чанков + текст целиком, без векторов (KbChunkHit-поля + content) + воронка
+            // (scored → candidates → passedFilter → usedChunks) и параметры rewrite.
             onLlmLog?.invoke(
                 LlmCallLog.KIND_SEARCH_RESULT,
                 LlmCallLog.cap(
                     mapper.writerWithDefaultPrettyPrinter().writeValueAsString(
-                        mapOf(
-                            "topK" to TOP_K,
+                        mapOf<String, Any?>(
+                            "topK" to settings.topK,
                             "candidateChunks" to chunks.size,
                             "usedChunks" to used,
                             "embeddingModel" to embeddingModel,
+                            "filterEnabled" to settings.filterEnabled,
+                            "minScore" to settings.minScore,
+                            "candidateK" to settings.candidateK,
+                            "scored" to scored.size,
+                            "candidates" to candidates.size,
+                            "passedFilter" to passed.size,
+                            "rewrittenQuery" to rewrittenQuery,
+                            "rewriteUsed" to rewriteUsed,
                             "chunks" to top.map { (chunk, score) ->
                                 mapOf(
                                     "kbName" to chunk.kbName,
@@ -197,9 +249,11 @@ class KbRagService(
                 ),
             )
             if (used == 0) {
+                // Ни один чанк не прошёл порог (passedFilter=0) либо не влез в лимит
+                // блока — блок не собирается, но результат возвращаем (с диагностикой).
                 return KbRagResult(
                     block = null, chunks = hits, bases = baseNames,
-                    candidateChunks = chunks.size, usedChunks = 0, topK = TOP_K,
+                    candidateChunks = chunks.size, usedChunks = 0, topK = settings.topK,
                     maxBlockChars = MAX_BLOCK_CHARS, embeddingModel = embeddingModel,
                 )
             }
@@ -211,7 +265,7 @@ class KbRagService(
             )
             KbRagResult(
                 block = block, chunks = hits, bases = baseNames,
-                candidateChunks = chunks.size, usedChunks = used, topK = TOP_K,
+                candidateChunks = chunks.size, usedChunks = used, topK = settings.topK,
                 maxBlockChars = MAX_BLOCK_CHARS, embeddingModel = embeddingModel,
             )
         } catch (e: CancellationException) {
@@ -221,7 +275,7 @@ class KbRagService(
             log.warn("[KB RAG] сбор блока базы знаний не удался: {}", e.message)
             KbRagResult(
                 block = null, chunks = emptyList(), bases = baseNames,
-                candidateChunks = 0, usedChunks = 0, topK = TOP_K,
+                candidateChunks = 0, usedChunks = 0, topK = settings.topK,
                 maxBlockChars = MAX_BLOCK_CHARS, embeddingModel = embeddingModel,
                 error = e.message ?: e.javaClass.simpleName,
             )
@@ -236,7 +290,6 @@ class KbRagService(
 
     companion object {
         const val HEADER = "### База знаний"
-        const val TOP_K = 4
         const val MAX_BLOCK_CHARS = 6000
 
         /** Score в лог «Ответ поискового движка» округляем до 4 знаков. */

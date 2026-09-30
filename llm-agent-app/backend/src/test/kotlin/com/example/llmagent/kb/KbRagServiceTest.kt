@@ -2,6 +2,8 @@ package com.example.llmagent.kb
 
 import com.example.llmagent.agent.LlmCallLog
 import com.example.llmagent.agent.SqliteTestSupport
+import com.example.llmagent.config.AppSettingsStore
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -13,9 +15,16 @@ import java.nio.file.Path
 
 /**
  * Юнит-тесты RAG-сборки блока «### База знаний»: фейк-эмбеддер на интерфейсе
- * [KbEmbedder] — без сети и без LLM.
+ * [KbEmbedder] — без сети и без LLM. Настройки воронки (Day-23) — реальный
+ * [KbRagSettingsService] над in-memory стором: перед каждым сценарием сохраняем
+ * нужные kb.*-значения, проверяем воронку sort → candidateK → порог → topK.
  */
 class KbRagServiceTest {
+
+    private companion object {
+        const val MODEL = "qwen3-vl-embedding-8b"
+        val JSON = ObjectMapper()
+    }
 
     @TempDir
     lateinit var tempDir: Path
@@ -47,6 +56,33 @@ class KbRagServiceTest {
         }
     }
 
+    /** In-memory стор: как в KbRagSettingsServiceTest — без сети и без БД. */
+    private class InMemoryStore : AppSettingsStore {
+        private val map = mutableMapOf<String, String>()
+        override fun save(key: String, value: String) {
+            map[key] = value
+        }
+        override fun get(key: String): String? = map[key]
+        override fun all(): Map<String, String> = map.toMap()
+    }
+
+    /**
+     * Реальный [KbRagSettingsService] над in-memory стором с сохранёнными kb.*-значениями
+     * ДО сценария (порченые/сырые значения — сохраняем raw-парами, валидные — update).
+     */
+    private fun settingsService(vararg entries: Pair<String, String>): KbRagSettingsService {
+        val store = InMemoryStore()
+        entries.forEach { (key, value) -> store.save(key, value) }
+        return KbRagSettingsService(store)
+    }
+
+    /** Сервис с дефолтными настройками (= поведение дня 22): фильтр/rewrite выключены, topK=4. */
+    private fun newService(
+        repo: KbRepository,
+        fake: FakeEmbedder,
+        settings: KbRagSettingsService = settingsService(),
+    ): KbRagService = KbRagService(repo, fake, MODEL, settings)
+
     private fun newRepo(dbFile: String): KbRepository =
         KbRepository(SqliteTestSupport.jdbc(tempDir.resolve(dbFile)))
 
@@ -60,17 +96,37 @@ class KbRagServiceTest {
             strategy = "fixed",
             content = content,
             embedding = vector,
-            model = "qwen3-vl-embedding-8b",
+            model = MODEL,
         )
 
     /** Вектор с заданной первой компонентой (косинус с q=[1,0,0,0] растёт по ней). */
     private fun vec(first: Float): FloatArray = floatArrayOf(first, 1f - first, 0.1f, 0.05f)
 
+    /**
+     * Активная проиндексированная база «Ноутбуки» с чанками чанк1..чанк[N] убывающей
+     * релевантности: cosine(q, чанкi) = 0.99, 0.96, 0.87, 0.70, 0.47, 0.24, ...
+     */
+    private fun seedDecayingChunks(repo: KbRepository, fake: FakeEmbedder, count: Int) {
+        fake.vectors["вопрос"] = floatArrayOf(1f, 0f, 0f, 0f)
+        val contents = (1..count).map { i -> "чанк$i" }
+        contents.forEachIndexed { i, content ->
+            fake.vectors[content] = vec(0.95f - i * 0.15f)
+        }
+        val kbId = repo.create("Ноутбуки", "fixed", null, null, MODEL)!!.id
+        repo.addChunks(kbId, contents.mapIndexed { i, content ->
+            row(kbId, content, fake.vectors[content]!!, section = "сек${i + 1}")
+        })
+        repo.setStatusIndexed(kbId)
+        repo.setActive(kbId, true)
+    }
+
+    // --- Поведение дня 22 (дефолтные настройки) ---
+
     @Test
     fun `no active bases returns null without embedding call`() {
         val repo = newRepo("rag-empty.db")
         val fake = FakeEmbedder()
-        val service = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+        val service = newService(repo, fake)
         assertNull(service.buildContextBlock("вопрос"))
         assertTrue(fake.calls.isEmpty(), "без активных баз эмбеддер не вызывается вовсе")
     }
@@ -85,18 +141,18 @@ class KbRagServiceTest {
         contents.forEachIndexed { i, content ->
             fake.vectors[content] = vec(0.95f - i * 0.15f)
         }
-        val kbId = repo.create("Ноутбуки", "fixed", null, null, "qwen3-vl-embedding-8b")!!.id
+        val kbId = repo.create("Ноутбуки", "fixed", null, null, MODEL)!!.id
         repo.addChunks(kbId, contents.mapIndexed { i, content ->
             row(kbId, content, fake.vectors[content]!!, section = "сек${i + 1}")
         })
         repo.setStatusIndexed(kbId)
         repo.setActive(kbId, true)
 
-        val block = KbRagService(repo, fake, "qwen3-vl-embedding-8b").buildContextBlock("вопрос")!!
+        val block = newService(repo, fake).buildContextBlock("вопрос")!!
         assertTrue(block.startsWith("### База знаний"))
         assertTrue(block.contains("[КБ Ноутбуки | notes.md#сек1]"))
         assertTrue(block.contains("чанк1"))
-        // top-4: чанки 5 и 6 не попали в блок
+        // top-4 (дефолт настроек): чанки 5 и 6 не попали в блок
         assertFalse(block.contains("чанк5"))
         assertFalse(block.contains("чанк6"))
         // Ровно один вызов эмбеддера — запрос пользователя
@@ -113,7 +169,7 @@ class KbRagServiceTest {
         val big2 = "Б".repeat(3000)
         fake.vectors[big1] = vec(0.9f)
         fake.vectors[big2] = vec(0.8f)
-        val kbId = repo.create("Ноутбуки", "fixed", null, null, "qwen3-vl-embedding-8b")!!.id
+        val kbId = repo.create("Ноутбуки", "fixed", null, null, MODEL)!!.id
         repo.addChunks(kbId, listOf(
             row(kbId, big1, fake.vectors[big1]!!),
             row(kbId, big2, fake.vectors[big2]!!),
@@ -121,7 +177,7 @@ class KbRagServiceTest {
         repo.setStatusIndexed(kbId)
         repo.setActive(kbId, true)
 
-        val block = KbRagService(repo, fake, "qwen3-vl-embedding-8b").buildContextBlock("вопрос")!!
+        val block = newService(repo, fake).buildContextBlock("вопрос")!!
         // Заголовок (15) + один вход (~3041) влезает; два входа (~6098) — уже за лимитом
         assertTrue(block.contains(big1))
         assertFalse(block.contains(big2), "второй чанк не помещается в лимит 6000")
@@ -132,14 +188,14 @@ class KbRagServiceTest {
     fun `inactive or not indexed bases are ignored`() {
         val repo = newRepo("rag-inactive.db")
         val fake = FakeEmbedder()
-        val service = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+        val service = newService(repo, fake)
         // indexed, но НЕ активная
-        val kb = repo.create("База", "fixed", null, null, "qwen3-vl-embedding-8b")!!
+        val kb = repo.create("База", "fixed", null, null, MODEL)!!
         repo.setStatusIndexed(kb.id)
         assertNull(service.buildContextBlock("вопрос"))
         assertTrue(fake.calls.isEmpty())
         // активная, но ещё индексируется (не indexed)
-        val kb2 = repo.create("База2", "fixed", null, null, "qwen3-vl-embedding-8b")!!
+        val kb2 = repo.create("База2", "fixed", null, null, MODEL)!!
         repo.setActive(kb2.id, true)
         assertNull(service.buildContextBlock("вопрос"))
         assertTrue(fake.calls.isEmpty())
@@ -150,10 +206,10 @@ class KbRagServiceTest {
         val repo = newRepo("rag-fail.db")
         val fake = FakeEmbedder()
         fake.fail = true
-        val kbId = repo.create("База", "fixed", null, null, "qwen3-vl-embedding-8b")!!.id
+        val kbId = repo.create("База", "fixed", null, null, MODEL)!!.id
         repo.setStatusIndexed(kbId)
         repo.setActive(kbId, true)
-        assertNull(KbRagService(repo, fake, "qwen3-vl-embedding-8b").buildContextBlock("вопрос"))
+        assertNull(newService(repo, fake).buildContextBlock("вопрос"))
     }
 
     @Test
@@ -165,6 +221,196 @@ class KbRagServiceTest {
         assertEquals(0.0, KbRagService.cosine(floatArrayOf(1f), floatArrayOf(1f, 1f)), 1e-9)
     }
 
+    // --- Воронка Day-23: candidateK → порог minScore → topK ---
+
+    @Test
+    fun `filter threshold cuts low score chunks when enabled`() {
+        val repo = newRepo("rag-threshold.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 6)
+        // cosine: чанк1 0.99, чанк2 0.96, чанк3 0.87, чанк4 0.70, чанк5 0.47, чанк6 0.24
+        val settings = settingsService()
+        settings.update(KbRagSettings(filterEnabled = true, minScore = 0.8, candidateK = 8, topK = 4))
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake, settings)
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+
+        assertTrue(result.block!!.startsWith("### База знаний"))
+        assertTrue(result.block!!.contains("чанк1"))
+        assertTrue(result.block!!.contains("чанк3"))
+        assertFalse(result.block!!.contains("чанк4"), "score 0.70 ниже порога 0.8 — отсечён")
+        assertFalse(result.block!!.contains("чанк5"))
+        assertFalse(result.block!!.contains("чанк6"))
+        assertEquals(3, result.usedChunks)
+        assertEquals(6, result.candidateChunks)
+        assertTrue(result.chunks.all { it.score >= 0.8 }, "в воронку прошли только чанки с score >= minScore")
+
+        // Воронка в логе: scored=6 → candidates=6 (candidateK=8 не режет) → passedFilter=3.
+        val searchTree = JSON.readTree(logs.last().second)
+        assertTrue(searchTree.get("filterEnabled").asBoolean())
+        assertEquals(0.8, searchTree.get("minScore").asDouble(), 1e-9)
+        assertEquals(6, searchTree.get("scored").asInt())
+        assertEquals(6, searchTree.get("candidates").asInt())
+        assertEquals(3, searchTree.get("passedFilter").asInt())
+        assertEquals(3, searchTree.get("usedChunks").asInt())
+    }
+
+    @Test
+    fun `candidateK caps pool before threshold and topK clamps to it`() {
+        val repo = newRepo("rag-candidatek.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 6)
+        // Сырые значения в обход update(): topK=4 > candidateK=2 (load не делает
+        // кросс-проверку) — воронка сама ограничивает итог размером пула кандидатов.
+        val settings = settingsService(
+            "kb.filterEnabled" to "true",
+            "kb.candidateK" to "2",
+            "kb.topK" to "4",
+            "kb.minScore" to "0.1", // порог почти ничего не срезает — срезает candidateK
+        )
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake, settings)
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+
+        assertTrue(result.block!!.contains("чанк1"))
+        assertTrue(result.block!!.contains("чанк2"))
+        assertFalse(result.block!!.contains("чанк3"), "candidateK=2 обрезает пул ДО порога")
+        assertEquals(2, result.usedChunks)
+        assertEquals(4, result.topK, "topK взят из настроек, но пул короче — clamp")
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertEquals(2, searchTree.get("candidateK").asInt())
+        assertEquals(4, searchTree.get("topK").asInt())
+        assertEquals(6, searchTree.get("scored").asInt(), "оценены все чанки")
+        assertEquals(2, searchTree.get("candidates").asInt(), "после candidateK осталось 2")
+        assertEquals(2, searchTree.get("passedFilter").asInt(), "порог 0.1 ничего не срезал — срезал candidateK")
+        assertEquals(2, searchTree.get("usedChunks").asInt())
+    }
+
+    @Test
+    fun `topK limits final chunks below candidateK`() {
+        val repo = newRepo("rag-topk-settings.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 6)
+        val settings = settingsService()
+        settings.update(KbRagSettings(filterEnabled = true, minScore = 0.0, candidateK = 6, topK = 2))
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake, settings)
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+
+        assertTrue(result.block!!.contains("чанк1"))
+        assertTrue(result.block!!.contains("чанк2"))
+        assertFalse(result.block!!.contains("чанк3"), "topK=2 — в блоке только два лучших")
+        assertEquals(2, result.usedChunks)
+        assertEquals(2, result.topK)
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertEquals(2, searchTree.get("topK").asInt())
+        assertEquals(6, searchTree.get("passedFilter").asInt(), "порог 0.0 пропустил всех — срезал topK")
+        assertEquals(6, searchTree.get("candidates").asInt())
+        assertEquals(2, searchTree.get("usedChunks").asInt())
+    }
+
+    @Test
+    fun `filter off skips threshold and keeps day22 top4`() {
+        val repo = newRepo("rag-filter-off.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 6)
+        // Порог 0.99 отсёк бы ВСЕ чанки — но фильтр выключен: поведение дня 22 (top4).
+        val settings = settingsService(
+            "kb.filterEnabled" to "false",
+            "kb.minScore" to "0.99",
+        )
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake, settings)
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+
+        assertTrue(result.block!!.contains("чанк4"), "порог не применяется при выключенном фильтре")
+        assertEquals(4, result.usedChunks, "дефолт topK=4, как в дне 22")
+        assertFalse(result.block!!.contains("чанк5"))
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertFalse(searchTree.get("filterEnabled").asBoolean())
+        assertEquals(0.99, searchTree.get("minScore").asDouble(), 1e-9, "minScore залогирован, но НЕ применён")
+        assertEquals(6, searchTree.get("passedFilter").asInt(), "все кандидаты прошли: порог пропущен")
+        assertEquals(4, searchTree.get("usedChunks").asInt())
+    }
+
+    @Test
+    fun `passedFilter zero returns null block without kb section`() {
+        val repo = newRepo("rag-passed0.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 3)
+        // Максимум (0.99) ниже порога 0.995 — после фильтра пусто → блок null.
+        val settings = settingsService()
+        settings.update(KbRagSettings(filterEnabled = true, minScore = 0.995, candidateK = 8, topK = 4))
+        val logs = mutableListOf<Pair<String, String>>()
+        val service = newService(repo, fake, settings)
+
+        val result = service.buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }
+        assertNotNull(result, "базы есть — это НЕ «нет баз», а «всё отсечено фильтром»")
+        assertNull(result!!.block, "passedFilter=0 — KB-блок не собирается")
+        assertNull(result.error, "это не сбой, а штатное отсечение")
+        assertEquals(0, result.usedChunks)
+        assertTrue(result.chunks.isEmpty())
+        assertNull(service.buildContextBlock("вопрос"), "и через buildContextBlock — null")
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertEquals(0, searchTree.get("passedFilter").asInt())
+        assertEquals(0, searchTree.get("usedChunks").asInt())
+        assertEquals(3, searchTree.get("scored").asInt())
+        assertEquals(0, searchTree.get("chunks").size(), "в логе пустой список отобранных")
+        assertTrue(searchTree.get("filterEnabled").asBoolean())
+        assertEquals(0.995, searchTree.get("minScore").asDouble(), 1e-9)
+    }
+
+    // --- Лог «Ответ поискового движка»: расширенный JSON + query rewrite pre-wire ---
+
+    @Test
+    fun `rewritten query is used for retrieval and logged in search result`() {
+        val repo = newRepo("rag-rewrite.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 2)
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake)
+            .buildContextResult(
+                userMessage = "вопрос",
+                rewrittenQuery = "пылесос LEGEE купить",
+                rewriteUsed = true,
+            ) { kind, detail -> logs.add(kind to detail) }!!
+
+        assertEquals("пылесос LEGEE купить", fake.calls.first(), "эмбеддится переписанный запрос")
+        assertTrue(result.block!!.contains("чанк1"))
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertEquals("пылесос LEGEE купить", searchTree.get("rewrittenQuery").asText())
+        assertTrue(searchTree.get("rewriteUsed").asBoolean())
+        // rewriteUsed=true, но rewrittenQuery=null/blank → фолбэк на исходный запрос
+    }
+
+    @Test
+    fun `rewrite not used falls back to original user message`() {
+        val repo = newRepo("rag-rewrite-fallback.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 2)
+        val logs = mutableListOf<Pair<String, String>>()
+        // rewriteUsed=false, но переписанный текст передан (fallback после ошибки) —
+        // должен использоваться исходный запрос, а в логе rewriteUsed=false.
+        val result = newService(repo, fake)
+            .buildContextResult(
+                userMessage = "вопрос",
+                rewrittenQuery = "неудавшийся rewrite",
+                rewriteUsed = false,
+            ) { kind, detail -> logs.add(kind to detail) }!!
+
+        assertEquals("вопрос", fake.calls.first(), "фолбэк: эмбеддится исходный запрос")
+        assertTrue(result.block!!.contains("чанк1"))
+
+        val searchTree = JSON.readTree(logs.last().second)
+        assertEquals("неудавшийся rewrite", searchTree.get("rewrittenQuery").asText(), "в логе видно, что rewrite пытались сделать")
+        assertFalse(searchTree.get("rewriteUsed").asBoolean())
+    }
+
     @Test
     fun `onLlmLog emits db request response and search result in order`() {
         val repo = newRepo("rag-logs.db")
@@ -172,7 +418,7 @@ class KbRagServiceTest {
         fake.vectors["вопрос"] = floatArrayOf(1f, 0f, 0f, 0f)
         fake.vectors["чанк1"] = vec(0.9f)
         fake.vectors["чанк2"] = vec(0.8f)
-        val kbId = repo.create("Ноутбуки", "fixed", null, null, "qwen3-vl-embedding-8b")!!.id
+        val kbId = repo.create("Ноутбуки", "fixed", null, null, MODEL)!!.id
         repo.addChunks(kbId, listOf(
             row(kbId, "чанк1", fake.vectors["чанк1"]!!, section = "сек1"),
             row(kbId, "чанк2", fake.vectors["чанк2"]!!, section = "сек2"),
@@ -181,7 +427,7 @@ class KbRagServiceTest {
         repo.setActive(kbId, true)
 
         val logs = mutableListOf<Pair<String, String>>()
-        val result = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+        val result = newService(repo, fake)
             .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
         assertNotNull(result.block)
 
@@ -212,11 +458,11 @@ class KbRagServiceTest {
 
         // «Ответ поискового движка» — pretty JSON: парсим и проверяем поля,
         // включая контент отобранных чанков (векторов в detail быть не должно).
-        val searchTree = com.fasterxml.jackson.databind.ObjectMapper().readTree(logs[5].second)
+        val searchTree = JSON.readTree(logs[5].second)
         assertEquals(4, searchTree.get("topK").asInt())
         assertEquals(2, searchTree.get("candidateChunks").asInt())
         assertEquals(2, searchTree.get("usedChunks").asInt())
-        assertEquals("qwen3-vl-embedding-8b", searchTree.get("embeddingModel").asText())
+        assertEquals(MODEL, searchTree.get("embeddingModel").asText())
         val chunksNode = searchTree.get("chunks")
         assertEquals(2, chunksNode.size())
         assertEquals("чанк1", chunksNode[0].get("content").asText(), "content чанка целиком")
@@ -227,6 +473,16 @@ class KbRagServiceTest {
         assertTrue(chunksNode[0].get("score").isNumber, "score — число")
         assertTrue(chunksNode[0].get("contentChars").asInt() == "чанк1".length)
         assertFalse(chunksNode[0].has("embedding"), "вектор чанка в detail не попадает")
+
+        // Day-23: расширенные поля воронки + rewrite (дефолты, rewrite не вызывался).
+        assertFalse(searchTree.get("filterEnabled").asBoolean(), "дефолт: фильтр выключен")
+        assertEquals(0.35, searchTree.get("minScore").asDouble(), 1e-9)
+        assertEquals(8, searchTree.get("candidateK").asInt())
+        assertEquals(2, searchTree.get("scored").asInt())
+        assertEquals(2, searchTree.get("candidates").asInt())
+        assertEquals(2, searchTree.get("passedFilter").asInt())
+        assertTrue(searchTree.get("rewrittenQuery").isNull(), "rewrite не вызывался — null в логе")
+        assertFalse(searchTree.get("rewriteUsed").asBoolean())
     }
 
     @Test
@@ -234,7 +490,7 @@ class KbRagServiceTest {
         val repo = newRepo("rag-logs-empty.db")
         val fake = FakeEmbedder()
         val logs = mutableListOf<Pair<String, String>>()
-        val result = KbRagService(repo, fake, "qwen3-vl-embedding-8b")
+        val result = newService(repo, fake)
             .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }
         assertNull(result, "без активных баз — null (без сетевых вызовов)")
         assertEquals(

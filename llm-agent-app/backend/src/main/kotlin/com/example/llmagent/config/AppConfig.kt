@@ -21,6 +21,7 @@ import com.example.llmagent.kb.KbEmbedder
 import com.example.llmagent.kb.KbEmbeddingClient
 import com.example.llmagent.kb.KbModelCatalog
 import com.example.llmagent.kb.KbRagService
+import com.example.llmagent.kb.KbRagSettingsService
 import com.example.llmagent.kb.KbRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.context.annotation.Bean
@@ -72,12 +73,13 @@ class AppConfig {
         workflowSettings: WorkflowSettings,
         invariantsStore: InvariantsStore,
         kbRagService: KbRagService,
+        kbRagSettingsService: KbRagSettingsService,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
         workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore, taskStateStore,
-        workflowSettings, invariantsStore, kbRagService,
+        workflowSettings, invariantsStore, kbRagService, kbRagSettingsService,
     )
 
     /**
@@ -90,6 +92,19 @@ class AppConfig {
         KbEmbeddingClient(props.baseUrl, props.apiKey)
 
     @Bean
-    fun kbRagService(repo: KbRepository, embedder: KbEmbedder): KbRagService =
-        KbRagService(repo, embedder, KbModelCatalog.default.id)
+    fun kbRagService(
+        repo: KbRepository,
+        embedder: KbEmbedder,
+        kbRagSettingsService: KbRagSettingsService,
+    ): KbRagService =
+        KbRagService(repo, embedder, KbModelCatalog.default.id, kbRagSettingsService)
+
+    /**
+     * Настройки RAG (Day-23): фильтр релевантности (minScore/candidateK/topK) и query rewrite.
+     * Хранятся глобально в `app_settings`; [KbRagSettingsService.load] читается на каждом
+     * вызове ретривала — изменения применяются без рестарта backend.
+     */
+    @Bean
+    fun kbRagSettingsService(appSettingsStore: AppSettingsStore): KbRagSettingsService =
+        KbRagSettingsService(appSettingsStore)
 }

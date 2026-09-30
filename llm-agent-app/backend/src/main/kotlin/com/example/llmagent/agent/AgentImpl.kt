@@ -7,6 +7,7 @@ import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.example.llmagent.config.WorkflowSettings
 import com.example.llmagent.kb.KbRagService
+import com.example.llmagent.kb.KbRagSettingsService
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.EncodingType
@@ -80,6 +81,10 @@ class AgentImpl(
     /** Базы знаний (Day-22, RAG): null — RAG-инъекция отключена (юнит-тесты/старая
      *  обвязка): блок «### База знаний» молча пропускается (fail-open). */
     private val kbRagService: KbRagService? = null,
+    /** Настройки RAG (Day-23: фильтр релевантности, query rewrite); null — настройки
+     *  не подключены (юнит-тесты/старая обвязка): перезапись запроса не выполняется
+     *  (fail-open), поиск идёт по исходному сообщению пользователя. */
+    private val kbRagSettingsService: KbRagSettingsService? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -342,12 +347,46 @@ class AgentImpl(
             val ragQuery = if (appendUser) userMessage
             else sessionStore.getStored(sessionId)
                 .lastOrNull { it.role == "user" }?.content ?: userMessage
+            // Query rewrite (Day-23): при включённой настройке kb.rewriteEnabled И наличии
+            // активной проиндексированной базы вопрос пользователя переписывается LLM-вызовом
+            // под векторный поиск (по паттерну extractFacts выше — тот же обёрнутый клиент,
+            // записи уходят в панель «Логи»). Ответ очищается (кавычки/лимит 300 символов);
+            // при ЛЮБОМ сбое (LLM API/таймаут/связь/пустой после очистки) — warn и фолбэк
+            // на исходный запрос: rewrite НИКОГДА не ломает ответ. Выключенная настройка
+            // или отсутствие активных баз — ни одного дополнительного LLM-вызова.
+            var rewrittenQuery: String? = null
+            var rewriteUsed = false
+            val ragSettingsService = kbRagSettingsService
+            if (kbRagService != null && ragSettingsService != null &&
+                ragSettingsService.load().rewriteEnabled && kbRagService.hasActiveIndexed()
+            ) {
+                try {
+                    val raw = rewriteQuery(llm, buildRewritePrompt(ragQuery), runSettings)
+                    val sanitized = sanitizeRewrittenQuery(raw)
+                    if (sanitized != null) {
+                        rewrittenQuery = sanitized
+                        rewriteUsed = true
+                    } else {
+                        log.warn(
+                            "session={} rewrite вернул пустой запрос после очистки — использую исходный",
+                            sessionId,
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.warn(
+                        "session={} rewrite LLM call failed, run continues with original query: {}",
+                        sessionId, e.message,
+                    )
+                }
+            }
             val kbRag = kbRagService?.let { service ->
                 withContext(Dispatchers.IO) {
                     // Эмбеддинг-вызов RAG-поиска логируется в панель «Логи» наравне с
                     // chat-моделью: колбэк складывает («Запрос в эмбеддинги»/«Ответ от
                     // эмбеддингов», JSON) в ту же очередь, что и записи chat-модели.
-                    service.buildContextResult(ragQuery) { kind, json -> llmLogQueue.trySend(kind to json) }
+                    service.buildContextResult(ragQuery, rewrittenQuery, rewriteUsed) { kind, json -> llmLogQueue.trySend(kind to json) }
                 }
             }
             // block != null ⟺ сбоя не было, найдены чанки и блок собран (см. KbRagResult) —
@@ -1119,6 +1158,65 @@ class AgentImpl(
         else -> upstreamConnectionMessage(e) ?: e.message ?: e.javaClass.simpleName
     }
 
+    /**
+     * Сборка промпта перезаписи вопроса под векторный поиск (Day-23 query rewrite):
+     * вопрос пользователя и ПОСЛЕДНИМ user-сообщением — запрос поисковой формулировки
+     * (см. [REWRITE_REQUEST_PROMPT]). Так модель отвечает на запрос перезаписи,
+     * а не продолжает диалог по вопросу.
+     */
+    private fun buildRewritePrompt(ragQuery: String): List<LlmMessage> = listOf(
+        LlmMessage("user", ragQuery),
+        LlmMessage("user", REWRITE_REQUEST_PROMPT),
+    )
+
+    /**
+     * Вызов LLM для перезаписи вопроса (по паттерну [extractFacts]: тот же обёрнутый
+     * клиент, инструменты не передаются). Возвращает СЫРОЙ текст ответа модели;
+     * очистка — в [sanitizeRewrittenQuery]. Бросает [LlmSummaryException] при
+     * finishReason error/tool_calls или пустом ответе — вызывающий код переводит
+     * это в фолбэк на исходный запрос (rewrite не ломает ответ).
+     */
+    private suspend fun rewriteQuery(
+        client: LlmClient,
+        prompt: List<LlmMessage>,
+        runSettings: LlmSettings,
+    ): String {
+        val text = StringBuilder()
+        var finishReason = "stop"
+        val events = client.streamChat(prompt, emptyList(), runSettings).collectList().awaitSingle()
+        for (e in events) {
+            when (e) {
+                is LlmEvent.ContentDelta -> text.append(e.delta)
+                is LlmEvent.Finished -> finishReason = e.finishReason
+                is LlmEvent.ToolCallsComplete -> Unit
+                is LlmEvent.ResponseAssembled -> Unit
+            }
+        }
+        if (finishReason == "error" || finishReason == "tool_calls") {
+            throw LlmSummaryException("LLM вернул finishReason=$finishReason вместо поискового запроса")
+        }
+        if (text.isBlank()) {
+            throw LlmSummaryException("LLM вернул пустой ответ вместо поискового запроса")
+        }
+        return text.toString()
+    }
+
+    /**
+     * Очистка ответа перезаписи (Day-23): trim, снятие ОДНОЙ пары окружающих кавычек
+     * («…» либо прямых), обрезка до [MAX_REWRITTEN_QUERY_CHARS] символов. null — после
+     * очистки пусто: вызывающий код делает фолбэк на исходный запрос.
+     */
+    private fun sanitizeRewrittenQuery(raw: String): String? {
+        var s = raw.trim()
+        if (s.length >= 2) {
+            val quotePairs = listOf('«' to '»', '"' to '"', '\'' to '\'')
+            val pair = quotePairs.firstOrNull { it.first == s.first() && it.second == s.last() }
+            if (pair != null) s = s.substring(1, s.length - 1).trim()
+        }
+        if (s.length > MAX_REWRITTEN_QUERY_CHARS) s = s.take(MAX_REWRITTEN_QUERY_CHARS)
+        return s.takeIf { it.isNotBlank() }
+    }
+
     private fun parseArgs(arguments: String?): Map<String, Any?> {
         if (arguments.isNullOrBlank()) return emptyMap()
         return try {
@@ -1158,6 +1256,21 @@ class AgentImpl(
         "Обнови список фактов о пользователе и диалоге (цель, ограничения, предпочтения, решения, договорённости). " +
             "Верни ТОЛЬКО JSON-объект вида {\"ключ\": \"значение\"} без пояснений и без markdown. " +
             "Это служебное сообщение — не отвечай на него как на часть диалога."
+
+        /**
+         * Запрос на перезапись вопроса под векторный поиск (Day-23 query rewrite) —
+         * обычное user-сообщение, замыкающее промпт перезаписи (без системного промпта).
+         * Ставится последним, чтобы модель отвечала именно на него, а не продолжала
+         * диалог по вопросу пользователя. Ответ — ТОЛЬКО поисковый запрос одной строкой.
+         */
+        const val REWRITE_REQUEST_PROMPT =
+        "Переформулируй вопрос пользователя для векторного поиска по базе знаний: " +
+            "сохрани конкретные термины, названия моделей и числа, убери вежливость и лишние слова. " +
+            "Верни ТОЛЬКО поисковый запрос одной строкой, без кавычек и пояснений. " +
+            "Это служебное сообщение — не отвечай на него как на часть диалога."
+
+        /** Лимит длины перезаписанного запроса после очистки (символы). */
+        const val MAX_REWRITTEN_QUERY_CHARS = 300
 
         /** Префикс сообщения-резюме в сжатом контексте (system-роль). */
         const val SUMMARY_CONTEXT_PREFIX = "Резюме ранее: "

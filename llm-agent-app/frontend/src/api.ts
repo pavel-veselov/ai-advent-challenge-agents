@@ -16,6 +16,7 @@
   KbActiveResponse,
   KbEmbeddingModel,
   KbModelsResponse,
+  KbRagSettings,
   KnowledgeBase,
   KnowledgeBaseCreateParams,
   KnowledgeBasesResponse,
@@ -940,4 +941,25 @@ export async function fetchKbModels(): Promise<KbEmbeddingModel[]> {
   if (!res.ok) await raiseKbError(res, 'kb models');
   const body = (await res.json()) as KbModelsResponse;
   return body.models;
+}
+
+/** Настройки реранкинга/фильтрации RAG (Day-23): GET /api/kb/settings. */
+export async function fetchKbRagSettings(): Promise<KbRagSettings> {
+  const res = await fetch('/api/kb/settings');
+  if (!res.ok) await raiseKbError(res, 'kb settings');
+  return (await res.json()) as KbRagSettings;
+}
+
+/**
+ * Сохранение настроек RAG (Day-23): PUT /api/kb/settings с полным объектом в JSON-теле.
+ * 200 — эхо применённых настроек; 400 {message} — невалидные значения.
+ */
+export async function updateKbRagSettings(s: KbRagSettings): Promise<KbRagSettings> {
+  const res = await fetch('/api/kb/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(s),
+  });
+  if (!res.ok) await raiseKbError(res, 'kb settings PUT');
+  return (await res.json()) as KbRagSettings;
 }

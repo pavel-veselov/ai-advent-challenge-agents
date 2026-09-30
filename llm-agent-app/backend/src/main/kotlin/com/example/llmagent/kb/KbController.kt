@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestPart
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
@@ -34,6 +35,11 @@ import reactor.core.scheduler.Schedulers
  *   DELETE /api/kb/{id}        — {"deleted":true}; 404; каскад: чанки/документы БД +
  *                                 каталог data/kb/<id>/ + остановка индексации.
  *   GET    /api/kb/models      — {"models":[{id,dimension,description}]}.
+ *   GET    /api/kb/settings    — настройки RAG (Day-23): {filterEnabled,minScore,
+ *                                 candidateK,topK,rewriteEnabled}.
+ *   PUT    /api/kb/settings    — полное обновление настроек (все 5 полей обязательны);
+ *                                 невалидные значения → 400 {"message": русское сообщение};
+ *                                 успех → 200 + эхо сохранённых настроек.
  *
  * POST — multipart читается реактивно (@RequestPart); блокирующее сохранение файлов
  * (FilePart.transferTo) вынесено в createBlocking на Schedulers.boundedElastic().
@@ -43,6 +49,7 @@ import reactor.core.scheduler.Schedulers
 class KbController(
     private val repo: KbRepository,
     private val indexer: KbIndexer,
+    private val ragSettingsService: KbRagSettingsService,
 ) {
 
     private val log = LoggerFactory.getLogger(KbController::class.java)
@@ -83,6 +90,23 @@ class KbController(
 
     @GetMapping("/models")
     fun models(): ModelsResponse = ModelsResponse(KbModelCatalog.models)
+
+    /** Текущие настройки RAG (дефолты, перекрытые сохранёнными в `app_settings`). */
+    @GetMapping("/settings")
+    fun ragSettings(): KbRagSettings = ragSettingsService.load()
+
+    /**
+     * Полное обновление настроек RAG: валидацию выполняет [KbRagSettingsService.update]
+     * (IAE с русским сообщением → 400 {"message": ...} — тот же контракт, что у
+     * LlmSettingsController/CompressionController), успех → 200 + сохранённые настройки.
+     */
+    @PutMapping("/settings")
+    fun updateRagSettings(@RequestBody body: KbRagSettings): KbRagSettings =
+        try {
+            ragSettingsService.update(body)
+        } catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message, e)
+        }
 
     @PostMapping(consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun create(

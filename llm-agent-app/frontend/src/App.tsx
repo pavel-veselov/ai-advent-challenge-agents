@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import ChatPanel from './components/ChatPanel';
 import InvariantsPanel from './components/InvariantsPanel';
+import KbRagSettingsPanel from './components/KbRagSettingsPanel';
 import KnowledgeBasePanel from './components/KnowledgeBasePanel';
 import LlmSettings from './components/LlmSettings';
 import McpServersPanel from './components/McpServersPanel';
@@ -276,6 +277,8 @@ export default function App() {
       <McpServersPanel disabled={tabDisabled} />
       {/* База знаний Day-22 (RAG): базы документов, индексация, активность для агента (глобально). */}
       <KnowledgeBasePanel disabled={tabDisabled} />
+      {/* Настройки RAG Day-23: фильтр релевантности / query rewrite / воронка candidateK→topK (глобально). */}
+      <KbRagSettingsPanel disabled={tabDisabled} />
     </div>
   );
 
