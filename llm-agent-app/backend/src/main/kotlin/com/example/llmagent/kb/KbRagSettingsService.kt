@@ -26,6 +26,7 @@ class KbRagSettingsService(private val store: AppSettingsStore) {
             candidateK = raw[KEY_CANDIDATE_K]?.let(::parseCandidateK) ?: DEFAULT.candidateK,
             topK = raw[KEY_TOP_K]?.let(::parseTopK) ?: DEFAULT.topK,
             rewriteEnabled = raw[KEY_REWRITE_ENABLED]?.let(::parseBoolean) ?: DEFAULT.rewriteEnabled,
+            refusalEnabled = raw[KEY_REFUSAL_ENABLED]?.let(::parseBoolean) ?: DEFAULT.refusalEnabled,
         )
     }
 
@@ -33,7 +34,8 @@ class KbRagSettingsService(private val store: AppSettingsStore) {
      * Полное обновление настроек. Валидация (русские сообщения, ошибка -> HTTP 400):
      * - `minScore` ∈ [0..1];
      * - `candidateK` ∈ [1..100];
-     * - `topK` ∈ [1..candidateK].
+     * - `topK` ∈ [1..candidateK];
+     * - `refusalEnabled` — boolean, ограничений нет (тип гарантирует допустимость).
      *
      * После валидации персистит каждый ключ в `app_settings`
      * и возвращает сохранённые настройки.
@@ -45,6 +47,7 @@ class KbRagSettingsService(private val store: AppSettingsStore) {
         store.save(KEY_CANDIDATE_K, request.candidateK.toString())
         store.save(KEY_TOP_K, request.topK.toString())
         store.save(KEY_REWRITE_ENABLED, request.rewriteEnabled.toString())
+        store.save(KEY_REFUSAL_ENABLED, request.refusalEnabled.toString())
         return request
     }
 
@@ -84,6 +87,7 @@ class KbRagSettingsService(private val store: AppSettingsStore) {
         const val KEY_CANDIDATE_K = "kb.candidateK"
         const val KEY_TOP_K = "kb.topK"
         const val KEY_REWRITE_ENABLED = "kb.rewriteEnabled"
+        const val KEY_REFUSAL_ENABLED = "kb.refusalEnabled"
         val DEFAULT = KbRagSettings()
     }
 }

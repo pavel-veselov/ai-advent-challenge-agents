@@ -34,6 +34,8 @@ data class KnowledgeBase(
 /** Чанк базы знаний с эмбеддингом (строка kb_chunks) + имя базы — для RAG-инъекции. */
 data class KbChunkRow(
     val kbId: Long,
+    /** Id строки kb_chunks (Day-24, источники ответов); 0 — до записи в БД (индексация). */
+    val chunkId: Long = 0L,
     val kbName: String,
     val source: String,
     val title: String,
@@ -47,7 +49,7 @@ data class KbChunkRow(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is KbChunkRow) return false
-        return kbId == other.kbId && kbName == other.kbName && source == other.source &&
+        return kbId == other.kbId && chunkId == other.chunkId && kbName == other.kbName && source == other.source &&
             title == other.title && section == other.section && strategy == other.strategy &&
             content == other.content && embedding.contentEquals(other.embedding) && model == other.model
     }

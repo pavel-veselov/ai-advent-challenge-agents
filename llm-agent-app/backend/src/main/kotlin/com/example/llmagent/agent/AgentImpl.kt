@@ -6,6 +6,7 @@ import com.example.llmagent.config.AppSettingsStore
 import com.example.llmagent.config.LlmSettings
 import com.example.llmagent.config.SessionLlmSettingsProvider
 import com.example.llmagent.config.WorkflowSettings
+import com.example.llmagent.kb.KbRagResult
 import com.example.llmagent.kb.KbRagService
 import com.example.llmagent.kb.KbRagSettingsService
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -282,6 +283,10 @@ class AgentImpl(
         val messages = mutableListOf<LlmMessage>()
         messages += LlmMessage("system", SYSTEM_PROMPT)
 
+        // День-24: результат RAG-поиска нужен ВНЕ блока памяти — для детерминированного
+        // отказа «не знаю» (после try/catch) и для списка источников в agent_finished.
+        var kbRagResult: KbRagResult? = null
+
         // Память агента — контекстные блоки (memory layers): рабочие блоки WM (ПО ПРОЕКТУ)
         // и LTM между SYSTEM_PROMPT и блоком стратегии, для ВСЕХ стратегий (включая branching)).
         // В историю чата НЕ пишутся — только в контекст текущего запроса. Fail-open:
@@ -389,6 +394,7 @@ class AgentImpl(
                     service.buildContextResult(ragQuery, rewrittenQuery, rewriteUsed) { kind, json -> llmLogQueue.trySend(kind to json) }
                 }
             }
+            kbRagResult = kbRag
             // block != null ⟺ сбоя не было, найдены чанки и блок собран (см. KbRagResult) —
             // блок «### База знаний» добавляется в контекст после памяти, как раньше.
             val kbBlock = kbRag?.block
@@ -399,6 +405,32 @@ class AgentImpl(
             throw e
         } catch (e: Exception) {
             log.warn("session={} memory context blocks failed, run continues without them: {}", sessionId, e.message)
+        }
+
+        // День-24: детерминированный отказ «не знаю» ДО цикла tool-calling. Активные
+        // проиндексированные базы есть (kbRagResult != null), поиск завершился без сбоя,
+        // но релевантность ниже порога (usedChunks==0 или лучший score < minScore) →
+        // LLM-цикл не запускается вовсе: фиксированный отказ, без риска галлюцинаций.
+        // Лог «Ответ поискового движка» (KIND_SEARCH_RESULT) ещё в очереди llmLogQueue —
+        // вычитываем ОДИН раз, чтобы запись ушла в панель, и НЕ дублируем её.
+        // Компромисс (задокументирован в плане дня 24): при активной KB разговорное
+        // сообщение ниже порога тоже получит отказ — это требование задания; отключается
+        // настройкой kb.refusalEnabled (дефолт true). Сбоя в сборке памяти выше нет —
+        // если был, kbRagResult = null и отказ не сработает (fail-open, как раньше).
+        val kbRagSettings = kbRagSettingsService?.load()
+        if (kbRagSettings != null && KbRagService.shouldRefuse(kbRagResult, kbRagSettings)) {
+            drainLlmLogs()
+            log.info("session={} релевантность KB ниже порога — отказ «{}»", sessionId, KbRagService.REFUSAL_TEXT)
+            send(AgentFinished(KbRagService.REFUSAL_TEXT))
+            return@flux
+        }
+        // Источники финального ответа (Day-24): usedChunks в порядке KB-блока
+        // (label = позиция в блоке); нет баз / блок не собран — null (поле в payload
+        // отсутствует — обратная совместимость).
+        val kbSources = kbRagResult?.let { r ->
+            r.chunks.take(r.usedChunks)
+                .map { hit -> KbSourceRef(hit.chunkId, hit.label, hit.kbName, hit.source, hit.section, hit.score) }
+                .ifEmpty { null }
         }
 
         // Состояние задачи (Day-13, FSM): системный блок «=== СОСТОЯНИЕ ЗАДАЧИ ===» —
@@ -691,7 +723,8 @@ class AgentImpl(
                     sessionStore.append(sessionId, "assistant", finalText, usage?.inputTokens, usage?.outputTokens)
                     // Кумулятивная статистика «за всё время» — переживает удаление сессии.
                     sessionStore.addLifetimeTokens(usage?.inputTokens ?: 0, usage?.outputTokens ?: 0, costUsd ?: 0.0)
-                    send(AgentFinished(finalText))
+                    // День-24: sources — использованные чанки KB (null — поле отсутствует).
+                    send(AgentFinished(finalText, kbSources))
 
                     // AUTO-воркфлоу: модель могла дать финальный ответ, не дойдя до этапа
                     // «готово» (например, завершилась на проверке) — сохраняем его как

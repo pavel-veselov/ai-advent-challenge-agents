@@ -50,6 +50,12 @@ class KbRagSettingsServiceTest {
         assertEquals(KbRagSettings(), s.load())
     }
 
+    @Test
+    fun `default refusalEnabled is true on empty store`() {
+        // День-24: отказ «не знаю» включён по умолчанию (требование задания)
+        assertTrue(KbRagSettingsService(InMemoryStore()).load().refusalEnabled)
+    }
+
     // --- Roundtrip персиста ---
 
     @Test
@@ -65,9 +71,20 @@ class KbRagSettingsServiceTest {
         assertEquals("20", store.get("kb.candidateK"))
         assertEquals("5", store.get("kb.topK"))
         assertEquals("true", store.get("kb.rewriteEnabled"))
+        assertEquals("true", store.get("kb.refusalEnabled"), "день-24: отказ персистится как kb.refusalEnabled")
 
         // «Перезапуск backend»: новый сервис над тем же стором видит сохранённые значения
         assertEquals(req, KbRagSettingsService(store).load())
+    }
+
+    @Test
+    fun `refusalEnabled false persists and roundtrips through load`() {
+        val store = InMemoryStore()
+        val service = KbRagSettingsService(store)
+        val req = KbRagSettings(refusalEnabled = false)
+        assertEquals(req, service.update(req))
+        assertEquals("false", store.get("kb.refusalEnabled"))
+        assertEquals(false, KbRagSettingsService(store).load().refusalEnabled)
     }
 
     @Test
@@ -119,6 +136,13 @@ class KbRagSettingsServiceTest {
         val store = InMemoryStore()
         store.save("kb.rewriteEnabled", "yes")
         assertEquals(false, KbRagSettingsService(store).load().rewriteEnabled)
+    }
+
+    @Test
+    fun `corrupt refusalEnabled falls back to default`() {
+        val store = InMemoryStore()
+        store.save("kb.refusalEnabled", "да")
+        assertEquals(true, KbRagSettingsService(store).load().refusalEnabled, "порчено -> дефолт true")
     }
 
     // --- Валидация update ---

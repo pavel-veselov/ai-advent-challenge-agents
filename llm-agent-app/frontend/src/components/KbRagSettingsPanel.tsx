@@ -7,6 +7,51 @@ import CollapsibleSection from './CollapsibleSection';
 /** Сколько миллисекунд висит индикация «Настройки сохранены» (идиома авто-гаснущих статусов). */
 const SUCCESS_VISIBLE_MS = 3000;
 
+// ----- Обучающие подсказки (нативные title-атрибуты): простые пояснения «что это и на что влияет» -----
+// Одна и та же строка вешается на два элемента (кнопка+строка у рубильников, label+input у полей),
+// поэтому вынесена в константу (идиома документированных констант модуля, как SUCCESS_VISIBLE_MS).
+
+/** Обучающий title шапки панели: что такое «Настройки RAG» и на что влияет блок. */
+const TITLE_PANEL =
+  'Как агент ищет ответы в базах знаний (RAG): перед ответом он находит в базах подходящие фрагменты ' +
+  'текста и подставляет их модели. Здесь настраивается отбор этих фрагментов. Общие для всех баз, ' +
+  'действуют после «Сохранить».';
+
+/** Обучающий title рубильника «Фильтр релевантности»: что делает и что будет при выключении. */
+const TITLE_FILTER =
+  'Отсекает фрагменты, слабо похожие на вопрос: после поиска отбрасываются чанки ниже порога minScore ' +
+  '(шкала 0–1). Если ни один не прошёл — агент ответит без базы знаний. Выключено = прежнее поведение ' +
+  '(топ-4 без отсечения).';
+
+/** Обучающий title рубильника «Перезапись запроса»: что делает, цена (+1 LLM-вызов) и фолбэк. */
+const TITLE_REWRITE =
+  'Перед поиском LLM сжимает вопрос пользователя до короткого поискового запроса: убирает вежливость, ' +
+  'сохраняет термины и числа — векторному поиску так проще. Цена: +1 вызов LLM (~1–3 с); при ошибке ' +
+  'берётся исходный вопрос.';
+
+/** Обучающий title поля minScore: что за порог, когда действует и что рекомендует замер. */
+const TITLE_MIN_SCORE =
+  'Порог похожести фрагмента на вопрос: 0 — не похож, 1 — совпадение. Отбрасываются чанки ниже порога ' +
+  '(только при включённом фильтре, среди candidateK лучших). По замеру: полезные тексты ≥0.58, ' +
+  'мусор ≤0.4 — рекомендуется 0.5.';
+
+/** Обучающий title поля candidateK: сколько кандидатов ищется до фильтрации. */
+const TITLE_CANDIDATE_K =
+  'Сколько лучших кандидатов ищется до фильтрации (1–100). Больше — меньше шанс потерять нужный ' +
+  'фрагмент, но больше мусора дойдёт до порога. По умолчанию 8.';
+
+/** Обучающий title поля topK: сколько фрагментов после фильтрации уйдёт в промпт агента. */
+const TITLE_TOP_K =
+  'Сколько лучших фрагментов после фильтрации попадёт в промпт агента: от 1 до candidateK. ' +
+  'Больше — больше контекста, но блок базы знаний обрезается лимитом ~6000 символов. По умолчанию 4.';
+
+/** Обучающий title рубильника отказа (Day-24): что делает, детерминированное условие и компромисс. */
+const TITLE_REFUSAL =
+  'Если база знаний активна, но фрагментов выше порога minScore не нашлось (или их ноль), ' +
+  'агент не вызывает LLM и сразу отвечает «Не знаю — уточните вопрос». Компромисс: ' +
+  'разговорные сообщения ниже порога тоже получат отказ. Выключено = агент отвечает ' +
+  'из собственных знаний, как раньше.';
+
 /** Строгий разбор неотрицательного целого; пусто/мусор — null (идиома KnowledgeBasePanel). */
 function parseNonNegativeInt(raw: string): number | null {
   const t = raw.trim();
@@ -30,8 +75,9 @@ interface KbRagSettingsPanelProps {
 
 /**
  * Панель «Настройки RAG» (Day-23): funnel реранкинга/фильтрации при поиске по базам знаний.
- * Загружает GET /api/kb/settings на монтировании; форма: рубильники «Фильтр релевантности»
- * и «Перезапись запроса (query rewrite)» (общий .llm-switch) + числовые поля воронки —
+ * Загружает GET /api/kb/settings на монтировании; форма: рубильники «Фильтр релевантности»,
+ * «Перезапись запроса (query rewrite)» и «Отказ при низкой релевантности («не знаю»)» (Day-24)
+ * (общий .llm-switch) + числовые поля воронки —
  * minScore (0..1, шаг 0.05), candidateK (целое 1..100), topK (целое 1..candidateK).
  * Валидация клиентская, согласована с KbRagSettingsService (ошибки инлайном .kb-field-error,
  * без alert). «Сохранить» (PUT /api/kb/settings, полный объект) активна только при изменениях
@@ -56,6 +102,8 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
   // ----- Черновик формы (числовые поля хранятся строками — идиома KnowledgeBasePanel) -----
   const [filterEnabled, setFilterEnabled] = useState(false);
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
+  // Day-24: дефолт true — до загрузки настройки бэкенд по контракту держит отказ включённым.
+  const [refusalEnabled, setRefusalEnabled] = useState(true);
   const [minScoreStr, setMinScoreStr] = useState('0.35');
   const [candidateKStr, setCandidateKStr] = useState('8');
   const [topKStr, setTopKStr] = useState('4');
@@ -64,6 +112,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
   const applySettings = (s: KbRagSettings) => {
     setFilterEnabled(s.filterEnabled);
     setRewriteEnabled(s.rewriteEnabled);
+    setRefusalEnabled(s.refusalEnabled);
     setMinScoreStr(String(s.minScore));
     setCandidateKStr(String(s.candidateK));
     setTopKStr(String(s.topK));
@@ -124,6 +173,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
     loaded != null &&
     (filterEnabled !== loaded.filterEnabled ||
       rewriteEnabled !== loaded.rewriteEnabled ||
+      refusalEnabled !== loaded.refusalEnabled ||
       minScoreNum !== loaded.minScore ||
       candidateKNum !== loaded.candidateK ||
       topKNum !== loaded.topK);
@@ -148,6 +198,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
         candidateK: candidateKNum,
         topK: topKNum,
         rewriteEnabled,
+        refusalEnabled,
       });
       setLoaded(saved);
       applySettings(saved); // перечитывание не нужно: PUT возвращает эхо применённых значений
@@ -166,6 +217,12 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
       title="Настройки RAG"
       icon="◈"
       hint="фильтр релевантности и перезапись запроса при поиске по базам"
+      // ⓘ в шапке несёт обучающий summary-title: нативная подсказка «зачем эта панель».
+      headerExtra={
+        <span className="llm-hint" aria-hidden="true" title={TITLE_PANEL}>
+          ⓘ
+        </span>
+      }
     >
       {loaded === null ? (
         loadFailed ? (
@@ -183,7 +240,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
       ) : (
         <>
           {/* Рубильник фильтра: строка-идиома .kb-active-row (подпись+описание слева, свитч справа). */}
-          <div className="kb-active-row">
+          <div className="kb-active-row" title={TITLE_FILTER}>
             <button
               type="button"
               role="switch"
@@ -191,7 +248,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
               aria-label="Фильтр релевантности"
               className={`llm-switch${filterEnabled ? ' is-on' : ''}`}
               disabled={disabled || busy}
-              title="Отсекать чанки с оценкой ниже порога minScore"
+              title={TITLE_FILTER}
               onClick={() => setFilterEnabled((v) => !v)}
             >
               <span className="llm-switch-knob" />
@@ -203,7 +260,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
           </div>
 
           {/* Рубильник перезаписи запроса: вопрос переформулируется вспомогательной LLM перед поиском. */}
-          <div className="kb-active-row">
+          <div className="kb-active-row" title={TITLE_REWRITE}>
             <button
               type="button"
               role="switch"
@@ -211,7 +268,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
               aria-label="Перезапись запроса (query rewrite)"
               className={`llm-switch${rewriteEnabled ? ' is-on' : ''}`}
               disabled={disabled || busy}
-              title="Переформулировать вопрос вспомогательной LLM перед векторным поиском"
+              title={TITLE_REWRITE}
               onClick={() => setRewriteEnabled((v) => !v)}
             >
               <span className="llm-switch-knob" />
@@ -222,6 +279,26 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
             </span>
           </div>
 
+          {/* Рубильник отказа (Day-24): нет фрагментов выше порога — агент отвечает «Не знаю». */}
+          <div className="kb-active-row" title={TITLE_REFUSAL}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={refusalEnabled}
+              aria-label="Отказ при низкой релевантности"
+              className={`llm-switch${refusalEnabled ? ' is-on' : ''}`}
+              disabled={disabled || busy}
+              title={TITLE_REFUSAL}
+              onClick={() => setRefusalEnabled((v) => !v)}
+            >
+              <span className="llm-switch-knob" />
+            </button>
+            <span className="kb-active-text">
+              <span className="kb-active-title">Отказ при низкой релевантности («не знаю»)</span>
+              <span className="llm-hint">без фрагментов выше порога — «не знаю», а не ответ из головы</span>
+            </span>
+          </div>
+
           {/* Порядок воронки — моно-гравировка (идиома .kb-meta); соответствует бэкенду. */}
           <div className="kb-meta">
             воронка: сортировка по релевантности → candidateK → порог minScore → topK в промпт
@@ -229,7 +306,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
 
           {/* Числовые поля воронки в ряд (идиома .kb-nums из диалога создания базы). */}
           <div className="kb-nums">
-            <label className="profile-field kb-num-field">
+            <label className="profile-field kb-num-field" title={TITLE_MIN_SCORE}>
               <span className="profile-field-label">Порог релевантности (minScore)</span>
               <input
                 className="profile-input"
@@ -243,11 +320,11 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
                   clearSaveError();
                 }}
                 aria-label="Порог релевантности (minScore)"
-                title="Дробь от 0 до 1, шаг 0.05"
+                title={TITLE_MIN_SCORE}
               />
               {minScoreError != null ? <span className="kb-field-error">{minScoreError}</span> : null}
             </label>
-            <label className="profile-field kb-num-field">
+            <label className="profile-field kb-num-field" title={TITLE_CANDIDATE_K}>
               <span className="profile-field-label">Кандидатов до фильтра (candidateK)</span>
               <input
                 className="profile-input"
@@ -261,13 +338,13 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
                   clearSaveError();
                 }}
                 aria-label="Кандидатов до фильтра (candidateK)"
-                title="Целое число от 1 до 100"
+                title={TITLE_CANDIDATE_K}
               />
               {candidateKError != null ? (
                 <span className="kb-field-error">{candidateKError}</span>
               ) : null}
             </label>
-            <label className="profile-field kb-num-field">
+            <label className="profile-field kb-num-field" title={TITLE_TOP_K}>
               <span className="profile-field-label">Чанков в промпт (topK)</span>
               <input
                 className="profile-input"
@@ -281,7 +358,7 @@ export default function KbRagSettingsPanel({ disabled }: KbRagSettingsPanelProps
                   clearSaveError();
                 }}
                 aria-label="Чанков в промпт (topK)"
-                title={`Целое число от 1 до candidateK${candidateKNum != null ? ` (${candidateKNum})` : ''}`}
+                title={TITLE_TOP_K}
               />
               {topKError != null ? <span className="kb-field-error">{topKError}</span> : null}
             </label>

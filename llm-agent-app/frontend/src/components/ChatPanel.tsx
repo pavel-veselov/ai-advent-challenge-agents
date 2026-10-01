@@ -279,6 +279,22 @@ export default function ChatPanel({
                       {tokenLabel(m)}
                     </div>
                   ) : null}
+                  {/* Day-24: использованные чанки KB под ответом (payload.sources события
+                      agent_finished). Старые сообщения без sources — блок не рисуется. */}
+                  {m.sources && m.sources.length > 0 ? (
+                    <div className="chat-msg-sources">
+                      <span className="chat-msg-sources-title">Источники:</span>
+                      {m.sources.map((s) => (
+                        <div
+                          key={`${s.kbName}:${s.chunkId}:${s.label}`}
+                          className="chat-msg-sources-item"
+                        >
+                          [{s.label}] {s.source} — {s.section} (score{' '}
+                          {Math.round(s.score * 100) / 100})
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {m.file ? (
                     <div className="chat-msg-file-row">
                       <button

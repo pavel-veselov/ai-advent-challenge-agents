@@ -150,7 +150,12 @@ class KbRagServiceTest {
 
         val block = newService(repo, fake).buildContextBlock("вопрос")!!
         assertTrue(block.startsWith("### База знаний"))
-        assertTrue(block.contains("[КБ Ноутбуки | notes.md#сек1]"))
+        // День-24: метка [n] + Файл/Раздел (старый формат «[КБ … | …#…]» заменён)
+        assertTrue(block.contains("[1] Файл: notes.md — Раздел: сек1"))
+        assertTrue(block.contains("[2] Файл: notes.md — Раздел: сек2"))
+        // Правило цитирования в заголовке блока
+        assertTrue(block.contains("Отвечай ТОЛЬКО на основе фрагментов ниже"))
+        assertTrue(block.contains("«Не знаю»"))
         assertTrue(block.contains("чанк1"))
         // top-4 (дефолт настроек): чанки 5 и 6 не попали в блок
         assertFalse(block.contains("чанк5"))
@@ -178,7 +183,8 @@ class KbRagServiceTest {
         repo.setActive(kbId, true)
 
         val block = newService(repo, fake).buildContextBlock("вопрос")!!
-        // Заголовок (15) + один вход (~3041) влезает; два входа (~6098) — уже за лимитом
+        // Заголовок с правилом цитирования (~257) + один вход (~3045) влезает;
+        // два входа (~6350) — уже за лимитом 6000
         assertTrue(block.contains(big1))
         assertFalse(block.contains(big2), "второй чанк не помещается в лимит 6000")
         assertTrue(block.length < 6100)
@@ -483,6 +489,66 @@ class KbRagServiceTest {
         assertEquals(2, searchTree.get("passedFilter").asInt())
         assertTrue(searchTree.get("rewrittenQuery").isNull(), "rewrite не вызывался — null в логе")
         assertFalse(searchTree.get("rewriteUsed").asBoolean())
+    }
+
+    // --- День-24: метки [n], label/chunkId в логе, порядок источников блока ---
+
+    @Test
+    fun `hits carry label chunkId and content in block order`() {
+        val repo = newRepo("rag-labels.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 3)
+        val logs = mutableListOf<Pair<String, String>>()
+        val result = newService(repo, fake)
+            .buildContextResult("вопрос") { kind, detail -> logs.add(kind to detail) }!!
+
+        // Все 3 чанка влезли: label = позиция в блоке 1..usedChunks, chunkId — id строки БД
+        assertEquals(3, result.usedChunks)
+        assertEquals(listOf(1, 2, 3), result.chunks.map { it.label })
+        assertEquals(listOf(1L, 2L, 3L), result.chunks.map { it.chunkId }, "chunkId — id kb_chunks из БД")
+        assertEquals(listOf("чанк1", "чанк2", "чанк3"), result.chunks.map { it.content })
+        assertTrue(result.chunks.all { it.contentChars == it.content.length })
+        // Свойство, на которое опираются источники agent_finished: первые usedChunks
+        // чанков — ровно те, что в блоке, с метками 1..used.
+        assertEquals(
+            (1..result.usedChunks).toList(),
+            result.chunks.take(result.usedChunks).map { it.label },
+        )
+
+        // Лог «Ответ поискового движка»: chunks[] + label + chunkId + content
+        val searchTree = JSON.readTree(logs.last().second)
+        val chunksNode = searchTree.get("chunks")
+        assertEquals(3, chunksNode.size())
+        assertEquals(listOf(1, 2, 3), (0 until chunksNode.size()).map { chunksNode[it].get("label").asInt() })
+        assertEquals(listOf(1L, 2L, 3L), (0 until chunksNode.size()).map { chunksNode[it].get("chunkId").asLong() })
+        assertEquals("чанк1", chunksNode[0].get("content").asText())
+        assertEquals("сек1", chunksNode[0].get("section").asText())
+        assertEquals("notes.md", chunksNode[0].get("source").asText())
+    }
+
+    @Test
+    fun `6000 char cap applies after labels and rule header`() {
+        val repo = newRepo("rag-cap24.db")
+        val fake = FakeEmbedder()
+        seedDecayingChunks(repo, fake, 4)
+        val result = newService(repo, fake).buildContextResult("вопрос")!!
+        // Заголовок с правилом (~257) + 4 коротких чанка — все влезли, лимит не сработал
+        assertEquals(4, result.usedChunks)
+        assertTrue(result.block!!.length <= KbRagService.MAX_BLOCK_CHARS, "блок не превышает лимит")
+        // Теперь большой чанк: метка [n] и правило в заголовке тоже учитываются в лимите
+        val repo2 = newRepo("rag-cap24-big.db")
+        val fake2 = FakeEmbedder()
+        fake2.vectors["вопрос"] = floatArrayOf(1f, 0f, 0f, 0f)
+        val big1 = "А".repeat(5900)
+        fake2.vectors[big1] = vec(0.9f)
+        val kbId = repo2.create("Ноутбуки", "fixed", null, null, MODEL)!!.id
+        repo2.addChunks(kbId, listOf(row(kbId, big1, fake2.vectors[big1]!!)))
+        repo2.setStatusIndexed(kbId)
+        repo2.setActive(kbId, true)
+        val result2 = newService(repo2, fake2).buildContextResult("вопрос")!!
+        assertNull(result2.block, "заголовок с правилом + чанк 5900 > 6000 — чанк не влез")
+        assertEquals(0, result2.usedChunks)
+        assertEquals(1, result2.chunks.size, "чанк оценён, но в блок не вошёл")
     }
 
     @Test

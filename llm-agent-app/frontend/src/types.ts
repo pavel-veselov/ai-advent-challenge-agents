@@ -83,7 +83,7 @@ export type AgentEvent =
     >
   | BaseEvent<'tool_call_started', { toolName: string; args: Record<string, unknown> }>
   | BaseEvent<'tool_call_finished', { result: string; status: 'success' | 'error' }>
-  | BaseEvent<'agent_finished', { finalText: string }>
+  | BaseEvent<'agent_finished', { finalText: string; /** Day-24: использованные чанки KB; при отказе/без KB — отсутствует. */ sources?: KbSource[] }>
   | BaseEvent<'log', { text: string; /** Фактический JSON вызова (опционален; показывается по ссылке «(детализация)»). */ detail?: string }>
   | BaseEvent<'context_summary_started', { foldCount: number; prompt: PromptMessage[] }>
   | BaseEvent<
@@ -678,7 +678,8 @@ export interface KnowledgeBaseCreateParams {
  * Настройки реранкинга/фильтрации RAG (Day-23): GET /api/kb/settings, PUT — эхо тех же полей.
  * filterEnabled — отсекать чанки ниже minScore; candidateK — сколько искать до фильтрации,
  * topK — сколько чанков подставить в контекст; rewriteEnabled — переформулировать вопрос
- * вспомогательным LLM-вызовом перед поиском.
+ * вспомогательным LLM-вызовом перед поиском; refusalEnabled (Day-24) — отказ «не знаю»,
+ * если ни один фрагмент не прошёл порог (default = true).
  */
 export interface KbRagSettings {
   filterEnabled: boolean;
@@ -686,6 +687,27 @@ export interface KbRagSettings {
   candidateK: number;
   topK: number;
   rewriteEnabled: boolean;
+  /** Day-24: отказ при низкой релевантности — агент отвечает «Не знаю» вместо ответа из головы. */
+  refusalEnabled: boolean;
+}
+
+/**
+ * Использованный фрагмент базы знаний (Day-24): пейлоад agent_finished возвращает
+ * sources[] для блока «Источники:» под ответом ассистента в чате.
+ */
+export interface KbSource {
+  /** id чанка в векторном индексе (kb_chunks.id). */
+  chunkId: number;
+  /** Метка [n] чанка в KB-блоке промпта (1..usedChunks). */
+  label: number;
+  /** Имя базы знаний, откуда взят фрагмент. */
+  kbName: string;
+  /** Имя исходного файла. */
+  source: string;
+  /** Раздел/заголовок, к которому относится чанк; пустая строка — раздела нет. */
+  section: string;
+  /** Релевантность фрагмента к вопросу (0..1). */
+  score: number;
 }
 
 // ---- Состояние UI ----
@@ -758,6 +780,12 @@ export interface ChatMessage {
    * кнопку «Скачать файл» в чате. Ссылка строится через downloadToolFileUrl(filename).
    */
   file?: { filename: string } | null;
+  /**
+   * Источники ответа (Day-24): чанки, использованные RAG-блоком промпта
+   * (payload.sources события agent_finished). undefined/пусто — блок «Источники:» не
+   * рисуется (старые сообщения и ответы без KB).
+   */
+  sources?: KbSource[];
   /**
    * Время появления сообщения в чате (HH:mm у пузыря). Фиксируется один раз при создании
    * объекта сообщения: для живых реплик — момент добавления в состояние, для истории

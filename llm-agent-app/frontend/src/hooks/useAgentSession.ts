@@ -36,6 +36,7 @@ import type {
   ContextStrategy,
   HistoryMessage,
   HistoryResponse,
+  KbSource,
   Project,
   RunSettings,
   SessionContextStrategyPatch,
@@ -164,6 +165,39 @@ function fileRefFromToolResult(result: string): { filename: string } | null {
     /* не JSON — это не файл */
   }
   return null;
+}
+
+/**
+ * Разбор массива sources из пейлоада agent_finished (Day-24): SSE-JSON не доверяем на
+ * слово — элементы с несовпадающими типами молча отбрасываем, битые источники не должны
+ * ломать чат. Поле отсутствует, массив пуст или валидных записей нет — undefined
+ * (совместимость со старым бэкендом: блок «Источники:» не рисуется).
+ */
+function parseKbSources(raw: unknown): KbSource[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: KbSource[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const r = item as Record<string, unknown>;
+    if (
+      typeof r.chunkId === 'number' &&
+      typeof r.label === 'number' &&
+      typeof r.kbName === 'string' &&
+      typeof r.source === 'string' &&
+      typeof r.section === 'string' &&
+      typeof r.score === 'number'
+    ) {
+      out.push({
+        chunkId: r.chunkId,
+        label: r.label,
+        kbName: r.kbName,
+        source: r.source,
+        section: r.section,
+        score: r.score,
+      });
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /** Ключ localStorage для файлов, созданных MCP-пайплайном в сессии (Day-19). */
@@ -1210,22 +1244,27 @@ export function useAgentSession(): AgentSession {
     }
   }, [refreshGlobalStats, syncSessions]);
 
-  const finalizeAssistant = (sid: string, finalText?: string, removeIfEmpty = false) => {
+  const finalizeAssistant = (sid: string, finalText?: string, removeIfEmpty = false, sources?: KbSource[]) => {
     const st = runStateRef.current.get(sid);
     if (!st) return;
     const idx = st.messages.findIndex((m) => m.id === st.assistantId);
     if (idx === -1) return;
     const target = st.messages[idx];
-    // finalText переписывает пузырь (убирает промежуточные реплики tool-цикла), но НЕ пишет
-    // в пустой пузырь текст ПРОШЛОГО этапа (внешняя пауза на только что начатом этапе):
-    // финализируем без перезаписи, чтобы этап остался без чужого повествования.
+    // finalText переписывает пузырь (убирает промежуточные реплики tool-цикла). Day-24:
+    // отказ «не знаю» приходит как agent_finished { finalText } БЕЗ единого токена —
+    // пузырь пуст, поэтому пишем непустой finalText и в пустой пузырь тоже (единственный
+    // вызывающий с finalText — терминальный agent_finished, чужого повествования нет).
     const content =
-      finalText !== undefined && target.content.trim() !== '' ? finalText : target.content;
+      finalText !== undefined && finalText.trim() !== '' ? finalText : target.content;
     if (removeIfEmpty && content.trim() === '') {
       st.messages = st.messages.filter((_, i) => i !== idx);
     } else {
       const next = [...st.messages];
-      next[idx] = { ...target, content, streaming: false };
+      const updated: ChatMessage = { ...target, content, streaming: false };
+      // Day-24: источники (использованные чанки KB) вешаются только на финальный ответ
+      // (agent_finished); промежуточные пузыри tool-цикла их не несут.
+      if (sources !== undefined) updated.sources = sources;
+      next[idx] = updated;
       st.messages = next;
     }
     if (sid === activeIdRef.current) setMessages(st.messages);
@@ -1340,7 +1379,9 @@ export function useAgentSession(): AgentSession {
             });
           } else if (e.type === 'agent_finished') {
             finalizeRun(sid);
-            finalizeAssistant(sid, e.payload.finalText);
+            // Day-24: payload.sources (может отсутствовать) вешаем на финализированное
+            // сообщение — по нему ChatPanel рендерит блок «Источники:».
+            finalizeAssistant(sid, e.payload.finalText, false, parseKbSources(e.payload.sources));
             // Day-19: прикрепляем созданный пайплайном файл к финальному ответу (кнопка «Скачать»).
             attachFilesToLastAssistant(sid);
           } else if (e.type === 'tool_call_finished') {

@@ -12,6 +12,11 @@ import org.slf4j.LoggerFactory
 /**
  * Один найденный RAG-поиском чанк — диагностическая запись для лог-трейса агента
  * (панель «Логи»): база, источник, секция, косинусная близость запроса и размер текста.
+ *
+ * Day-24: + [chunkId] (id строки kb_chunks — ссылка источника в agent_finished),
+ * [label] (позиция чанка в итоговой воронке, 1..topK; первые usedChunks — те, что
+ * вошли в блок) и [content] (контент уже ходил в лог — перенесён в hit, из него
+ * строится KB-блок и источники ответа).
  */
 data class KbChunkHit(
     val kbName: String,
@@ -19,6 +24,9 @@ data class KbChunkHit(
     val section: String,
     val score: Double,
     val contentChars: Int,
+    val chunkId: Long,
+    val label: Int,
+    val content: String,
 )
 
 /**
@@ -195,20 +203,28 @@ class KbRagService(
             }
             val top = passed.take(settings.topK)
 
-            val hits = top.map { (chunk, score) ->
+            // Day-24: label = позиция в итоговой воронке (1..topK); метка [n] в блоке
+            // совпадает с label, пока чанк влезает (первые usedChunks — именно блок).
+            val hits = top.mapIndexed { index, (chunk, score) ->
                 KbChunkHit(
                     kbName = chunk.kbName,
                     source = fileNameOf(chunk.source),
                     section = chunk.section,
                     score = score,
                     contentChars = chunk.content.length,
+                    chunkId = chunk.chunkId,
+                    label = index + 1,
+                    content = chunk.content,
                 )
             }
-            val sb = StringBuilder(HEADER)
-            var total = HEADER.length
+            // Заголовок + правило цитирования (Day-24): модель обязана отвечать ТОЛЬКО
+            // по фрагментам, ссылаясь на [n], и говорить «Не знаю», если ответа нет.
+            val header = HEADER + "\n" + CITATION_RULE
+            val sb = StringBuilder(header)
+            var total = header.length
             var used = 0
-            for ((chunk, score) in top) {
-                val entry = "[КБ ${chunk.kbName} | ${fileNameOf(chunk.source)}#${chunk.section}]\n${chunk.content}"
+            for (hit in hits) {
+                val entry = "[${hit.label}] Файл: ${hit.source} — Раздел: ${hit.section}\n${hit.content}"
                 if (total + entry.length > MAX_BLOCK_CHARS) break
                 sb.append("\n\n").append(entry)
                 total += entry.length + 2
@@ -217,6 +233,7 @@ class KbRagService(
             // Итог поиска логируем ПОСЛЕ воронки и подсчёта used: метаданные отобранных
             // чанков + текст целиком, без векторов (KbChunkHit-поля + content) + воронка
             // (scored → candidates → passedFilter → usedChunks) и параметры rewrite.
+            // Day-24: у каждого чанка + label (позиция в воронке/блоке) и chunkId.
             onLlmLog?.invoke(
                 LlmCallLog.KIND_SEARCH_RESULT,
                 LlmCallLog.cap(
@@ -234,14 +251,16 @@ class KbRagService(
                             "passedFilter" to passed.size,
                             "rewrittenQuery" to rewrittenQuery,
                             "rewriteUsed" to rewriteUsed,
-                            "chunks" to top.map { (chunk, score) ->
+                            "chunks" to hits.map { hit ->
                                 mapOf(
-                                    "kbName" to chunk.kbName,
-                                    "source" to fileNameOf(chunk.source),
-                                    "section" to chunk.section,
-                                    "score" to round4(score),
-                                    "contentChars" to chunk.content.length,
-                                    "content" to chunk.content,
+                                    "kbName" to hit.kbName,
+                                    "source" to hit.source,
+                                    "section" to hit.section,
+                                    "score" to round4(hit.score),
+                                    "contentChars" to hit.contentChars,
+                                    "content" to hit.content,
+                                    "label" to hit.label,
+                                    "chunkId" to hit.chunkId,
                                 )
                             },
                         ),
@@ -291,6 +310,41 @@ class KbRagService(
     companion object {
         const val HEADER = "### База знаний"
         const val MAX_BLOCK_CHARS = 6000
+
+        /**
+         * Правило цитирования (Day-24): вшивается в заголовок KB-блока. Метка [n] фрагмента
+         * совпадает с [KbChunkHit.label] и с label источника в payload agent_finished.
+         */
+        const val CITATION_RULE =
+            "Отвечай ТОЛЬКО на основе фрагментов ниже. В конце ответа приведи список использованных " +
+            "источников в формате [n] Файл — Раздел. Ключевые утверждения подкрепляй цитатой из фрагмента [n]. " +
+            "Если ответа во фрагментах нет — скажи «Не знаю» и попроси уточнить вопрос."
+
+        /** Фиксированный отказ «не знаю» (Day-24) при релевантности ниже порога. */
+        const val REFUSAL_TEXT =
+            "Не знаю. В базе знаний нет релевантных материалов по вашему вопросу — " +
+            "уточните или переформулируйте."
+
+        /**
+         * Детерминированное решение об отказе «не знаю» (Day-24). Чистая функция —
+         * отдельный юнит-тест. true — агент должен пропустить LLM-цикл и вернуть
+         * [REFUSAL_TEXT]:
+         * - есть результат поиска (активные проиндексированные базы; null — баз нет,
+         *   ретривала не было — отказ неуместен, поведение агента без KB не меняется);
+         * - поиск завершился БЕЗ сбоя ([KbRagResult.error] == null): при fail-open сбое
+         *   ретривала отказ «не знаю» не выдаём (агент отвечает как раньше);
+         * - включена настройка [KbRagSettings.refusalEnabled];
+         * - нет ни одного чанка в блоке (usedChunks == 0: базы пуста / всё отсечено
+         *   фильтром / ни один чанк не влез) ИЛИ лучший score отобранных чанков ниже
+         *   [KbRagSettings.minScore] (реально только при выключенном фильтре — при
+         *   включённом все чанки в блоке гарантированно >= minScore).
+         */
+        fun shouldRefuse(result: KbRagResult?, settings: KbRagSettings): Boolean {
+            if (result == null || result.error != null || !settings.refusalEnabled) return false
+            if (result.usedChunks == 0) return true
+            val maxScore = result.chunks.maxOfOrNull { it.score } ?: return true
+            return maxScore < settings.minScore
+        }
 
         /** Score в лог «Ответ поискового движка» округляем до 4 знаков. */
         private fun round4(score: Double): Double = (score * 10_000).roundToLong() / 10_000.0

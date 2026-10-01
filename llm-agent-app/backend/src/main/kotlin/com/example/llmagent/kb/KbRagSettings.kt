@@ -20,4 +20,10 @@ data class KbRagSettings(
     val topK: Int = 4,
     /** Перезапись запроса LLM перед ретривалом (query rewrite). */
     val rewriteEnabled: Boolean = false,
+    /**
+     * Отказ «не знаю» (Day-24): если активная проиндексированная база есть, но релевантность
+     * ниже порога (usedChunks=0 или лучший score < [minScore]), агент пропускает LLM-цикл и
+     * отвечает фиксированным отказом. По умолчанию вкл — требование задания дня 24.
+     */
+    val refusalEnabled: Boolean = true,
 )

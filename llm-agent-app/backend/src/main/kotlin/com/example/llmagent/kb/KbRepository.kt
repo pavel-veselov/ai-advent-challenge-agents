@@ -282,6 +282,7 @@ class KbRepository(private val jdbc: JdbcTemplate) {
                 { rs, _ ->
                     KbChunkRow(
                         kbId = rs.getLong("kb_id"),
+                        chunkId = rs.getLong("chunk_id"),
                         kbName = rs.getString("kb_name"),
                         source = rs.getString("source"),
                         title = rs.getString("title"),
@@ -347,7 +348,7 @@ class KbRepository(private val jdbc: JdbcTemplate) {
          * `?`) — сам ответ (~сотни чанков с векторами) в лог НЕ пишется.
          */
         internal const val CHUNKS_SQL = """
-            SELECT c.kb_id, b.name AS kb_name, c.source, c.title, c.section, c.strategy,
+            SELECT c.id AS chunk_id, c.kb_id, b.name AS kb_name, c.source, c.title, c.section, c.strategy,
                    c.content, c.embedding, c.model
             FROM kb_chunks c JOIN knowledge_bases b ON b.id = c.kb_id
             WHERE c.kb_id IN ({placeholders}) AND c.embedding IS NOT NULL

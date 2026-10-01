@@ -664,6 +664,30 @@ button:disabled {
   word-break: break-word;
 }
 
+/* Источники ответа (Day-24 RAG-цитаты): компактный список использованных фрагментов
+   под markdown ассистента. Тон — приглушённая гравировка в духе .chat-msg-tokens. */
+.chat-msg-sources {
+  margin-top: 7px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 28%, transparent);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.chat-msg-sources-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--accent) 26%, var(--text-dim));
+}
+
+.chat-msg-sources-item {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
 /* Время сообщения «HH:mm» у пузыря (user — справа, assistant — слева): мелкий серый
    mono-текст в духе таймстемпов мессенджеров. */
 .chat-msg-time {

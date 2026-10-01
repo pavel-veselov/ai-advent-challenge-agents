@@ -77,10 +77,45 @@ data class ToolCallFinished(val toolName: String, val idx: Int, val status: Stri
     override val payload = mapOf("result" to result, "status" to status)
 }
 
-data class AgentFinished(val finalText: String) : AgentEvent {
+/**
+ * Источники ответа (Day-24, цитаты и анти-галлюцинации): чанк базы знаний, реально
+ * использованный при сборке ответа, в порядке KB-блока (label = позиция в блоке).
+ * Поле опциональное: нет активных баз / блок не собран / отказ «не знаю» — sources нет.
+ */
+data class KbSourceRef(
+    val chunkId: Long,
+    val label: Int,
+    val kbName: String,
+    val source: String,
+    val section: String,
+    val score: Double,
+)
+
+data class AgentFinished(
+    val finalText: String,
+    /** Источники из KB (Day-24); null/пустой список — поле `sources` в payload отсутствует. */
+    val sources: List<KbSourceRef>? = null,
+) : AgentEvent {
     override val type = "agent_finished"
     override val stepId = "answer"
-    override val payload = mapOf("finalText" to finalText)
+    override val payload: Map<String, Any?> = buildMap {
+        put("finalText", finalText)
+        if (!sources.isNullOrEmpty()) {
+            put(
+                "sources",
+                sources.map { src ->
+                    mapOf(
+                        "chunkId" to src.chunkId,
+                        "label" to src.label,
+                        "kbName" to src.kbName,
+                        "source" to src.source,
+                        "section" to src.section,
+                        "score" to src.score,
+                    )
+                },
+            )
+        }
+    }
 }
 
 /**
