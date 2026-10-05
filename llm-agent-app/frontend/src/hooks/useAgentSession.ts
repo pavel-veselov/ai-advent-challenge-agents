@@ -15,6 +15,7 @@ import {
   fetchLlmSettings,
   fetchProjectSessions,
   fetchProjects,
+  fetchTaskMemory,
   fetchTaskState,
   fetchWorkflowSettings,
   renameProject as renameProjectApi,
@@ -42,6 +43,7 @@ import type {
   SessionContextStrategyPatch,
   StatsResponse,
   StepLogEntry,
+  TaskMemory,
   TaskState,
   TaskStatePatch,
   TokenTotals,
@@ -125,6 +127,8 @@ interface SessionRunState {
   branches: BranchesState | null;
   /** Состояние задачи сессии (GET/PUT /task-state, событие task_state_changed); null — задача не начата. */
   taskState: TaskState | null;
+  /** Память задачи сессии (Day-25: GET /task-memory, событие task_memory_updated); null — ещё не загружена. */
+  taskMemory: TaskMemory | null;
   /** Файлы, созданные MCP-пайплайном в последнем запуске (Day-19) — для кнопки скачивания. */
   files: { filename: string }[];
 }
@@ -355,6 +359,8 @@ export interface AgentSession {
   branches: BranchesState | null;
   /** Состояние задачи активной сессии (FSM task_state); null — задача не начата. */
   taskState: TaskState | null;
+  /** Память задачи активной сессии (Day-25: GET /task-memory + SSE task_memory_updated); null — не загружена. */
+  taskMemory: TaskMemory | null;
   /**
    * Сохранение сообщения в рабочую память ПРОЕКТА: POST /projects/{id}/memory/notes {note}.
    * Заметка общая для всех сессий проекта. Ошибка пробрасывается — индикацию у кнопки чата.
@@ -472,6 +478,8 @@ export function useAgentSession(): AgentSession {
   const [branches, setBranches] = useState<BranchesState | null>(null);
   /** Состояние задачи активной сессии (зеркало буфера сессии); null — задача не начата. */
   const [taskState, setTaskState] = useState<TaskState | null>(null);
+  /** Память задачи активной сессии (Day-25, зеркало буфера сессии); null — ещё не загружена. */
+  const [taskMemory, setTaskMemory] = useState<TaskMemory | null>(null);
   /** Настройки воркфлоу Day-14 (GET/PUT /api/workflow-settings, глобальные); null — не загружены. */
   const [workflowSettings, setWorkflowSettings] = useState<WorkflowSettings | null>(null);
   /** Каталог проектов (GET /api/projects); пустой массив — ещё не загружен или проектов нет. */
@@ -523,6 +531,7 @@ export function useAgentSession(): AgentSession {
         facts: null,
         branches: null,
         taskState: null,
+        taskMemory: null,
         files: [],
       };
       runStateRef.current.set(sid, st);
@@ -569,6 +578,18 @@ export function useAgentSession(): AgentSession {
   };
 
   /**
+   * Обновляет память задачи сессии sid (Day-25: событие task_memory_updated / GET /task-memory).
+   * Та же дисциплина роутинга, что и у updateSessionTaskState: активная сессия — сразу
+   * в живой вид панели, фоновая — в буфер до переключения вкладки.
+   */
+  const updateSessionTaskMemory = (sid: string, next: TaskMemory) => {
+    const st = runStateRef.current.get(sid);
+    if (!st) return;
+    st.taskMemory = next;
+    if (sid === activeIdRef.current) setTaskMemory(next);
+  };
+
+  /**
    * Накладывает ответ истории бэкенда на буфер сессии sid: сообщения, накопительные итоги
    * токенов, текущий размер контекста (prompt_tokens последнего ответа ассистента). Активная
    * сессия — сразу в живой вид; фоновая — в буфер. Общая функция для открытия сессии,
@@ -576,7 +597,24 @@ export function useAgentSession(): AgentSession {
    */
   const applyHistoryToRunState = useCallback((sid: string, h: HistoryResponse) => {
     const st = getRunState(sid);
+    // Day-25 fix: перечитывание истории (finalizeRun вызывает его сразу после agent_finished)
+    // затирало frontend-only поле sources — блок «Источники:» (Day-24) вспыхивал на долю
+    // секунды и пропадал, когда ответ сервера заменял живые сообщения. Источники сервером не
+    // хранятся, поэтому переносим их со старых живых сообщений на совпадающие по контенту
+    // (совпадение защищает от переноса в чужую ветку при переключении веток).
+    const prevSourcesByContent = new Map<string, KbSource[]>();
+    for (const m of st.messages) {
+      if (m.role === 'assistant' && m.sources && m.sources.length > 0) {
+        prevSourcesByContent.set(m.content, m.sources);
+      }
+    }
     st.messages = historyToMessages(h.messages);
+    for (const m of st.messages) {
+      if (m.role === 'assistant' && !m.sources) {
+        const carried = prevSourcesByContent.get(m.content);
+        if (carried) m.sources = carried;
+      }
+    }
     // Day-19: после перечитывания истории прикрепляем к ответу файл, созданный в этом запуске.
     attachFilesToLastAssistant(sid);
     st.tokenTotals = h.totals
@@ -679,6 +717,14 @@ export function useAgentSession(): AgentSession {
       })
       .catch(() => {
         /* состояния задачи ещё нет (404) — остаётся null */
+      });
+    fetchTaskMemory(sid)
+      .then((tm) => {
+        if (isStale()) return;
+        updateSessionTaskMemory(sid, tm);
+      })
+      .catch(() => {
+        /* память задачи недоступна/ещё пуста — остаётся null */
       });
   };
 
@@ -949,6 +995,7 @@ export function useAgentSession(): AgentSession {
     setFacts(null);
     setBranches(null);
     setTaskState(null);
+    setTaskMemory(null);
   };
 
   /**
@@ -1196,6 +1243,24 @@ export function useAgentSession(): AgentSession {
           implementation: e.payload.implementation ?? null,
           validation: e.payload.validation ?? null,
           awaitConfirmation: e.payload.awaitConfirmation ?? false,
+          updatedAt: e.timestamp,
+        });
+        return;
+      }
+      case 'task_memory_updated': {
+        // Живое обновление памяти задачи (Day-25): бэкенд присылает структуру ЦЕЛИКОМ
+        // (полная замена после извлечения из завершённого ответа), поля — прямые в
+        // payload (не payload.detail). Разбор защитный (идиома parseKbSources): битые
+        // поля откатываются к пустому состоянию, панель никогда не падает.
+        const p = e.payload as { goal?: unknown; clarifications?: unknown; constraints?: unknown };
+        updateSessionTaskMemory(sid, {
+          goal: typeof p.goal === 'string' ? p.goal : '',
+          clarifications: Array.isArray(p.clarifications)
+            ? p.clarifications.filter((x): x is string => typeof x === 'string')
+            : [],
+          constraints: Array.isArray(p.constraints)
+            ? p.constraints.filter((x): x is string => typeof x === 'string')
+            : [],
           updatedAt: e.timestamp,
         });
         return;
@@ -2155,6 +2220,7 @@ export function useAgentSession(): AgentSession {
     setFacts(st.facts);
     setBranches(st.branches);
     setTaskState(st.taskState);
+    setTaskMemory(st.taskMemory);
   }, [sessionId]);
 
   // Зеркало активной вкладки для колбэков фоновых стримов (маршрутизация событий).
@@ -2228,6 +2294,7 @@ export function useAgentSession(): AgentSession {
     facts,
     branches,
     taskState,
+    taskMemory,
     saveWorkingNote,
     saveLongTerm,
     sendMessage,

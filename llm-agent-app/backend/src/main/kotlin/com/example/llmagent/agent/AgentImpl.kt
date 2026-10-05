@@ -86,6 +86,12 @@ class AgentImpl(
      *  не подключены (юнит-тесты/старая обвязка): перезапись запроса не выполняется
      *  (fail-open), поиск идёт по исходному сообщению пользователя. */
     private val kbRagSettingsService: KbRagSettingsService? = null,
+    /** Память задачи (Day-25, task_memory): структурированное состояние диалога
+     *  {goal, clarifications, constraints} — авто-извлечение LLM после каждого
+     *  завершённого обмена, инъекция блоком «=== ПАМЯТЬ ЗАДАЧИ ===». null — функция
+     *  отключена (юнит-тесты/старая обвязка): блок и извлечение молча пропускаются
+     *  (fail-open). НЕ путать с task_state (FSM воркфлоу Day-13) — код независим. */
+    private val taskMemoryService: TaskMemoryService? = null,
 ) : Agent {
 
     private val log = LoggerFactory.getLogger(AgentImpl::class.java)
@@ -331,6 +337,19 @@ class AgentImpl(
                 messages += LlmMessage("system", ltmBlock)
             }
 
+            // Память задачи (Day-25, task_memory): структурированное состояние диалога —
+            // цель, уточнения пользователя, ограничения/термины. Извлекается LLM
+            // автоматически после каждого завершённого обмена (см. финальный путь ниже)
+            // и подаётся модели системным блоком «=== ПАМЯТЬ ЗАДАЧИ ===» только когда
+            // состояние непустое — per-session, для ВСЕХ стратегий контекста. Нет
+            // service / пустое состояние / сбой чтения — блок молча пропускается
+            // (fail-open), run не ломается. НЕ путать с task_state (Day-13, FSM
+            // воркфлоу) — таблица и код независимы.
+            val taskMemory = taskMemoryService?.load(sessionId)
+            if (taskMemory != null && !taskMemory.isEmpty()) {
+                messages += LlmMessage("system", buildTaskMemorySystem(taskMemory))
+            }
+
             // Инварианты проекта (Day-14): обязательные ограничения (архитектура, технические
             // решения, стек, бизнес-правила), которые ассистент НЕ имеет права нарушать.
             // Хранятся ОТДЕЛЬНО от диалога, скоупятся ПО ПРОЕКТУ (wmKey) — общая для всех
@@ -407,22 +426,28 @@ class AgentImpl(
             log.warn("session={} memory context blocks failed, run continues without them: {}", sessionId, e.message)
         }
 
-        // День-24: детерминированный отказ «не знаю» ДО цикла tool-calling. Активные
-        // проиндексированные базы есть (kbRagResult != null), поиск завершился без сбоя,
-        // но релевантность ниже порога (usedChunks==0 или лучший score < minScore) →
-        // LLM-цикл не запускается вовсе: фиксированный отказ, без риска галлюцинаций.
+        // День-24 (обновлено): пустой поиск по базам знаний — НЕ отказ без LLM, а честная
+        // системная заметка. Активные проиндексированные базы есть (kbRagResult != null),
+        // поиск завершился без сбоя, но релевантность ниже порога (usedChunks==0 или лучший
+        // score < minScore) → в контекст добавляется system-заметка [EMPTY_SEARCH_NOTE], и
+        // LLM-цикл запускается как обычно: модель сама сообщает пользователю, что в базе
+        // знаний материалов нет, и даёт полезный ответ (в т.ч. из общих знаний — не выдавая
+        // их за материалы базы, без выдуманных источников и меток [n]).
         // Лог «Ответ поискового движка» (KIND_SEARCH_RESULT) ещё в очереди llmLogQueue —
-        // вычитываем ОДИН раз, чтобы запись ушла в панель, и НЕ дублируем её.
+        // уйдёт в панель «Логи» штатным drainLlmLogs() перед llm_request_started ровно
+        // ОДИН раз: отдельный drain здесь создал бы дубль записи.
         // Компромисс (задокументирован в плане дня 24): при активной KB разговорное
-        // сообщение ниже порога тоже получит отказ — это требование задания; отключается
-        // настройкой kb.refusalEnabled (дефолт true). Сбоя в сборке памяти выше нет —
-        // если был, kbRagResult = null и отказ не сработает (fail-open, как раньше).
+        // сообщение ниже порога тоже получит заметку — это требование задания; отключается
+        // настройкой kb.refusalEnabled (дефолт true). Fail-open: сбой в сборке памяти выше
+        // или сбой ретривала → kbRagResult = null / error != null — заметки нет, поведение
+        // как раньше; refusalEnabled=false — заметки тоже нет (модель отвечает вслепую).
         val kbRagSettings = kbRagSettingsService?.load()
-        if (kbRagSettings != null && KbRagService.shouldRefuse(kbRagResult, kbRagSettings)) {
-            drainLlmLogs()
-            log.info("session={} релевантность KB ниже порога — отказ «{}»", sessionId, KbRagService.REFUSAL_TEXT)
-            send(AgentFinished(KbRagService.REFUSAL_TEXT))
-            return@flux
+        if (kbRagSettings != null && KbRagService.isEmptySearch(kbRagResult, kbRagSettings)) {
+            messages += LlmMessage("system", KbRagService.EMPTY_SEARCH_NOTE)
+            log.info(
+                "session={} поиск по KB не дал результатов (релевантность ниже порога) — LLM информируется системной заметкой о пустом поиске",
+                sessionId,
+            )
         }
         // Источники финального ответа (Day-24): usedChunks в порядке KB-блока
         // (label = позиция в блоке); нет баз / блок не собран — null (поле в payload
@@ -723,6 +748,44 @@ class AgentImpl(
                     sessionStore.append(sessionId, "assistant", finalText, usage?.inputTokens, usage?.outputTokens)
                     // Кумулятивная статистика «за всё время» — переживает удаление сессии.
                     sessionStore.addLifetimeTokens(usage?.inputTokens ?: 0, usage?.outputTokens ?: 0, costUsd ?: 0.0)
+                    // Память задачи (Day-25, task_memory): извлечение структурированного
+                    // состояния (goal/clarifications/constraints) LLM-вызовом после
+                    // завершённого обмена и ДО agent_finished — событие task_memory_updated
+                    // уходит раньше финализации ответа (см. CONTRACT.md). Извлечение
+                    // запускается на каждом нормально завершённом обмене — включая путь
+                    // пустого поиска KB (LLM сам ответил, обмен завершён штатно); не
+                    // запускают его только паузы и error/length. Для продолжения воркфлоу
+                    // (appendUser=false) берём последнее РЕАЛЬНОЕ user-сообщение из истории
+                    // (тот же приём, что ragQuery выше). Fail-open: любой сбой (LLM
+                    // API/таймаут/не-JSON/БД) — warn, состояние остаётся прежним, событие
+                    // не эмитится, run не ломается.
+                    val memoryService = taskMemoryService
+                    if (memoryService != null) {
+                        try {
+                            val previous = memoryService.load(sessionId)
+                            val extractionUser = if (appendUser) userMessage
+                            else sessionStore.getStored(sessionId)
+                                .lastOrNull { it.role == "user" }?.content ?: userMessage
+                            val updated = memoryService.updateFromExchange(
+                                sessionId, previous, extractionUser, finalText, llm, runSettings,
+                            )
+                            if (updated != null) {
+                                send(TaskMemoryUpdated(updated.goal, updated.clarifications, updated.constraints))
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            log.warn(
+                                "session={} task memory extraction failed, keeping previous state: {}",
+                                sessionId, e.message,
+                            )
+                        } finally {
+                            // Записи вызова извлечения («Запрос в llm»/«Ответ от llm») —
+                            // в панель «Логи»: последний drainLlmLogs() на этом пути уже
+                            // прошёл, без вычитывания записи потерялись бы в очереди.
+                            drainLlmLogs()
+                        }
+                    }
                     // День-24: sources — использованные чанки KB (null — поле отсутствует).
                     send(AgentFinished(finalText, kbSources))
 
@@ -823,6 +886,27 @@ class AgentImpl(
             cur = cur.cause
         }
         return null
+    }
+
+    /**
+     * Системный блок памяти задачи («=== ПАМЯТЬ ЗАДАЧИ ===», Day-25 task_memory):
+     * цель + непустые секции «Уточнено пользователем» и «Ограничения и термины»
+     * (нумерованные списки, как заметки WM). Блок подаётся как system-сообщение
+     * между LTM и инвариантами — для ВСЕХ стратегий контекста. Вызывается только
+     * для непустого состояния (см. блок памяти в runCore).
+     */
+    private fun buildTaskMemorySystem(memory: TaskMemory): String {
+        val sections = mutableListOf<String>()
+        if (memory.goal.isNotBlank()) sections += "Цель: ${memory.goal}"
+        if (memory.clarifications.isNotEmpty()) {
+            sections += "Уточнено пользователем:\n" +
+                memory.clarifications.mapIndexed { index, item -> "${index + 1}. $item" }.joinToString("\n")
+        }
+        if (memory.constraints.isNotEmpty()) {
+            sections += "Ограничения и термины:\n" +
+                memory.constraints.mapIndexed { index, item -> "${index + 1}. $item" }.joinToString("\n")
+        }
+        return "=== ПАМЯТЬ ЗАДАЧИ ===\n" + sections.joinToString("\n\n")
     }
 
     /**

@@ -223,6 +223,24 @@ CREATE TABLE IF NOT EXISTS task_state (
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Память задачи сессии (Day-25, см. JdbcTaskMemoryStore, GET /api/sessions/{sessionId}/task-memory,
+-- SSE task_memory_updated): структурированное состояние диалога — цель (goal), уточнения
+-- пользователя (clarifications) и ограничения/термины (constraints) — JSON-массивы строк.
+-- Пишется ТОЛЬКО автоматически: LLM-извлечение после каждого завершённого обмена
+-- (TaskMemoryService.updateFromExchange, полная замена состояния); инъекция в промпт —
+-- блоком «=== ПАМЯТЬ ЗАДАЧИ ===» (AgentImpl). Одна строка на сессию; строки нет →
+-- состояние пустое (GET отдаёт пустую структуру с 200, НЕ 404). Пользователь состояние
+-- через REST не правит. НЕ путать с task_state (FSM воркфлоу Day-13) — таблицы и код
+-- независимы. FK на chat_sessions намеренно нет (как у agent_working_memory): сессии
+-- без строки в реестре (легаси/тесты) должны писаться без ограничений.
+CREATE TABLE IF NOT EXISTS task_memory (
+    session_id     TEXT PRIMARY KEY,
+    goal           TEXT NOT NULL DEFAULT '',
+    clarifications TEXT NOT NULL DEFAULT '[]',
+    constraints    TEXT NOT NULL DEFAULT '[]',
+    updated_at     TEXT
+);
+
 -- Day 16: MCP-серверы (агент-клиент)
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

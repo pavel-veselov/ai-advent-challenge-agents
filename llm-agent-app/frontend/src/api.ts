@@ -41,6 +41,7 @@
   SessionSummary,
   SessionsResponse,
   StatsResponse,
+  TaskMemory,
   TaskState,
   TaskStatePatch,
   WorkflowSettings,
@@ -189,6 +190,17 @@ export async function fetchTaskState(sessionId: string): Promise<TaskState | nul
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`task-state http ${res.status}`);
   return (await res.json()) as TaskState;
+}
+
+/**
+ * Память задачи сессии (Day-25): GET /api/sessions/{sessionId}/task-memory.
+ * Для сессии без состояния бэкенд отдаёт пустое состояние (goal='', массивы пусты,
+ * updatedAt=null) со статусом 200 — не 404; остальные ошибки бросает.
+ */
+export async function fetchTaskMemory(sessionId: string): Promise<TaskMemory> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-memory`);
+  if (!res.ok) throw new Error(`task-memory http ${res.status}`);
+  return (await res.json()) as TaskMemory;
 }
 
 /**

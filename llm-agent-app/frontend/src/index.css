@@ -3480,3 +3480,63 @@ button:disabled {
   font-size: 10px;
   color: var(--red-bright);
 }
+
+/* ---------- Панель «Память задачи» (Day-25): цель / уточнения / ограничения ---------- */
+
+/* Тело панели: колонка секций (идиома .mem-body), полная замена при каждом обновлении */
+.tmem-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Цель диалога — герой-блок: акцентная плашка (идиома .mem-wm-task) */
+.tmem-goal {
+  padding: 6px 9px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* Нумерованные пункты уточнений/ограничений (идиома .mem-wm-notes/.mem-wm-note) */
+.tmem-list {
+  margin: 0;
+  padding: 0 0 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+}
+
+.tmem-item {
+  position: relative;
+  padding: 5px 8px;
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 3px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* Пустой раздел внутри заполненной панели: тихая моно-прочерк вместо содержимого */
+.tmem-none {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text-dim) 70%, transparent);
+}
+
+/* Время последнего обновления: моно-метаданные (идиома .kb-meta) */
+.tmem-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
+}

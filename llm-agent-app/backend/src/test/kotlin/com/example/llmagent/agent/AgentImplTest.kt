@@ -20,6 +20,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -56,11 +57,16 @@ private class FakeEmbedder : KbEmbedder {
     val calls = mutableListOf<String>()
     val vectors = mutableMapOf<String, FloatArray>()
 
-    override fun embedAll(texts: List<String>, model: String): List<FloatArray> =
-        texts.map { text ->
+    /** Не-null → embedAll бросает исключение (симуляция сбоя ретривала, fail-open). */
+    var throwOnCall: RuntimeException? = null
+
+    override fun embedAll(texts: List<String>, model: String): List<FloatArray> {
+        throwOnCall?.let { throw it }
+        return texts.map { text ->
             calls.add(text)
             vectors[text] ?: floatArrayOf(0f, 0f, 0f, 1f)
         }
+    }
 
     override fun embedAll(
         texts: List<String>,
@@ -88,6 +94,8 @@ private class InMemoryStore : AppSettingsStore {
  * Юнит-тесты query rewrite в агенте (Day-23): перезапись вопроса LLM перед RAG-поиском,
  * санитизация ответа, фолбэк на исходный запрос при любом сбое, гейты
  * (rewrite выключен / нет активных баз — ни одного лишнего LLM-вызова).
+ * Плюс «пустой поиск» (Day-24, обновлено): при релевантности ниже порога LLM получает
+ * system-заметку [KbRagService.EMPTY_SEARCH_NOTE] и отвечает сам — без отказа без LLM.
  */
 class AgentImplTest {
 
@@ -298,5 +306,95 @@ class AgentImplTest {
         assertEquals(truncated, search!!.get("rewrittenQuery").asText())
         assertTrue(search.get("rewriteUsed").asBoolean())
         assertTrue(events.any { it is AgentFinished })
+    }
+
+    // --- Пустой поиск KB (Day-24, обновлено): заметка LLM вместо отказа без LLM ---
+
+    /** Активная база + порог, отсекающий ВСЕ чанки → usedChunks=0, блок не собран.
+     *  cosine(q=[1,0,0,0], vec(0.9)) ≈ 0.986, поэтому порог 0.99 выше любого чанка. */
+    private fun emptySearchSetup(): Triple<KbRepository, FakeEmbedder, RewriteLlm> {
+        val repo = newRepo("kb-empty")
+        val fake = FakeEmbedder()
+        seedKb(repo, fake)
+        fake.vectors["вопрос"] = floatArrayOf(1f, 0f, 0f, 0f)
+        return Triple(repo, fake, RewriteLlm(rewriteText = "переписанный запрос"))
+    }
+
+    @Test
+    fun `empty kb search informs llm via system note and llm answers`() {
+        val (repo, fake, llm) = emptySearchSetup()
+
+        val events = run(
+            rewriteAgent(llm, repo, fake, "kb.filterEnabled" to "true", "kb.minScore" to "0.99"),
+            "s1", "вопрос",
+        )
+
+        // LLM-цикл запускается как обычно — никакого отказа без LLM
+        assertEquals(1, llm.mainCalls.get(), "пустой поиск — LLM вызывается и отвечает сам")
+        // финальный текст — от LLM-мока, а не фиксированная константа отказа
+        val finished = events.filterIsInstance<AgentFinished>().single()
+        assertEquals("ответ агента", finished.finalText)
+        // заметка о пустом поиске есть среди system-сообщений промпта
+        val prompt = events.filterIsInstance<LlmRequestStarted>().single().prompt
+        assertTrue(
+            prompt.any { it["role"] == "system" && it["content"] == KbRagService.EMPTY_SEARCH_NOTE },
+            "system-заметка о пустом поиске должна попасть в контекст",
+        )
+        // KB-блока нет — релевантных чанков не осталось
+        assertFalse(prompt.any { it["content"]?.startsWith("### База знаний") == true })
+        // источников нет: usedChunks==0 → kbSources=null → поля sources в payload нет
+        assertNull(finished.sources)
+        assertFalse(finished.payload.containsKey("sources"), "пустой поиск — sources в payload нет")
+        // лог поискового движка дошёл до панели ровно один раз (использованных чанков 0)
+        val search = searchLog(events)
+        assertTrue(search != null, "лог «Ответ поискового движка» должен быть")
+        assertEquals(0, search!!.get("usedChunks").asInt())
+        assertEquals(
+            1,
+            events.filterIsInstance<LogEvent>().count { it.text == LlmCallLog.KIND_SEARCH_RESULT },
+            "лог поиска уходит в панель ровно один раз (без дублей)",
+        )
+        assertTrue(events.none { it is ErrorEvent })
+    }
+
+    @Test
+    fun `refusal disabled answers without empty search note`() {
+        val (repo, fake, llm) = emptySearchSetup()
+
+        val events = run(
+            rewriteAgent(
+                llm, repo, fake,
+                "kb.filterEnabled" to "true", "kb.minScore" to "0.99", "kb.refusalEnabled" to "false",
+            ),
+            "s1", "вопрос",
+        )
+
+        assertEquals(1, llm.mainCalls.get(), "refusalEnabled=false — модель отвечает вслепую, как в дне 22")
+        val prompt = events.filterIsInstance<LlmRequestStarted>().single().prompt
+        assertFalse(
+            prompt.any { it["role"] == "system" && it["content"] == KbRagService.EMPTY_SEARCH_NOTE },
+            "refusalEnabled=false — заметки о пустом поиске нет",
+        )
+        assertTrue(events.any { it is AgentFinished })
+    }
+
+    @Test
+    fun `retrieval failure keeps agent behavior without empty search note`() {
+        val repo = newRepo("kb-err")
+        val fake = FakeEmbedder()
+        seedKb(repo, fake)
+        fake.throwOnCall = RuntimeException("эмбеддер недоступен")
+        val llm = RewriteLlm()
+
+        val events = run(rewriteAgent(llm, repo, fake), "s1", "вопрос")
+
+        assertEquals(1, llm.mainCalls.get(), "fail-open: сбой ретривала не ломает run")
+        val prompt = events.filterIsInstance<LlmRequestStarted>().single().prompt
+        assertFalse(
+            prompt.any { it["role"] == "system" && it["content"] == KbRagService.EMPTY_SEARCH_NOTE },
+            "сбой ретривала — заметки о пустом поиске нет (fail-open, как раньше)",
+        )
+        assertTrue(events.any { it is AgentFinished })
+        assertTrue(events.none { it is ErrorEvent })
     }
 }

@@ -14,6 +14,7 @@ import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
 import com.example.llmagent.agent.SessionFactsStore
 import com.example.llmagent.agent.SessionStore
+import com.example.llmagent.agent.TaskMemoryService
 import com.example.llmagent.agent.TaskStateStore
 import com.example.llmagent.agent.ToolRegistry
 import com.example.llmagent.agent.WorkingMemoryStore
@@ -74,12 +75,13 @@ class AppConfig {
         invariantsStore: InvariantsStore,
         kbRagService: KbRagService,
         kbRagSettingsService: KbRagSettingsService,
+        taskMemoryService: TaskMemoryService,
         om: ObjectMapper,
     ): Agent = AgentImpl(
         llmClient, toolRegistry, sessionStore, agentProperties, settings,
         sessionLlmSettings, compressionStore, om, contextStore, factsStore, branchStore,
         workingMemoryStore, longTermMemoryStore, profileStore, appSettingsStore, taskStateStore,
-        workflowSettings, invariantsStore, kbRagService, kbRagSettingsService,
+        workflowSettings, invariantsStore, kbRagService, kbRagSettingsService, taskMemoryService,
     )
 
     /**

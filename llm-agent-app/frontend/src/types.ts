@@ -50,9 +50,10 @@ export type AgentEventType =
   | 'agent_finished'
   | 'context_summary_started'
   | 'context_summary_finished'
-  | 'facts_updated'
-  | 'task_state_changed'
-  | 'workflow_paused'
+   | 'facts_updated'
+   | 'task_state_changed'
+   | 'task_memory_updated'
+   | 'workflow_paused'
   | 'workflow_stage_finished'
   | 'memory_updated'
   | 'log'
@@ -136,6 +137,17 @@ export type AgentEvent =
       }
     >
   | BaseEvent<'memory_updated', { projectId: number; working: WorkingMemoryState; longTerm: LongTermEntry[] }>
+  | BaseEvent<
+      'task_memory_updated',
+      {
+        /** Цель диалога; '' — цель ещё не зафиксирована (полная замена после извлечения). */
+        goal: string;
+        /** Что пользователь уже уточнил (порядок сохраняется; ≤10 пунктов). */
+        clarifications: string[];
+        /** Зафиксированные ограничения и термины (≤10 пунктов). */
+        constraints: string[];
+      }
+    >
   | BaseEvent<'error', { message: string }>;
 
 // ---- API ----
@@ -708,6 +720,26 @@ export interface KbSource {
   section: string;
   /** Релевантность фрагмента к вопросу (0..1). */
   score: number;
+}
+
+// ---- Память задачи (Day-25): GET /api/sessions/{sessionId}/task-memory, событие task_memory_updated ----
+
+/**
+ * Память задачи сессии (Day-25): структурированное состояние диалога — цель, что пользователь
+ * уже уточнил, зафиксированные ограничения/термины. Бэкенд поддерживает его LLM-извлечением
+ * после каждого обмена (полная замена) и подставляет в промпт блока «ПАМЯТЬ ЗАДАЧИ», чтобы
+ * цель не терялась в длинных диалогах. Пустая сессия: goal='', массивы пусты, updatedAt=null
+ * (200, не 404). Событие task_memory_updated несёт те же поля, но без updatedAt.
+ */
+export interface TaskMemory {
+  /** Цель диалога; '' — цель ещё не зафиксирована. */
+  goal: string;
+  /** Что пользователь уже уточнил (накапливается; ≤10 пунктов, ≤300 символов/строка). */
+  clarifications: string[];
+  /** Зафиксированные ограничения и термины (≤10 пунктов, ≤300 символов/строка). */
+  constraints: string[];
+  /** ISO-время последнего обновления; null — память ещё не обновлялась. */
+  updatedAt: string | null;
 }
 
 // ---- Состояние UI ----

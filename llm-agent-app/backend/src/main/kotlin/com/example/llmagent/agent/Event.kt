@@ -293,6 +293,30 @@ data class WorkflowStageFinished(
 }
 
 /**
+ * Обновление памяти задачи (Day-25, task_memory): LLM-извлечение после завершённого
+ * обмена успешно отработало — структурированное состояние диалога {goal,
+ * clarifications, constraints} сохранено в per-session task_memory (см. JdbcTaskMemoryStore
+ * / TaskMemoryService). Эмитится ТОЛЬКО на нормальном финальном пути, ДО agent_finished
+ * (фронтенд обновляет панель «Память задачи» к моменту финализации ответа); на отказе
+ * «не знаю» (Day-24), паузе, error/length и при сбое извлечения НЕ эмитится — состояние
+ * остаётся прежним. stepId фиксирован ("task-memory"). НЕ путать с task_state_changed
+ * (Day-13, FSM воркфлоу) — событие и данные независимы.
+ */
+data class TaskMemoryUpdated(
+    val goal: String,
+    val clarifications: List<String>,
+    val constraints: List<String>,
+) : AgentEvent {
+    override val type = "task_memory_updated"
+    override val stepId = "task-memory"
+    override val payload = mapOf(
+        "goal" to goal,
+        "clarifications" to clarifications,
+        "constraints" to constraints,
+    )
+}
+
+/**
  * Результат периодической задачи планировщика (Day-17/18): агент выполнил scheduled-промпт
  * и финальный текст доставляется активной сессии по SSE. Эмитится в фоновый SSE-канал
  * сессии (SessionEventBus) после `AgentFinished`, а сам текст уже сохранён в историю чата —

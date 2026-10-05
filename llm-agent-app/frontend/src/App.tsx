@@ -9,6 +9,7 @@ import ProfileSelect from './components/ProfileSelect';
 import SchedulerPanel from './components/SchedulerPanel';
 import StepsLog from './components/StepsLog';
 import TabBar from './components/TabBar';
+import TaskMemoryPanel from './components/TaskMemoryPanel';
 import WorkflowSettings from './components/WorkflowSettings';
 import { fetchActiveProfile, fetchInvariants, fetchProfiles, fetchProjectMemory } from './api';
 import { useAgentSession } from './hooks/useAgentSession';
@@ -279,6 +280,8 @@ export default function App() {
       <KnowledgeBasePanel disabled={tabDisabled} />
       {/* Настройки RAG Day-23: фильтр релевантности / query rewrite / воронка candidateK→topK (глобально). */}
       <KbRagSettingsPanel disabled={tabDisabled} />
+      {/* Память задачи Day-25: цель/уточнения/ограничения активной сессии (REST при открытии + SSE). */}
+      <TaskMemoryPanel memory={session.taskMemory} />
     </div>
   );
 

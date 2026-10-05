@@ -52,7 +52,7 @@ class KbRagSettingsServiceTest {
 
     @Test
     fun `default refusalEnabled is true on empty store`() {
-        // День-24: отказ «не знаю» включён по умолчанию (требование задания)
+        // День-24: заметка LLM о пустом поиске включена по умолчанию (требование задания)
         assertTrue(KbRagSettingsService(InMemoryStore()).load().refusalEnabled)
     }
 
