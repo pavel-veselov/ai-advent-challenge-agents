@@ -213,6 +213,59 @@ class LlmSettingsControllerTest {
         assertEquals(false, getSettings()["reasoningEnabled"].asBoolean(), "отсутствие поля не меняет значение")
     }
 
+    @Test
+    fun `GET returns toolsEnabled`() {
+        val body = getSettings()
+        assertTrue(body.has("toolsEnabled"), "нет toolsEnabled: $body")
+        assertTrue(body["toolsEnabled"].isBoolean, "toolsEnabled должен быть boolean: $body")
+    }
+
+    @Test
+    fun `PUT toolsEnabled false roundtrip`() {
+        client.put().uri("/api/llm-settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"toolsEnabled":false}""")
+            .exchange()
+            .expectStatus().isOk
+        val settings = getSettings()
+        assertEquals(false, settings["toolsEnabled"].asBoolean())
+    }
+
+    @Test
+    fun `PUT toolsEnabled null resets to default true`() {
+        client.put().uri("/api/llm-settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"toolsEnabled":false}""")
+            .exchange()
+            .expectStatus().isOk
+        assertEquals(false, getSettings()["toolsEnabled"].asBoolean())
+
+        client.put().uri("/api/llm-settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"toolsEnabled":null}""")
+            .exchange()
+            .expectStatus().isOk
+        assertEquals(true, getSettings()["toolsEnabled"].asBoolean(), "null сбрасывает к дефолту true")
+    }
+
+    @Test
+    fun `PUT without toolsEnabled leaves it unchanged`() {
+        client.put().uri("/api/llm-settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"toolsEnabled":false,"temperature":0.4}""")
+            .exchange()
+            .expectStatus().isOk
+        assertEquals(false, getSettings()["toolsEnabled"].asBoolean())
+
+        client.put().uri("/api/llm-settings")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue("""{"temperature":0.8}""")
+            .exchange()
+            .expectStatus().isOk
+        assertEquals(0.8, getSettings()["temperature"].asDouble(), 1e-9)
+        assertEquals(false, getSettings()["toolsEnabled"].asBoolean(), "отсутствие поля не меняет значение")
+    }
+
     private fun getSettings(): JsonNode {
         val body = client.get().uri("/api/llm-settings")
             .exchange()

@@ -8,8 +8,11 @@ import org.springframework.stereotype.Component
  * 2) сохранённые строки `app_settings` — переопределяют defaults и переживают рестарт.
  *
  * Изменяются на лету через [update] (PUT /api/llm-settings) БЕЗ перезапуска backend.
- * - `provider` неизменяем (клиент привязан к нему на старте) — изменения игнорируются;
- * - `contextLimit` выводится из выбранной модели по каталогу ([LlmCatalog]), а не хранится.
+ * - `provider` — runtime-выбор («gpustack»/«ollama»): НЕ персистится, после рестарта
+ *   возвращается к стартовому значению env `LLM_PROVIDER`; при переключении глобальная
+ *   модель сбрасывается на первую модель нового провайдера;
+ * - `contextLimit` выводится из выбранной модели ([LlmCatalog] для gpustack, живое
+ *   обнаружение [OllamaDiscovery] для ollama), а не хранится.
  */
 @Component
 class DynamicLlmSettings(
@@ -17,7 +20,12 @@ class DynamicLlmSettings(
     private val store: AppSettingsStore,
     /** Состояние «включена/отключена» моделей каталога; null — проверки нет (все включены). */
     private val modelEnabled: ModelEnabledStore? = null,
+    /** Живой каталог моделей Ollama; null — выбор провайдера ollama недоступен. */
+    private val ollama: OllamaDiscovery? = null,
 ) : LlmSettings {
+
+    /** Текущий провайдер — runtime-выбор; стартовое значение из env, НЕ персистится. */
+    @Volatile private var currentProvider: String = llm.provider
 
     @Volatile private var model: String = llm.model
     @Volatile private var temperature: Double = llm.temperature
@@ -25,6 +33,7 @@ class DynamicLlmSettings(
     @Volatile private var topK: Int? = llm.topK
     @Volatile private var maxTokens: Int? = llm.maxTokens
     @Volatile private var reasoningEnabled: Boolean = llm.reasoningEnabled
+    @Volatile private var toolsEnabled: Boolean = llm.toolsEnabled
     @Volatile private var timeoutSeconds: Long = llm.timeoutSeconds
     @Volatile private var priceInputPer1M: Double = llm.priceInputPer1M
     @Volatile private var priceOutputPer1M: Double = llm.priceOutputPer1M
@@ -33,15 +42,17 @@ class DynamicLlmSettings(
         loadPersisted()
     }
 
-    override fun provider(): String = llm.provider
+    override fun provider(): String = currentProvider
     override fun model(): String = model
     override fun temperature(): Double = temperature
     override fun topP(): Double = topP
     override fun topK(): Int? = topK
     override fun maxTokens(): Int? = maxTokens
     override fun reasoningEnabled(): Boolean = reasoningEnabled
+    override fun toolsEnabled(): Boolean = toolsEnabled
     override fun timeoutSeconds(): Long = timeoutSeconds
-    override fun contextLimit(): Int = LlmCatalog.contextLimit(model) ?: llm.contextLimit
+    override fun contextLimit(): Int =
+        LlmCatalog.contextLimit(model) ?: ollamaContextLimit(model) ?: llm.contextLimit
     override fun priceInputPer1M(): Double = priceInputPer1M
     override fun priceOutputPer1M(): Double = priceOutputPer1M
 
@@ -54,6 +65,7 @@ class DynamicLlmSettings(
         "topK" to topK?.takeIf { it > 0 },
         "maxTokens" to maxTokens?.takeIf { it > 0 },
         "reasoningEnabled" to reasoningEnabled(),
+        "toolsEnabled" to toolsEnabled(),
         "timeoutSeconds" to timeoutSeconds(),
         "contextLimit" to contextLimit(),
         "priceInputPer1M" to priceInputPer1M(),
@@ -62,32 +74,49 @@ class DynamicLlmSettings(
 
     /**
      * Частичное обновление настроек (PUT /api/llm-settings). Валидация:
-     * - `provider` игнорируется (неизменяем);
-     * - `model` обязана быть в каталоге ([LlmCatalog]) И быть включённой ([ModelEnabledStore]);
+     * - `provider` — runtime-переключение («gpustack»/«ollama», НЕ персистится): то же
+     *   значение — no-op; недоступная Ollama → «Ollama недоступна»; неизвестное значение → 400.
+     *   При переключении глобальная модель сбрасывается на первую модель нового провайдера
+     *   (и персистится);
+     * - `model` обязана быть в каталоге ТЕКУЩЕГО провайдера (gpustack — [LlmCatalog] +
+     *   включённость [ModelEnabledStore]; ollama — живое обнаружение [OllamaDiscovery]);
      *   `contextLimit` пересчитывается автоматически; отключённая модель → «Модель отключена в каталоге»;
      * - `temperature` >= 0, `maxTokens` > 0 (null — вернуть к значению по умолчанию из конфигурации, 10000);
      * - `reasoningEnabled` — boolean true/false; null — вернуть к значению по умолчанию (true);
+     * - `toolsEnabled` — boolean true/false; null — вернуть к значению по умолчанию (true);
      * - ошибки бросаются как [LlmSettingsValidationException] → HTTP 400 в контроллере.
      *
      * Каждое изменённое поле сразу персистится в `app_settings`, поэтому изменения
      * переживают перезапуск backend.
      */
     fun update(patch: Map<String, Any?>) {
+        // provider обрабатывается ПЕРВЫМ: после переключения последующий `model` из того же
+        // патча валидируется уже по каталогу нового провайдера.
+        if (patch.containsKey(KEY_PROVIDER)) {
+            val v = patch[KEY_PROVIDER]
+            if (v != null) {
+                if (v !is String) throw LlmSettingsValidationException("provider: ожидалась строка, получено '$v'")
+                val p = v.trim()
+                if (p.isNotEmpty() && p != provider()) {
+                    if (!LlmProviders.isKnown(p)) {
+                        throw LlmSettingsValidationException(
+                            "Неизвестный провайдер: '$p'. Доступные: ${LlmProviders.ALL.joinToString(", ")}"
+                        )
+                    }
+                    if (p == LlmProviders.OLLAMA && (ollama == null || !ollama.available())) {
+                        throw LlmSettingsValidationException(LlmProviders.OLLAMA_UNAVAILABLE_MESSAGE)
+                    }
+                    switchProvider(p)
+                }
+            }
+        }
         if (patch.containsKey(KEY_MODEL)) {
             val v = patch[KEY_MODEL]
             if (v != null) {
                 if (v !is String) throw LlmSettingsValidationException("model: ожидалась строка, получено '$v'")
                 val id = v.trim()
                 if (id.isNotEmpty()) {
-                    if (!LlmCatalog.isKnown(id)) {
-                        throw LlmSettingsValidationException(
-                            "Неизвестная модель: '$id'. Доступные модели: " +
-                                LlmCatalog.MODELS.joinToString(", ") { it.id }
-                        )
-                    }
-                    if (!isEnabled(id)) {
-                        throw LlmSettingsValidationException("Модель отключена в каталоге: $id")
-                    }
+                    validateModelForProvider(id)
                     model = id
                     save(KEY_MODEL, id)
                 }
@@ -137,6 +166,17 @@ class DynamicLlmSettings(
                 save(KEY_REASONING, reasoningEnabled.toString())
             }
         }
+        if (patch.containsKey(KEY_TOOLS)) {
+            val v = patch[KEY_TOOLS]
+            if (v == null) {
+                // «сброс» — вернуть к настроенному значению по умолчанию (true)
+                toolsEnabled = llm.toolsEnabled
+                save(KEY_TOOLS, NULL_VALUE)
+            } else {
+                toolsEnabled = asBoolean(v, KEY_TOOLS)
+                save(KEY_TOOLS, toolsEnabled.toString())
+            }
+        }
         if (patch.containsKey(KEY_TIMEOUT)) {
             patch[KEY_TIMEOUT]?.let { v ->
                 val l = asLong(v, KEY_TIMEOUT)
@@ -168,7 +208,9 @@ class DynamicLlmSettings(
         store.all().forEach { (key, raw) ->
             when (key) {
                 // Модель, выпиленная из каталога или отключённая, больше не применима — остаёмся на default.
-                KEY_MODEL -> if (LlmCatalog.isKnown(raw) && isEnabled(raw)) model = raw
+                // Провайдер при старте НЕ восстанавливается (runtime-выбор); сохранённая модель
+                // применяется только если она валидна для СТАРТОВОГО провайдера (env).
+                KEY_MODEL -> if (isModelValidForProvider(raw, provider())) model = raw
                 KEY_TEMPERATURE -> raw.toDoubleOrNull()?.let { if (it >= 0) temperature = it }
                 KEY_TOP_P -> raw.toDoubleOrNull()?.let { topP = it }
                 KEY_TOP_K -> topK = parseNullableInt(raw)?.takeIf { it > 0 }
@@ -176,6 +218,7 @@ class DynamicLlmSettings(
                 KEY_MAX_TOKENS -> maxTokens = if (raw == NULL_VALUE) llm.maxTokens else parseNullableInt(raw)?.takeIf { it > 0 }
                 // маркер «null» = reset к дефолту конфигурации (true); нераспознанное значение — тоже дефолт
                 KEY_REASONING -> reasoningEnabled = if (raw == NULL_VALUE) llm.reasoningEnabled else parseNullableBoolean(raw) ?: llm.reasoningEnabled
+                KEY_TOOLS -> toolsEnabled = if (raw == NULL_VALUE) llm.toolsEnabled else parseNullableBoolean(raw) ?: llm.toolsEnabled
                 KEY_TIMEOUT -> raw.toLongOrNull()?.let { if (it > 0) timeoutSeconds = it }
                 KEY_PRICE_IN -> raw.toDoubleOrNull()?.let { if (it >= 0) priceInputPer1M = it }
                 KEY_PRICE_OUT -> raw.toDoubleOrNull()?.let { if (it >= 0) priceOutputPer1M = it }
@@ -227,6 +270,62 @@ class DynamicLlmSettings(
         else -> throw LlmSettingsValidationException("$name: ожидалось true/false, получено '$value'")
     }
 
+    /**
+     * Валидация модели по каталогу ТЕКУЩЕГО провайдера (глобальный PUT).
+     * gpustack — [LlmCatalog] + включённость ([ModelEnabledStore]); ollama — живое
+     * обнаружение ([OllamaDiscovery]); недоступная Ollama → «Ollama недоступна».
+     */
+    private fun validateModelForProvider(id: String) {
+        if (currentProvider == LlmProviders.OLLAMA) {
+            val ids = ollama?.modelIds() ?: emptySet()
+            if (id !in ids) {
+                if (ids.isEmpty()) throw LlmSettingsValidationException(LlmProviders.OLLAMA_UNAVAILABLE_MESSAGE)
+                throw LlmSettingsValidationException(
+                    "Неизвестная модель: '$id'. Доступные модели: ${ids.sorted().joinToString(", ")}"
+                )
+            }
+        } else {
+            if (!LlmCatalog.isKnown(id)) {
+                throw LlmSettingsValidationException(
+                    "Неизвестная модель: '$id'. Доступные модели: " +
+                        LlmCatalog.MODELS.joinToString(", ") { it.id }
+                )
+            }
+            if (!isEnabled(id)) {
+                throw LlmSettingsValidationException("Модель отключена в каталоге: $id")
+            }
+        }
+    }
+
+    /** true, если модель валидна для каталога провайдера (применение сохранённого значения). */
+    private fun isModelValidForProvider(id: String, providerId: String): Boolean = when (providerId) {
+        LlmProviders.OLLAMA -> ollama != null && id in ollama.modelIds()
+        else -> LlmCatalog.isKnown(id) && isEnabled(id)
+    }
+
+    /**
+     * Переключение провайдера в рантайме: провайдер НЕ персистится (после рестарта
+     * возвращается к env `LLM_PROVIDER`), а глобальная модель сбрасывается на первую
+     * модель нового провайдера (gpustack — первая ВКЛЮЧЁННАЯ по каталогу; ollama —
+     * первая из живого обнаружения); новая модель персистится.
+     */
+    private fun switchProvider(newProvider: String) {
+        currentProvider = newProvider
+        val first = if (newProvider == LlmProviders.OLLAMA) {
+            ollama?.models()?.firstOrNull()?.id
+        } else {
+            LlmCatalog.MODELS.firstOrNull { isEnabled(it.id) }?.id ?: LlmCatalog.MODELS.first().id
+        }
+        if (first != null) {
+            model = first
+            save(KEY_MODEL, first)
+        }
+    }
+
+    /** Контекстное окно модели Ollama (только когда провайдер — ollama); null — не из живого каталога. */
+    private fun ollamaContextLimit(id: String): Int? =
+        if (currentProvider == LlmProviders.OLLAMA) ollama?.contextLimitOf(id) else null
+
     /** true, если модель включена в каталоге; без [modelEnabled] — всегда включена. */
     private fun isEnabled(id: String): Boolean = modelEnabled?.isEnabled(id) ?: true
 
@@ -235,12 +334,14 @@ class DynamicLlmSettings(
     }
 
     private companion object {
+        const val KEY_PROVIDER = "provider"
         const val KEY_MODEL = "model"
         const val KEY_TEMPERATURE = "temperature"
         const val KEY_TOP_P = "topP"
         const val KEY_TOP_K = "topK"
         const val KEY_MAX_TOKENS = "maxTokens"
         const val KEY_REASONING = "reasoningEnabled"
+        const val KEY_TOOLS = "toolsEnabled"
         const val KEY_TIMEOUT = "timeoutSeconds"
         const val KEY_PRICE_IN = "priceInputPer1M"
         const val KEY_PRICE_OUT = "priceOutputPer1M"

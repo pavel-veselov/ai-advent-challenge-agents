@@ -105,6 +105,7 @@ class SessionLlmSettingsControllerTest {
         assertEquals(0.1, node["priceInputPer1M"].asDouble(), 1e-9)
         assertEquals(0.1, node["priceOutputPer1M"].asDouble(), 1e-9)
         assertEquals(true, node["reasoningEnabled"].asBoolean())
+        assertEquals(true, node["toolsEnabled"].asBoolean())
 
         // GET не должен создавать строку настроек (fallback без персистентности)
         assertTrue(llmSettingsStore.get("s-global") == null, "GET не должен персистить строку")
@@ -198,6 +199,52 @@ class SessionLlmSettingsControllerTest {
         val node = put("s-null", """{"maxTokens":null,"reasoningEnabled":null}""")
         assertEquals(10000, node["maxTokens"].asInt(), "null maxTokens → дефолт 10000")
         assertEquals(true, node["reasoningEnabled"].asBoolean(), "null reasoningEnabled → дефолт true")
+    }
+
+    @Test
+    fun `PUT toolsEnabled in session A does not affect session B`() {
+        seedSession("s-tools-a")
+        seedSession("s-tools-b")
+
+        put("s-tools-a", """{"toolsEnabled":false}""")
+        val a = get("s-tools-a")
+        assertEquals(false, a["toolsEnabled"].asBoolean())
+
+        // сессия B не тронута — глобальный дефолт
+        val b = get("s-tools-b")
+        assertEquals(true, b["toolsEnabled"].asBoolean(), "у B — глобальный дефолт true")
+        assertTrue(llmSettingsStore.get("s-tools-b") == null, "у B строки не должно быть")
+    }
+
+    @Test
+    fun `null toolsEnabled removes session override and falls back to global`() {
+        seedSession("s-tools-null")
+        put("s-tools-null", """{"toolsEnabled":false,"reasoningEnabled":false}""")
+        assertEquals(false, get("s-tools-null")["toolsEnabled"].asBoolean())
+
+        val node = put("s-tools-null", """{"toolsEnabled":null}""")
+        assertEquals(true, node["toolsEnabled"].asBoolean(), "toolsEnabled после null → глобальный (true)")
+        assertEquals(false, node["reasoningEnabled"].asBoolean(), "reasoningEnabled остаётся переопределённым")
+    }
+
+    @Test
+    fun `PUT without toolsEnabled leaves value unchanged and roundtrips`() {
+        seedSession("s-tools-partial")
+        put("s-tools-partial", """{"toolsEnabled":false,"maxTokens":42}""")
+        var node = get("s-tools-partial")
+        assertEquals(false, node["toolsEnabled"].asBoolean())
+
+        // только maxTokens — toolsEnabled сохранённой строки не меняется
+        node = put("s-tools-partial", """{"maxTokens":43}""")
+        assertEquals(43, node["maxTokens"].asInt())
+        assertEquals(false, node["toolsEnabled"].asBoolean(), "toolsEnabled не должен измениться")
+    }
+
+    @Test
+    fun `PUT non boolean toolsEnabled returns 400`() {
+        seedSession("s-tools-bad")
+        assertEquals(HttpStatus.BAD_REQUEST, putStatus("s-tools-bad", """{"toolsEnabled":"yes"}"""))
+        assertEquals(true, get("s-tools-bad")["toolsEnabled"].asBoolean())
     }
 
     @Test

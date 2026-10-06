@@ -30,8 +30,10 @@ cd backend
 gradlew.bat bootRun          # Windows
 ```
 
-Транспорт к LLM — только реальная интеграция GPUStack (`LLM_PROVIDER=gpustack`); запуск требует
-`LLM_BASE_URL` и `LLM_API_KEY` (без них backend не стартует — fail-fast на этапе конфигурации).
+Транспорт к LLM — реальная интеграция GPUStack (`LLM_PROVIDER=gpustack`) и локальная Ollama
+(`LLM_PROVIDER=ollama`); провайдер переключается в рантайме через API (см. «Провайдеры LLM»).
+Запуск требует `LLM_BASE_URL` и `LLM_API_KEY` (без них backend не стартует — fail-fast на этапе
+конфигурации: GPUStack нужен и для эмбеддингов базы знаний).
 История диалогов хранится в SQLite-файле (`./data/llm-agent.db` по умолчанию, см. ниже) и
 переживает перезапуск backend.
 
@@ -89,12 +91,13 @@ JVM-процессом.
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `LLM_PROVIDER` | `gpustack` | Провайдер фиксирован: `gpustack` (mock удалён) |
+| `LLM_PROVIDER` | `gpustack` | Стартовый провайдер: `gpustack` \| `ollama` (дальше переключается в рантайме через `PUT /api/llm-settings`; сам провайдер в БД не персистится) |
 | `LLM_BASE_URL` | — | Адрес GPUStack-сервера (БЕЗ `/v1`) |
-| `LLM_API_KEY` | — | Ключ GPUStack (Bearer) |
+| `LLM_API_KEY` | — | Ключ GPUStack (Bearer; обязателен — эмбеддинги базы знаний всегда ходят в GPUStack) |
+| `LLM_OLLAMA_BASE_URL` | `http://localhost:11434` | Адрес локальной Ollama (OpenAI-совместимый `/v1`, без ключа) |
 | `LLM_MODEL` | `default-coding` | Идентификатор модели GPUStack (без префикса провайдера) |
 | `LLM_TEMPERATURE` | `0.7` | Температура |
-| `LLM_TIMEOUT_SECONDS` | `60` | Таймаут запроса к LLM |
+| `LLM_TIMEOUT_SECONDS` | `7200` | Таймаут запроса к LLM |
 | `AGENT_MAX_ITERATIONS` | `8` | Лимит итераций tool-calling цикла |
 | `SERVER_PORT` | `8080` | Порт сервера |
 | `SQLITE_DB_PATH` | `./data/llm-agent.db` | Путь к файлу SQLite-БД с историей диалогов |
@@ -115,6 +118,26 @@ LLM_PROVIDER=gpustack LLM_BASE_URL=<GPUStack-URL> LLM_API_KEY=<ваш ключ> 
 - `LLM_MODEL` = модель GPUStack (по умолчанию `default-coding`; имя БЕЗ префикса провайдера — не `gpustack/<модель>`, как в opencode)
 
 Клиент обращается к `{LLM_BASE_URL}/v1/chat/completions` (OpenAI-совместимая схема, `stream: true`).
+
+### Провайдеры LLM (gpustack / ollama)
+
+Провайдер транспорта выбирается в рантайме: `gpustack` (шлюз с Bearer-ключом) и `ollama`
+(локальная Ollama без ключа, в UI — «свой лунапарк»).
+
+- `GET /api/llm/providers` — провайдеры и их живые каталоги моделей (всегда HTTP 200). У `gpustack`
+  — статический каталог из 3 моделей; у `ollama` — обнаружение через `GET /api/tags` + `POST /api/show`
+  с кэшем 30 c (описание «Ollama · <размер> · <квантование>», окно не найдено → 8192;
+  недоступная Ollama → `"models": []`).
+- `PUT /api/llm-settings { "provider": "ollama" }` — переключение без рестарта (поле обрабатывается
+  первым, при смене модель сбрасывается на первую модель нового провайдера). Сам провайдер в БД
+  не пишется — после перезапуска стартовый берётся из `LLM_PROVIDER`.
+- Запросы роутит `RoutingLlmClient` по текущему провайдеру на каждый запрос: `GpuStackLlmClient`
+  (Bearer, `chat_template_kwargs.enable_thinking`) или `OllamaLlmClient` (`/v1/chat/completions`
+  без Authorization).
+- Per-session сохранённая модель применяется, только если она есть в каталоге ТЕКУЩЕГО провайдера,
+  иначе — глобальная модель (fallback).
+
+Полный контракт — в `CONTRACT.md` (раздел «Провайдеры LLM (gpustack / ollama)»).
 
 ### База знаний (RAG)
 

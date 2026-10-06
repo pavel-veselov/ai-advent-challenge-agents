@@ -56,8 +56,8 @@ class SessionLlmSettingsResolutionTest {
         val global = LlmSettings.from(llmProps)
         val provider = SessionLlmSettingsProvider(llmStore, global)
 
-        // Сессия A: свои настройки — qwen3.8-27b, температура 0.2, лимит 500, рассуждение выключено
-        llmStore.save(StoredSessionLlmSettings("A", model = "qwen3.8-27b", temperature = "0.2", maxTokens = "500", reasoningEnabled = "false"))
+        // Сессия A: свои настройки — qwen3.8-27b, температура 0.2, лимит 500, рассуждение и инструменты выключены
+        llmStore.save(StoredSessionLlmSettings("A", model = "qwen3.8-27b", temperature = "0.2", maxTokens = "500", reasoningEnabled = "false", toolsEnabled = "false"))
 
         val llm = CapturingLlmClient()
         val agent = AgentImpl(llm, tools, sessionStore, AgentProperties(8), global, provider, SessionCompressionStore(jdbc), om)
@@ -68,6 +68,7 @@ class SessionLlmSettingsResolutionTest {
         assertEquals(0.2, settingsA.temperature(), 1e-9)
         assertEquals(500, settingsA.maxTokens())
         assertEquals(false, settingsA.reasoningEnabled())
+        assertEquals(false, settingsA.toolsEnabled(), "per-session toolsEnabled доходит до клиента")
         assertEquals(198 * 1024, settingsA.contextLimit(), "контекст выведен из qwen3.8-27b по каталогу")
 
         // Сессия B без строки — глобальные дефолты (как сегодня)
@@ -77,6 +78,7 @@ class SessionLlmSettingsResolutionTest {
         assertEquals(0.7, settingsB.temperature(), 1e-9)
         assertEquals(10000, settingsB.maxTokens())
         assertEquals(true, settingsB.reasoningEnabled())
+        assertEquals(true, settingsB.toolsEnabled(), "у B — глобальный дефолт toolsEnabled=true")
         assertEquals(1024 * 1024, settingsB.contextLimit(), "контекст выведен из deepseek-v4-flash по каталогу")
 
         // Сессия A снова — настройки не «протекли» из B обратно
@@ -86,6 +88,7 @@ class SessionLlmSettingsResolutionTest {
         assertEquals(0.2, settingsA2.temperature(), 1e-9)
         assertEquals(500, settingsA2.maxTokens())
         assertEquals(false, settingsA2.reasoningEnabled())
+        assertEquals(false, settingsA2.toolsEnabled(), "toolsEnabled не «протек» из B")
     }
 
     @Test

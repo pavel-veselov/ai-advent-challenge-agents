@@ -20,9 +20,10 @@ server:
     include-message: always
 
 llm:
-  provider: ${LLM_PROVIDER:gpustack}        # только gpustack (mock удалён)
+  provider: ${LLM_PROVIDER:gpustack}        # стартовый провайдер: gpustack | ollama (меняется в рантайме через PUT)
   base-url: ${LLM_BASE_URL:}                # например https://<GPUStack-URL> (без /v1)
   api-key: ${LLM_API_KEY:}                  # Bearer-ключ GPUStack (из настроек opencode)
+  ollama-base-url: ${LLM_OLLAMA_BASE_URL:http://localhost:11434}  # локальная Ollama (OpenAI-совместимый /v1, без ключа)
   model: ${LLM_MODEL:default-coding}
   temperature: ${LLM_TEMPERATURE:0.7}
   top-p: ${LLM_TOP_P:1.0}                   # nucleus sampling

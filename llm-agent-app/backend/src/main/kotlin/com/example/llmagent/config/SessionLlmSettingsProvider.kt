@@ -8,12 +8,15 @@ import org.springframework.stereotype.Component
  * Полное состояние сессии — эффективный набор из того же списка полей, что у глобального
  * /api/llm-settings:
  * `{ model, contextLimit, temperature, topP, topK, maxTokens, timeoutSeconds,
- *   priceInputPer1M, priceOutputPer1M, reasoningEnabled }` (БЕЗ `provider` — тот определён
- * на уровне env и неизменяем) :
+ *   priceInputPer1M, priceOutputPer1M, reasoningEnabled, toolsEnabled }` (БЕЗ `provider` — тот определён
+ * на глобальном уровне и меняется только через PUT /api/llm-settings) :
  * - per-field правило: сохранённое значение сессии, если есть, ИНАЧЕ текущее ГЛОБАЛЬНОЕ
  *   значение ([LlmSettings]/[DynamicLlmSettings] из app_settings/defaults);
- * - `contextLimit` — выводится из эффективно выбранной модели по каталогу (отдельно НЕ хранится, как в глобальном PUT);
- * - `model` — модель каталога [LlmCatalog]; при отсутствии переопределения — текущая глобальная.
+ * - `contextLimit` — выводится из эффективно выбранной модели ([LlmCatalog] для gpustack,
+ *   живое обнаружение [OllamaDiscovery] для ollama; отдельно НЕ хранится, как в глобальном PUT);
+ * - `model` — модель каталога ТЕКУЩЕГО провайдера; переопределение сессии, не входящее
+ *   в каталог текущего провайдера (например после переключения провайдера), игнорируется —
+ *   применяется текущая глобальная модель.
  *
  * Строка в `session_llm_settings` отсутствует → сессия ведёт себя КАК СЕГОДНЯ: применяются
  * текущие ГЛОБАЛЬНЫЕ настройки без их сохранения (fallback без персистентности).
@@ -32,6 +35,8 @@ class SessionLlmSettingsProvider(
     private val global: LlmSettings,
     /** Состояние «включена/отключена» моделей каталога; null — проверки нет (все включены). */
     private val modelEnabled: ModelEnabledStore? = null,
+    /** Живой каталог моделей Ollama; null — проверки ollama-моделей нет. */
+    private val ollama: OllamaDiscovery? = null,
 ) {
 
     /**
@@ -57,6 +62,7 @@ class SessionLlmSettingsProvider(
         var priceInputPer1M = current.priceInputPer1M
         var priceOutputPer1M = current.priceOutputPer1M
         var reasoningEnabled = current.reasoningEnabled
+        var toolsEnabled = current.toolsEnabled
 
         if (patch.containsKey(KEY_MODEL)) {
             val v = patch[KEY_MODEL]
@@ -64,15 +70,7 @@ class SessionLlmSettingsProvider(
                 if (v !is String) throw LlmSettingsValidationException("model: ожидалась строка, получено '$v'")
                 val id = v.trim()
                 if (id.isNotEmpty()) {
-                    if (!LlmCatalog.isKnown(id)) {
-                        throw LlmSettingsValidationException(
-                            "Неизвестная модель: '$id'. Доступные модели: " +
-                                LlmCatalog.MODELS.joinToString(", ") { it.id }
-                        )
-                    }
-                    if (!isEnabled(id)) {
-                        throw LlmSettingsValidationException("Модель отключена в каталоге: $id")
-                    }
+                    validateModelForProvider(id)
                     model = id
                 }
             } else {
@@ -170,6 +168,14 @@ class SessionLlmSettingsProvider(
                 reasoningEnabled = null
             }
         }
+        if (patch.containsKey(KEY_TOOLS)) {
+            val v = patch[KEY_TOOLS]
+            if (v != null) {
+                toolsEnabled = asBoolean(v, KEY_TOOLS).toString()
+            } else {
+                toolsEnabled = null
+            }
+        }
 
         val merged = StoredSessionLlmSettings(
             sessionId = sessionId,
@@ -182,6 +188,7 @@ class SessionLlmSettingsProvider(
             priceInputPer1M = priceInputPer1M,
             priceOutputPer1M = priceOutputPer1M,
             reasoningEnabled = reasoningEnabled,
+            toolsEnabled = toolsEnabled,
         )
         if (merged.hasOverrides) store.save(merged) else store.remove(sessionId)
         return get(sessionId)
@@ -192,7 +199,7 @@ class SessionLlmSettingsProvider(
      * настройки + переопределения сессии по ВСЕМ редактируемым полям.
      * Строки нет → поведение ровно как сегодня (всё из глобального источника).
      */
-    fun resolve(sessionId: String): LlmSettings = SessionScopedLlmSettings(global, store.get(sessionId))
+    fun resolve(sessionId: String): LlmSettings = SessionScopedLlmSettings(global, store.get(sessionId), ollama)
 
     /** Эффективный набор для GET/PUT: те же поля, что у глобального /api/llm-settings, БЕЗ provider. */
     private fun render(s: LlmSettings): Map<String, Any?> = mapOf(
@@ -206,12 +213,44 @@ class SessionLlmSettingsProvider(
         "priceInputPer1M" to s.priceInputPer1M(),
         "priceOutputPer1M" to s.priceOutputPer1M(),
         "reasoningEnabled" to s.reasoningEnabled(),
+        "toolsEnabled" to s.toolsEnabled(),
     )
 
     /** Контекстное окно эффективно выбранной модели (после применения патча); не из каталога — глобальный лимит. */
     private fun contextWindowOf(modelOverride: String?): Int {
         val resolved = modelOverride?.takeIf { it.isNotBlank() } ?: global.model()
-        return LlmCatalog.contextLimit(resolved) ?: global.contextLimit()
+        return LlmCatalog.contextLimit(resolved) ?: ollamaContextLimit(resolved) ?: global.contextLimit()
+    }
+
+    /** Контекстное окно модели Ollama (только когда провайдер — ollama); null — не из живого каталога. */
+    private fun ollamaContextLimit(id: String): Int? =
+        if (global.provider() == LlmProviders.OLLAMA) ollama?.contextLimitOf(id) else null
+
+    /**
+     * Валидация модели по каталогу ТЕКУЩЕГО провайдера (PUT сессии; сообщения те же,
+     * что в глобальном PUT): gpustack — [LlmCatalog] + включённость; ollama — живое
+     * обнаружение ([OllamaDiscovery]); недоступная Ollama → «Ollama недоступна».
+     */
+    private fun validateModelForProvider(id: String) {
+        if (global.provider() == LlmProviders.OLLAMA) {
+            val ids = ollama?.modelIds() ?: emptySet()
+            if (id !in ids) {
+                if (ids.isEmpty()) throw LlmSettingsValidationException(LlmProviders.OLLAMA_UNAVAILABLE_MESSAGE)
+                throw LlmSettingsValidationException(
+                    "Неизвестная модель: '$id'. Доступные модели: ${ids.sorted().joinToString(", ")}"
+                )
+            }
+        } else {
+            if (!LlmCatalog.isKnown(id)) {
+                throw LlmSettingsValidationException(
+                    "Неизвестная модель: '$id'. Доступные модели: " +
+                        LlmCatalog.MODELS.joinToString(", ") { it.id }
+                )
+            }
+            if (!isEnabled(id)) {
+                throw LlmSettingsValidationException("Модель отключена в каталоге: $id")
+            }
+        }
     }
 
     /** true, если модель включена в каталоге; без [modelEnabled] — всегда включена. */
@@ -261,6 +300,7 @@ class SessionLlmSettingsProvider(
         const val KEY_PRICE_IN = "priceInputPer1M"
         const val KEY_PRICE_OUT = "priceOutputPer1M"
         const val KEY_REASONING = "reasoningEnabled"
+        const val KEY_TOOLS = "toolsEnabled"
     }
 }
 
@@ -270,8 +310,11 @@ class SessionLlmSettingsProvider(
  * сохранённое значение, если есть, иначе делегирование глобальному.
  * Строки нет → все поля делегируются глобальным настройкам (поведение «как сегодня»).
  *
- * `contextLimit` выводится из эффективно выбранной модели по каталогу; модель не из каталога —
- * глобальный лимит. `provider` неизменяем и наследуется от глобального источника (env).
+ * `contextLimit` выводится из эффективно выбранной модели ([LlmCatalog] для gpustack,
+ * живое обнаружение для ollama); модель не из каталога — глобальный лимит.
+ * Эффективная модель: переопределение сессии ТОЛЬКО если оно принадлежит каталогу
+ * текущего провайдера; иначе — текущая глобальная модель. `provider` наследуется
+ * от глобального источника (runtime-выбор в /api/llm-settings).
  * Распознавание нечисловых/нераспознанных строк: topK/maxTokens — нечисловое или <= 0 →
  * «не задано»; reasoningEnabled — не "true"/"false" → глобальное значение. Маркер `"null"`
  * (старые версии хранили его для «сброса» к дефолту) трактуется как «не переопределено».
@@ -279,11 +322,23 @@ class SessionLlmSettingsProvider(
 class SessionScopedLlmSettings(
     private val delegate: LlmSettings,
     private val stored: StoredSessionLlmSettings?,
+    /** Живой каталог моделей Ollama; null — проверки ollama-моделей нет. */
+    private val ollama: OllamaDiscovery? = null,
 ) : LlmSettings {
 
     override fun provider(): String = delegate.provider()
 
-    override fun model(): String = stored?.model?.takeIf { it.isNotBlank() } ?: delegate.model()
+    /**
+     * Эффективная модель: переопределение сессии ТОЛЬКО если оно валидно для каталога
+     * ТЕКУЩЕГО провайдера ([LlmCatalog] для gpustack, живое обнаружение для ollama);
+     * иначе (не задано / не из каталога текущего провайдера, например после переключения
+     * провайдера) — текущая ГЛОБАЛЬНАЯ модель.
+     */
+    override fun model(): String {
+        val override = stored?.model?.takeIf { it.isNotBlank() }
+        if (override != null && inCurrentCatalog(override)) return override
+        return delegate.model()
+    }
 
     override fun temperature(): Double = stored?.temperature?.toDoubleOrNull()?.takeIf { it >= 0 } ?: delegate.temperature()
 
@@ -295,9 +350,12 @@ class SessionScopedLlmSettings(
 
     override fun reasoningEnabled(): Boolean = parseNullableBoolean(stored?.reasoningEnabled) ?: delegate.reasoningEnabled()
 
+    override fun toolsEnabled(): Boolean = parseNullableBoolean(stored?.toolsEnabled) ?: delegate.toolsEnabled()
+
     override fun timeoutSeconds(): Long = stored?.timeoutSeconds?.toLongOrNull()?.takeIf { it > 0 } ?: delegate.timeoutSeconds()
 
-    override fun contextLimit(): Int = LlmCatalog.contextLimit(model()) ?: delegate.contextLimit()
+    override fun contextLimit(): Int =
+        LlmCatalog.contextLimit(model()) ?: ollamaContextLimit(model()) ?: delegate.contextLimit()
 
     override fun priceInputPer1M(): Double = stored?.priceInputPer1M?.toDoubleOrNull()?.takeIf { it >= 0 } ?: delegate.priceInputPer1M()
 
@@ -312,6 +370,7 @@ class SessionScopedLlmSettings(
         "topK" to topK()?.takeIf { it > 0 },
         "maxTokens" to maxTokens()?.takeIf { it > 0 },
         "reasoningEnabled" to reasoningEnabled(),
+        "toolsEnabled" to toolsEnabled(),
         "timeoutSeconds" to timeoutSeconds(),
         "contextLimit" to contextLimit(),
         "priceInputPer1M" to priceInputPer1M(),
@@ -327,4 +386,16 @@ class SessionScopedLlmSettings(
         "false" -> false
         else -> null
     }
+
+    /** true, если модель принадлежит каталогу ТЕКУЩЕГО провайдера. */
+    private fun inCurrentCatalog(id: String): Boolean =
+        if (provider() == LlmProviders.OLLAMA) {
+            ollama != null && id in ollama.modelIds()
+        } else {
+            LlmCatalog.isKnown(id)
+        }
+
+    /** Контекстное окно модели Ollama (только когда провайдер — ollama). */
+    private fun ollamaContextLimit(id: String): Int? =
+        if (provider() == LlmProviders.OLLAMA) ollama?.contextLimitOf(id) else null
 }

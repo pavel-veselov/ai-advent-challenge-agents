@@ -13,8 +13,8 @@ import org.springframework.stereotype.Component
  * - `model` — идентификатор модели каталога; null = не переопределено (применяется
  *   ТЕКУЩАЯ глобальная модель из app_settings/defaults);
  * - `temperature`/`topP`/`topK`/`maxTokens`/`timeoutSeconds`/`priceInputPer1M`/
- *   `priceOutputPer1M`/`reasoningEnabled` — строковые представления значений; null =
- *   не переопределено (действует ТЕКУЩЕЕ глобальное значение). Строка со значением
+ *   `priceOutputPer1M`/`reasoningEnabled`/`toolsEnabled` — строковые представления значений;
+ *   null = не переопределено (действует ТЕКУЩЕЕ глобальное значение). Строка со значением
  *   `"null"` (маркер старых версий) трактуется интерпретатором как «не переопределено».
  *
  * Строка отсутствует → сессия ведёт себя КАК СЕГОДНЯ: в чате и в GET применяются
@@ -31,12 +31,13 @@ data class StoredSessionLlmSettings(
     val priceInputPer1M: String? = null,
     val priceOutputPer1M: String? = null,
     val reasoningEnabled: String? = null,
+    val toolsEnabled: String? = null,
 ) {
     /** Есть ли хотя бы одно реальное переопределение (иначе строку не создаём и удаляем). */
     val hasOverrides: Boolean
         get() = model != null || temperature != null || topP != null || topK != null ||
             maxTokens != null || timeoutSeconds != null || priceInputPer1M != null ||
-            priceOutputPer1M != null || reasoningEnabled != null
+            priceOutputPer1M != null || reasoningEnabled != null || toolsEnabled != null
 }
 
 /**
@@ -77,7 +78,8 @@ class JdbcSessionLlmSettingsStore(private val jdbc: JdbcTemplate) : SessionLlmSe
                 timeout_seconds     TEXT,
                 price_input_per_1m  TEXT,
                 price_output_per_1m TEXT,
-                reasoning_enabled   TEXT
+                reasoning_enabled   TEXT,
+                tools_enabled       TEXT
             )
             """.trimIndent()
         )
@@ -100,7 +102,7 @@ class JdbcSessionLlmSettingsStore(private val jdbc: JdbcTemplate) : SessionLlmSe
         jdbc.query(
             """
             SELECT model, temperature, top_p, top_k, max_tokens, timeout_seconds,
-                   price_input_per_1m, price_output_per_1m, reasoning_enabled
+                   price_input_per_1m, price_output_per_1m, reasoning_enabled, tools_enabled
             FROM session_llm_settings WHERE session_id = ?
             """.trimIndent(),
             { rs, _ ->
@@ -115,6 +117,7 @@ class JdbcSessionLlmSettingsStore(private val jdbc: JdbcTemplate) : SessionLlmSe
                     priceInputPer1M = rs.getString("price_input_per_1m"),
                     priceOutputPer1M = rs.getString("price_output_per_1m"),
                     reasoningEnabled = rs.getString("reasoning_enabled"),
+                    toolsEnabled = rs.getString("tools_enabled"),
                 )
             },
             sessionId,
@@ -125,11 +128,12 @@ class JdbcSessionLlmSettingsStore(private val jdbc: JdbcTemplate) : SessionLlmSe
             """
             INSERT OR REPLACE INTO session_llm_settings
                 (session_id, model, temperature, top_p, top_k, max_tokens, timeout_seconds,
-                 price_input_per_1m, price_output_per_1m, reasoning_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 price_input_per_1m, price_output_per_1m, reasoning_enabled, tools_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             row.sessionId, row.model, row.temperature, row.topP, row.topK, row.maxTokens,
             row.timeoutSeconds, row.priceInputPer1M, row.priceOutputPer1M, row.reasoningEnabled,
+            row.toolsEnabled,
         )
     }
 
@@ -149,6 +153,7 @@ class JdbcSessionLlmSettingsStore(private val jdbc: JdbcTemplate) : SessionLlmSe
             "priceInputPer1M" to "price_input_per_1m",
             "priceOutputPer1M" to "price_output_per_1m",
             "reasoningEnabled" to "reasoning_enabled",
+            "toolsEnabled" to "tools_enabled",
         )
     }
 }

@@ -28,10 +28,44 @@ export interface RunSettings {
    * glm-* шлюз оставляет принудительно). Отсутствует в старых ответах — трактуем как true.
    */
   reasoningEnabled?: boolean;
+  /**
+   * Инструменты агента: true — модели передаётся каталог инструментов (калькулятор, дата
+   * и время, память задачи, MCP-серверы); false — инструменты не отправляются вовсе,
+   * модель отвечает только текстом. Отсутствует в старых ответах — трактуем как true.
+   */
+  toolsEnabled?: boolean;
   /** Тариф входных токенов, $ за 1M токенов (для расчёта стоимости, если бэкенд не прислал costUsd). */
   priceInputPer1M?: number;
   /** Тариф выходных токенов, $ за 1M токенов. */
   priceOutputPer1M?: number;
+}
+
+// ---- Провайдеры LLM (GET /api/llm/providers; смена — PUT /api/llm-settings {provider}) ----
+
+/**
+ * Модель провайдера из каталога GET /api/llm/providers. Зеркало ответа бэкенда;
+ * description — человекочитаемая подпись (например, «Ollama · 3.1B · Q4_K_M»), опциональна.
+ */
+export interface LlmProviderModel {
+  id: string;
+  /** Лимит контекста модели в токенах (для подписи «NNN K»). */
+  contextLimit: number;
+  description?: string;
+}
+
+/** Провайдер LLM из каталога GET /api/llm/providers. */
+export interface LlmProviderInfo {
+  id: string;
+  /** Метка для UI («gpustack», «свой лунапарк»). */
+  label: string;
+  /** Модели провайдера; пусто — провайдер недоступен (например, Ollama без docker). */
+  models: LlmProviderModel[];
+}
+
+/** Ответ GET /api/llm/providers: активный провайдер + каталог провайдеров с моделями. */
+export interface LlmProvidersResponse {
+  current: 'gpustack' | 'ollama';
+  providers: LlmProviderInfo[];
 }
 
 /** Одно сообщение промпта, отправленного в LLM (событие llm_request_started). */
@@ -369,6 +403,8 @@ export interface SessionLlmSettings {
   priceInputPer1M: number;
   priceOutputPer1M: number;
   reasoningEnabled: boolean;
+  /** Инструменты агента: false — модель отвечает только текстом (инструменты не передаются). */
+  toolsEnabled: boolean;
 }
 
 /**
@@ -385,6 +421,7 @@ export interface SessionLlmSettingsPatch {
   priceInputPer1M?: number;
   priceOutputPer1M?: number;
   reasoningEnabled?: boolean | null;
+  toolsEnabled?: boolean;
 }
 
 /** Ответ супервизорного контроля: POST /system-ctrl/stop и /system-ctrl/start. */

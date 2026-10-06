@@ -20,6 +20,7 @@
   KnowledgeBase,
   KnowledgeBaseCreateParams,
   KnowledgeBasesResponse,
+  LlmProvidersResponse,
   McpServer,
   McpServerRequest,
   MemoryState,
@@ -107,6 +108,31 @@ export async function updateLlmSettings(patch: Partial<RunSettings>): Promise<Ru
   });
   if (!res.ok) throw new Error(`llm-settings PUT http ${res.status}`);
   return (await res.json()) as RunSettings;
+}
+
+/**
+ * Каталог провайдеров LLM и их моделей: GET /api/llm/providers.
+ * current — активный провайдер ('gpustack' | 'ollama'); models у ollama может быть пуст
+ * (локальный docker недоступен). При ошибке бросает (UI откатывается к fallback-каталогу).
+ */
+export async function fetchLlmProviders(): Promise<LlmProvidersResponse> {
+  const res = await fetch('/api/llm/providers');
+  if (!res.ok) throw new Error(`llm providers http ${res.status}`);
+  return (await res.json()) as LlmProvidersResponse;
+}
+
+/**
+ * Глобальная смена провайдера: PUT /api/llm-settings {provider}.
+ * 400 — недопустимый провайдер или «Ollama недоступна» (текст ошибки в теле {error} —
+ * извлекается и показывается в UI); при ошибке бросает (UI откатывает оптимистичное значение).
+ */
+export async function updateGlobalLlmSettings(patch: { provider: string }): Promise<void> {
+  const res = await fetch('/api/llm-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) await raiseMcpError(res, 'llm-settings PUT');
 }
 
 /** РЈРґР°Р»РµРЅРёРµ СЃРµСЃСЃРёРё РЅР° Р±СЌРєРµРЅРґРµ (РёСЃС‚РѕСЂРёСЏ СЃС‚РёСЂР°РµС‚СЃСЏ РІ Р‘Р”). */

@@ -30,6 +30,9 @@ interface LlmSettings {
     /** Включено ли «рассуждение» модели (thinking). false — клиент шлёт chat_template_kwargs.enable_thinking=false (кроме glm*). */
     fun reasoningEnabled(): Boolean
 
+    /** Включены ли инструменты в агентском цикле. false — агент не передаёт список инструментов и не упоминает их в системном промпте. */
+    fun toolsEnabled(): Boolean
+
     fun timeoutSeconds(): Long
 
     /** Лимит контекста модели в токенах — для пресечения переполнения до отправки запроса. */
@@ -63,6 +66,7 @@ class StaticLlmSettings(private val props: LlmProperties) : LlmSettings {
     override fun topK() = props.topK
     override fun maxTokens() = props.maxTokens
     override fun reasoningEnabled() = props.reasoningEnabled
+    override fun toolsEnabled() = props.toolsEnabled
     override fun timeoutSeconds() = props.timeoutSeconds
     override fun contextLimit() = props.contextLimit
     override fun priceInputPer1M() = props.priceInputPer1M
@@ -77,6 +81,7 @@ class StaticLlmSettings(private val props: LlmProperties) : LlmSettings {
         "topK" to topK()?.takeIf { it > 0 },
         "maxTokens" to maxTokens()?.takeIf { it > 0 },
         "reasoningEnabled" to reasoningEnabled(),
+        "toolsEnabled" to toolsEnabled(),
         "timeoutSeconds" to timeoutSeconds(),
         "contextLimit" to contextLimit(),
         "priceInputPer1M" to priceInputPer1M(),

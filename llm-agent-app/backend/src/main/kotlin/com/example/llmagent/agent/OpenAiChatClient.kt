@@ -1,0 +1,283 @@
+package com.example.llmagent.agent
+
+import com.example.llmagent.config.LlmSettings
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
+import org.springframework.http.MediaType
+import org.springframework.web.reactive.function.client.WebClient
+import reactor.core.publisher.Flux
+import java.time.Duration
+
+/**
+ * Общая база OpenAI-совместимых чат-клиентов ([GpuStackLlmClient], [OllamaLlmClient]):
+ * сборка тела запроса (messages/tools/stream_options), SSE-разбор стрима (delta.content,
+ * tool calls, usage), финальные события [LlmEvent.Finished]/[LlmEvent.ResponseAssembled].
+ * Провайдеры отличаются ровно двумя точками расширения:
+ * - [webClient] — базовый адрес и заголовки (GPUStack — Bearer-ключ, Ollama — без ключа);
+ * - [applyProviderParams] — провайдер-специфичные параметры тела (GPUStack умеет
+ *   `chat_template_kwargs.enable_thinking`; Ollama этот параметр не понимает и не шлёт).
+ *
+ * Параметры запроса (model, temperature, top_p, top_k, max_tokens, timeout) читаются
+ * из [LlmSettings] на КАЖДЫЙ запрос — динамические изменения применяются без рестарта.
+ */
+abstract class OpenAiChatClient(
+    protected val om: ObjectMapper,
+    private val defaultSettings: LlmSettings,
+) : LlmClient {
+
+    /** Готовый WebClient с базовым адресом и заголовками провайдера. */
+    protected abstract val webClient: WebClient
+
+    /** Дополнительные (провайдер-специфичные) параметры тела; по умолчанию — ничего. */
+    protected open fun applyProviderParams(body: ObjectNode, settings: LlmSettings) {}
+
+    /**
+     * Старый 2-аргументный вызов — для совместимости (тесты/смоук): тянет настройки из
+     * конструктора. Чат-поток (AgentImpl) всегда передаёт per-session настройки явно.
+     */
+    fun streamChat(messages: List<LlmMessage>, tools: List<ToolDefinition>): Flux<LlmEvent> =
+        streamChat(messages, tools, this.defaultSettings)
+
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+    ): Flux<LlmEvent> = streamChat(messages, tools, settings) { }
+
+    override fun streamChat(
+        messages: List<LlmMessage>,
+        tools: List<ToolDefinition>,
+        settings: LlmSettings,
+        onRequestBody: (String) -> Unit,
+    ): Flux<LlmEvent> {
+        // Пустые tools — отдельный случай: некоторые OpenAI-совместимые бэкенды отвечают
+        // 400 и на `"tools": []`, и на `"tool_choice"` без `tools`. Оба поля уходят ЛИБО вместе
+        // (в основном цикле, где инструменты всегда регистрируются), ЛИБО ни одно — при пустом
+        // списке (вызов резюмирования истории). Прочие параметры (model/temperature/top_p/stream,
+        // опциональные top_k/max_tokens/stream_options) к инструментам отношения не имеют
+        // и уходят как раньше.
+        val hasTools = tools.isNotEmpty()
+        val body = om.createObjectNode()
+            .put("model", settings.model())
+            .put("temperature", settings.temperature())
+            .put("top_p", settings.topP())
+            .put("stream", true)
+        if (hasTools) body.put("tool_choice", "auto")
+        // top_k и max_tokens отправляем только если заданы (>0): не все OpenAI-совместимые
+        // бэкенды принимают top_k, а max_tokens=0 бессмыслен.
+        settings.topK()?.takeIf { it > 0 }?.let { body.put("top_k", it) }
+        settings.maxTokens()?.takeIf { it > 0 }?.let { body.put("max_tokens", it) }
+        // Провайдер-специфичные параметры (например enable_thinking у GPUStack; Ollama шлёт nothing).
+        applyProviderParams(body, settings)
+        body.putObject("stream_options").put("include_usage", true)
+        val msgArr = body.putArray("messages")
+        messages.forEach { msgArr.add(messageNode(it)) }
+        if (hasTools) {
+            val toolsArr = body.putArray("tools")
+            tools.forEach { toolsArr.add(toolNode(it)) }
+        }
+        // Фактическое тело запроса (pretty JSON) уходит в колбэк ДО HTTP-вызова:
+        // панель «Детализация» показывает реальный payload, включая значения из настроек.
+        onRequestBody(om.writerWithDefaultPrettyPrinter().writeValueAsString(body))
+
+        return Flux.defer {
+            val acc = Pending()
+            webClient.post()
+                .uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue(body)
+                .retrieve()
+                .onStatus({ it.is4xxClientError || it.is5xxServerError }) { response ->
+                    // 4xx/5xx — ошибка API (неверный ключ/модель/тело, сервер недоступен и т.п.):
+                    // вычитываем тело и превращаем в LlmApiException с HTTP-статусом и сообщением,
+                    // чтобы error-событие содержало и статус, и текст от апстрима.
+                    response.bodyToMono(String::class.java)
+                        .defaultIfEmpty("")
+                        .map { body -> LlmApiException(response.statusCode().value(), extractErrorMessage(body)) }
+                }
+                .bodyToFlux(String::class.java)
+                .timeout(Duration.ofSeconds(settings.timeoutSeconds()))
+                .flatMapIterable { raw -> parseChunks(raw) }
+                .concatMap { node -> processChunk(node, acc) }
+                .concatWith(Flux.defer { Flux.fromIterable(emitPending(acc, settings.model())) })
+        }
+    }
+
+    private fun messageNode(m: LlmMessage): JsonNode {
+        val n = om.createObjectNode()
+            .put("role", m.role)
+        if (m.content != null) n.put("content", m.content)
+        if (!m.toolCalls.isNullOrEmpty()) {
+            val arr = n.putArray("tool_calls")
+            m.toolCalls.forEach { tc ->
+                val c = arr.addObject()
+                if (tc.id != null) c.put("id", tc.id)
+                c.put("type", "function")
+                val fn = c.putObject("function")
+                fn.put("name", tc.name ?: "")
+                fn.put("arguments", tc.arguments)
+            }
+        }
+        if (m.toolCallId != null) n.put("tool_call_id", m.toolCallId)
+        return n
+    }
+
+    private fun toolNode(t: ToolDefinition): JsonNode {
+        val n = om.createObjectNode()
+            .put("type", "function")
+        val fn = n.putObject("function")
+        fn.put("name", t.name)
+        fn.put("description", t.description)
+        fn.set<JsonNode>("parameters", t.parameters)
+        return n
+    }
+
+    /**
+     * Разбирает сырой фрагмент потока в JSON-узлы. Устойчив к двум форматам доставки:
+     * - сырые SSE-строки ("data: {...}", "event: message", "[DONE]") — когда тело декодируется построчно;
+     * - уже распарсенные SSE-ридером payload'ы (голый JSON без префикса "data:") — так
+     *   Spring 6.x отдаёт bodyToFlux(String) для text/event-stream.
+     */
+    private fun parseChunks(raw: String): List<JsonNode> =
+        raw.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != "[DONE]" && !it.startsWith("event:") && !it.startsWith(":") }
+            .map { line -> if (line.startsWith("data:")) line.removePrefix("data:").trim() else line }
+            .filter { it.isNotEmpty() && it != "[DONE]" }
+            .mapNotNull { line ->
+                try {
+                    om.readTree(line)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            .toList()
+
+    /** Сырые фрагменты tool_calls, finish_reason, usage и накопленный текст на время стрима. */
+    private class Pending {
+        val content = StringBuilder()
+        val toolCalls = sortedMapOf<Int, MutableList<String>>() // index -> [id:, name:, args:]
+        var finishReason: String? = null
+        var usage: LlmUsage? = null
+    }
+
+    private fun processChunk(node: JsonNode, acc: Pending): Flux<LlmEvent> {
+        // usage приходит в финальном чанке с пустым choices (stream_options.include_usage)
+        val usageNode = node.path("usage")
+        if (!usageNode.isMissingNode && !usageNode.isNull) {
+            val input = usageNode.path("prompt_tokens").asInt(-1)
+            val output = usageNode.path("completion_tokens").asInt(-1)
+            if (input >= 0 && output >= 0) acc.usage = LlmUsage(input, output)
+        }
+
+        val choice = node.path("choices").firstOrNull() ?: return Flux.empty()
+        val fr = choice.path("finish_reason").takeIf { !it.isMissingNode && !it.isNull }?.asText()
+        if (fr != null) acc.finishReason = fr
+
+        val out = mutableListOf<LlmEvent>()
+        val delta = choice.path("delta")
+        val content = delta.path("content").takeIf { it.isTextual }?.asText()
+        if (!content.isNullOrEmpty()) {
+            out += LlmEvent.ContentDelta(content)
+            acc.content.append(content)
+        }
+
+        val tcs = delta.path("tool_calls")
+        if (tcs.isArray) {
+            tcs.forEach { tc ->
+                val idx = tc.path("index").asInt(0)
+                val slot = acc.toolCalls.getOrPut(idx) { mutableListOf() }
+                tc.path("id").takeIf { it.isTextual }?.asText()?.let { slot.add("id:$it") }
+                val fn = tc.path("function")
+                fn.path("name").takeIf { it.isTextual }?.asText()?.let { slot.add("name:$it") }
+                fn.path("arguments").takeIf { it.isTextual }?.asText()?.let { slot.add("args:$it") }
+            }
+        }
+        return if (out.isEmpty()) Flux.empty() else Flux.fromIterable(out)
+    }
+
+    private fun emitPending(acc: Pending, model: String): List<LlmEvent> {
+        val out = mutableListOf<LlmEvent>()
+        val calls = acc.toolCalls.map { (idx, parts) ->
+            var id: String? = null
+            var name: String? = null
+            val sb = StringBuilder()
+            for (p in parts) {
+                when {
+                    p.startsWith("id:") -> id = p.removePrefix("id:")
+                    p.startsWith("name:") -> name = p.removePrefix("name:")
+                    p.startsWith("args:") -> sb.append(p.removePrefix("args:"))
+                }
+            }
+            LlmToolCall(index = idx, id = id, name = name, arguments = sb.toString().ifEmpty { "{}" })
+        }
+        if (calls.isNotEmpty()) out += LlmEvent.ToolCallsComplete(calls)
+        out += LlmEvent.Finished(
+            acc.finishReason ?: if (acc.toolCalls.isNotEmpty()) "tool_calls" else "stop",
+            acc.usage,
+        )
+        out += LlmEvent.ResponseAssembled(assembleResponse(acc, model, calls))
+        return out
+    }
+
+    /**
+     * Собирает ответ API в привычном нестримовом виде (chat.completion) из накопленного
+     * стрима — для панели «Детализация ответа». Опускаются поля не содержал
+     * (content при tool_calls, usage без данных провайдера и т.п.).
+     */
+    private fun assembleResponse(acc: Pending, model: String, calls: List<LlmToolCall>): String {
+        val root = om.createObjectNode()
+            .put("object", "chat.completion")
+            .put("model", model)
+        val choice = root.putArray("choices").addObject()
+        choice.put("index", 0)
+        choice.put("finish_reason", acc.finishReason ?: if (calls.isNotEmpty()) "tool_calls" else "stop")
+        val message = choice.putObject("message").put("role", "assistant")
+        if (acc.content.isNotEmpty()) message.put("content", acc.content.toString())
+        if (calls.isNotEmpty()) {
+            val arr = message.putArray("tool_calls")
+            calls.forEach { tc ->
+                val c = arr.addObject()
+                if (tc.id != null) c.put("id", tc.id)
+                c.put("type", "function")
+                c.putObject("function").put("name", tc.name ?: "").put("arguments", tc.arguments)
+            }
+        }
+        acc.usage?.let { usage ->
+            root.putObject("usage")
+                .put("prompt_tokens", usage.inputTokens)
+                .put("completion_tokens", usage.outputTokens)
+        }
+        return om.writerWithDefaultPrettyPrinter().writeValueAsString(root)
+    }
+
+    protected fun normalizeBaseUrl(raw: String): String {
+        var b = raw.trim().trimEnd('/')
+        if (b.isNotEmpty() && !b.endsWith("/v1")) b = "$b/v1"
+        return b
+    }
+
+    /**
+     * Достаёт человекочитаемое сообщение из тела ошибки: предпочитает {error:{message}},
+     * иначе — сырое тело (обрезанное), чтобы в error-событии было, что показать пользователю.
+     */
+    protected fun extractErrorMessage(body: String): String {
+        if (body.isBlank()) return "пустое тело ответа"
+        return try {
+            val node = om.readTree(body)
+            node.path("error").path("message")
+                .takeIf { it.isTextual && it.asText().isNotBlank() }
+                ?.asText()
+                ?: body.take(MAX_ERROR_BODY)
+        } catch (e: Exception) {
+            body.take(MAX_ERROR_BODY)
+        }
+    }
+
+    private companion object {
+        /** Ограничиваем размер тела ошибки, попадающего в событие/логи. */
+        const val MAX_ERROR_BODY = 500
+    }
+}

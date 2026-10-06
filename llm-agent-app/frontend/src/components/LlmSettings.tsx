@@ -3,13 +3,18 @@ import type { ReactNode } from 'react';
 import CollapsibleSection from './CollapsibleSection';
 import {
   clearLongTermMemory,
+  fetchLlmProviders,
   fetchSessionCompression,
   fetchSessionLlmSettings,
+  updateGlobalLlmSettings,
   updateSessionCompression,
   updateSessionLlmSettings,
 } from '../api';
 import type {
   ContextStrategy,
+  LlmProviderInfo,
+  LlmProviderModel,
+  LlmProvidersResponse,
   MemoryState,
   RunSettings,
   SessionCompression,
@@ -19,15 +24,25 @@ import type {
 } from '../types';
 
 /**
- * Каталог моделей UI: id -> окно контекста в токенах (для подписи «NNN K»).
- * contextLimit в PUT не уходит — бэкенд выводит его из каталога по модели.
- * Порядок опций — как в ТЗ.
+ * Fallback-каталог моделей gpustack: используется, когда GET /api/llm/providers недоступен
+ * (бэкенд ещё не поднялся / старая версия без эндпоинта) — панель остаётся рабочей.
+ * Основной источник моделей — каталог провайдеров; contextLimit в PUT не уходит.
  */
-const MODEL_CATALOG = [
-  { model: 'glm-5.3-flash', contextLimit: 262144 },
-  { model: 'qwen3.8-27b', contextLimit: 202752 },
-  { model: 'deepseek-v4-flash', contextLimit: 1048576 },
-] as const;
+const MODEL_CATALOG: LlmProviderModel[] = [
+  { id: 'glm-5.3-flash', contextLimit: 262144 },
+  { id: 'qwen3.8-27b', contextLimit: 202752 },
+  { id: 'deepseek-v4-flash', contextLimit: 1048576 },
+];
+
+/**
+ * Fallback-список провайдеров для рендера радиогруппы при сбое GET /api/llm/providers:
+ * метки — как в контракте эндпоинта. Смена провайдера при недоступном каталоге уйдёт
+ * PUT-ом и при ошибке откатится (инлайн-ошибка).
+ */
+const FALLBACK_PROVIDERS: LlmProviderInfo[] = [
+  { id: 'gpustack', label: 'gpustack', models: MODEL_CATALOG },
+  { id: 'ollama', label: 'свой лунапарк', models: [] },
+];
 
 /**
  * Дефолты сжатия контекста (совпадают с серверными): показываются, пока GET не вернул
@@ -63,6 +78,20 @@ function contextSizeLabel(limit: number): string {
   return `${Math.round(limit / 1024)}K`;
 }
 
+/** Подпись второй строки кнопки провайдера: «3 модели» / «1 модель» / «недоступна». */
+function providerModelsLabel(count: number): string {
+  if (count === 0) return 'недоступна';
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word =
+    mod10 === 1 && mod100 !== 11
+      ? 'модель'
+      : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+        ? 'модели'
+        : 'моделей';
+  return `${count} ${word}`;
+}
+
 /** число | null/undefined → строка черновика (пустая = не задано). */
 function numStr(v: number | null | undefined): string {
   return v != null ? String(v) : '';
@@ -87,6 +116,7 @@ type DraftSource = Pick<
   | 'priceInputPer1M'
   | 'priceOutputPer1M'
   | 'reasoningEnabled'
+  | 'toolsEnabled'
 >;
 
 interface NumFieldProps {
@@ -151,7 +181,7 @@ function NumField({
 }
 
 interface LlmSettingsProps {
-  /** Глобальные настройки (GET /api/llm-settings + agent_started); в сессионном режиме — только чип провайдера и показ при отсутствии сессии. */
+  /** Глобальные настройки (GET /api/llm-settings + agent_started); в сессионном режиме — источник провайдера до ответа каталога и показ при отсутствии сессии. */
   settings: RunSettings | null;
   /** id активной сессии; null — пустое состояние: все поля заблокированы (применять не к чему). */
   sessionId: string | null;
@@ -183,9 +213,13 @@ interface LlmSettingsProps {
  * таймаут, тарифы, thinking); бэкенд отдаёт эффективный набор — переопределения сессии
  * поверх текущих глобальных значений. Без активной сессии блок показывает глобальные
  * значения, но редактирование заблокировано (применять не к чему). PUT уходит на каждое
- * изменение (reasoningEnabled — с каждым PUT); в шапке — метка сессии и индикатор
+ * изменение (reasoningEnabled и toolsEnabled — с каждым PUT); в шапке — метка сессии и индикатор
  * «сохранение… / сохранено / ошибка», при неудаче черновики откатываются.
- * Провайдер задаётся на сервере и показывается отдельным чипом.
+ * Провайдер — радиогруппа над выбором модели (глобально: PUT /api/llm-settings {provider},
+ * при успехе перечитываются каталог провайдеров и настройки сессии — модель подтягивается
+ * под нового провайдера; при ошибке оптимистичное значение откатывается). Список моделей —
+ * из GET /api/llm/providers для активного провайдера; при сбое каталога — fallback-каталог
+ * gpustack; у недоступной Ollama (models: []) пикер пуст + подсказка про docker.
  * Первичный контроль контекста — свитчер «Стратегия контекста» (GET/PUT /context-strategy
  * через хук): none / sliding_window / sticky_facts / summary / branching. Поля окна (1..50)
  * показываются для sliding_window и sticky_facts; keepLast+summaryEvery — только для summary
@@ -214,10 +248,19 @@ export default function LlmSettings({
   const [priceOutput, setPriceOutput] = useState(numStr(settings?.priceOutputPer1M));
   /** Переключатель рассуждений (thinking); отсутствует в старых ответах — трактуем как true. */
   const [reasoning, setReasoning] = useState(settings?.reasoningEnabled ?? true);
+  /** Переключатель инструментов; отсутствует в старых ответах — трактуем как true. */
+  const [tools, setTools] = useState(settings?.toolsEnabled ?? true);
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle', message: null });
   /** Индикатор очистки долговременной памяти (saving/saved/error; saved гаснет через 2 с). */
   const [clearState, setClearState] = useState<SaveState>({ status: 'idle', message: null });
   const clearTimerRef = useRef<number | null>(null);
+  /**
+   * Каталог провайдеров/моделей (GET /api/llm/providers); null — ещё не загружен или
+   * загрузка не удалась (тогда рендер идёт по fallback-каталогу gpustack).
+   */
+  const [providersState, setProvidersState] = useState<LlmProvidersResponse | null>(null);
+  /** Оптимистичный черновик провайдера; null — показываем серверную истину (каталог/настройки). */
+  const [providerDraft, setProviderDraft] = useState<string | null>(null);
 
   // Последние известные глобальные настройки (для показа без сессии и отката в глобальном режиме).
   const settingsRef = useRef<RunSettings | null>(settings);
@@ -228,6 +271,8 @@ export default function LlmSettings({
   const sessionIdRef = useRef<string | null>(sessionId);
   /** Оптимистичное значение переключателя — уходит в тело каждого PUT. */
   const reasoningRef = useRef<boolean>(settings?.reasoningEnabled ?? true);
+  /** Оптимистичное значение переключателя инструментов — уходит в тело каждого PUT. */
+  const toolsRef = useRef<boolean>(settings?.toolsEnabled ?? true);
   // PUT-ы сериализуются: следующий уходит после завершения предыдущего (без гонок ответов).
   const queueRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingRef = useRef(0);
@@ -245,6 +290,9 @@ export default function LlmSettings({
     const nextReasoning = s?.reasoningEnabled ?? true;
     setReasoning(nextReasoning);
     reasoningRef.current = nextReasoning;
+    const nextTools = s?.toolsEnabled ?? true;
+    setTools(nextTools);
+    toolsRef.current = nextTools;
   };
 
   /**
@@ -280,6 +328,28 @@ export default function LlmSettings({
     [],
   );
 
+  /**
+   * Каталог провайдеров/моделей: на монтировании и после успешной смены провайдера.
+   * При сбое каталог остаётся прежним/null — панель рендерится по fallback-каталогу.
+   * Если оптимистичный черновик совпал с серверной истиной, черновик сбрасывается.
+   */
+  const reloadProviders = () => {
+    fetchLlmProviders()
+      .then((r) => {
+        setProvidersState(r);
+        setProviderDraft((prev) => (prev != null && prev === r.current ? null : prev));
+      })
+      .catch(() => {
+        // Эндпоинт недоступен — не трогаем предыдущее состояние (fallback-рендер).
+        setProvidersState((prev) => prev ?? null);
+      });
+  };
+
+  useEffect(() => {
+    reloadProviders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const armSavedTimer = () => {
     if (savedTimerRef.current != null) window.clearTimeout(savedTimerRef.current);
     savedTimerRef.current = window.setTimeout(() => {
@@ -301,9 +371,13 @@ export default function LlmSettings({
     }
     pendingRef.current += 1;
     setSaveState({ status: 'saving', message: null });
-    // reasoningEnabled уходит с каждым PUT рядом с прочими изменёнными полями
-    // (контракт: boolean = установить; переключатель участвует в каждом применении).
-    const body: SessionLlmSettingsPatch = { reasoningEnabled: reasoningRef.current, ...patch };
+    // reasoningEnabled/toolsEnabled уходят с каждым PUT рядом с прочими изменёнными
+    // полями (контракт: boolean = установить; переключатели участвуют в каждом применении).
+    const body: SessionLlmSettingsPatch = {
+      reasoningEnabled: reasoningRef.current,
+      toolsEnabled: toolsRef.current,
+      ...patch,
+    };
     queueRef.current = queueRef.current.then(() =>
       updateSessionLlmSettings(sid, body).then(
         (next) => {
@@ -333,14 +407,72 @@ export default function LlmSettings({
   // черновики уже можно менять, PUT сохранит переопределения сессии на бэкенде.
   const editable = !disabled && sessionId != null;
   const busy = saveState.status === 'saving';
-  /** Для glm-* шлюз оставляет рассуждения принудительно — переключатель не редактируется. */
-  const isGlmModel = model.trim().toLowerCase().startsWith('glm');
+
+  // --- Провайдер (глобальная настройка) и каталог его моделей ---
+  /** Серверная истина провайдера: каталог эндпоинта; пока его нет — глобальные настройки. */
+  const serverProvider = providersState?.current ?? settings?.provider ?? '';
+  /** Активный провайдер в UI: оптимистичный черновик до подтверждения, иначе серверная истина. */
+  const currentProvider = providerDraft ?? serverProvider;
+  /** Радиогруппа провайдеров: каталог эндпоинта; при его недоступности — fallback-список. */
+  const providerOptions =
+    providersState != null && providersState.providers.length > 0
+      ? providersState.providers
+      : FALLBACK_PROVIDERS;
+  const activeProviderInfo =
+    providersState?.providers.find((p) => p.id === currentProvider) ?? null;
+  /** Ollama без моделей (docker недоступен) или без каталога — пикер пуст + подсказка. */
+  const ollamaUnavailable =
+    currentProvider === 'ollama' && (activeProviderInfo?.models.length ?? 0) === 0;
+  /**
+   * Модели активного провайдера: из каталога; для gpustack при недоступном каталоге —
+   * fallback-каталог; у ollama fallback нет (пикер пуст, показывается подсказка).
+   */
+  const modelOptions: LlmProviderModel[] =
+    activeProviderInfo != null
+      ? activeProviderInfo.models
+      : currentProvider === 'ollama'
+        ? []
+        : MODEL_CATALOG;
+  /**
+   * Для glm-* на gpustack шлюз оставляет рассуждения принудительно — переключатель
+   * не редактируется; у ollama thinking управляется свободно (без glm-подсказки).
+   */
+  const isGlmModel =
+    currentProvider === 'gpustack' && model.trim().toLowerCase().startsWith('glm');
 
   const commitModel = (value: string) => {
     if (!editable || busy) return;
     setModel(value);
     // contextLimit следует модели из каталога на бэкенде — в PUT уходит только model.
     enqueue({ model: value });
+  };
+
+  /**
+   * Смена провайдера (глобально: PUT /api/llm-settings {provider}): оптимистично двигаем
+   * черновик; при успехе перечитываем каталог провайдеров и настройки активной сессии
+   * (модель подтягивается под дефолт нового провайдера); при ошибке — откат черновика
+   * к серверной истине и инлайн-ошибка через общий saveState.
+   */
+  const commitProvider = (next: string) => {
+    if (!editable || busy || next === currentProvider) return;
+    const sid = sessionIdRef.current;
+    setProviderDraft(next);
+    setSaveState({ status: 'saving', message: null });
+    updateGlobalLlmSettings({ provider: next }).then(
+      () => {
+        reloadProviders();
+        if (sid != null) reloadSessionSettings(sid);
+        setSaveState({ status: 'saved', message: null });
+        armSavedTimer();
+      },
+      (err: unknown) => {
+        setProviderDraft(null);
+        setSaveState({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
   };
 
   /**
@@ -352,6 +484,17 @@ export default function LlmSettings({
     setReasoning(next);
     reasoningRef.current = next;
     enqueue({ reasoningEnabled: next });
+  };
+
+  /**
+   * Переключатель инструментов: значение применяем оптимистично, PUT уходит в общую
+   * очередь; при ошибке applyDrafts откатит переключатель к серверной истине.
+   */
+  const commitTools = (next: boolean) => {
+    if (!editable || busy || next === tools) return;
+    setTools(next);
+    toolsRef.current = next;
+    enqueue({ toolsEnabled: next });
   };
 
   /** Обязательное число: пусто/не число — черновик откатывается, PUT не уходит. */
@@ -461,6 +604,40 @@ export default function LlmSettings({
   // каждую смену сессии. Без активной сессии — глобальные значения для показа (редактирование
   // заблокировано) и дефолты сжатия; свежая сессия без сообщений получает глобальный
   // эффективный набор (GET), редактирование доступно сразу.
+  /**
+   * Перечитывание настроек активной сессии (LLM + сжатие). Вызывается эффектом смены
+   * сессии и после успешной смены провайдера (модель сессии подтягивается под дефолт
+   * нового провайдера). Устаревшие ответы отбрасываются по sessionIdRef.
+   */
+  const reloadSessionSettings = (sid: string) => {
+    fetchSessionLlmSettings(sid)
+      .then((s) => {
+        if (sessionIdRef.current !== sid) return;
+        sessionSettingsRef.current = s;
+        // Пока PUT в полёте — не затираем черновики (ответ PUT применит свежий набор).
+        if (pendingRef.current === 0) applyDrafts(s);
+      })
+      .catch(() => {
+        if (sessionIdRef.current !== sid) return;
+        // Эндпоинт недоступен (бэкенд ещё не поднялся / сеть) — показываем глобальные
+        // значения как черновик; редактирование остаётся доступным, PUT вернёт ошибку инлайном.
+        sessionSettingsRef.current = null;
+        if (pendingRef.current === 0) applyDrafts(settingsRef.current);
+      });
+    fetchSessionCompression(sid)
+      .then((s) => {
+        if (sessionIdRef.current !== sid) return;
+        compStateRef.current = s;
+        applyCompDrafts(s);
+      })
+      .catch(() => {
+        if (sessionIdRef.current !== sid) return;
+        // Эндпоинт недоступен или сессия ещё не заведена на бэкенде — показываем дефолты.
+        compStateRef.current = null;
+        applyCompDrafts(null);
+      });
+  };
+
   useEffect(() => {
     sessionIdRef.current = sessionId;
     if (sessionId == null) {
@@ -472,36 +649,7 @@ export default function LlmSettings({
       setSaveState({ status: 'idle', message: null });
       return;
     }
-    let cancelled = false;
-    fetchSessionLlmSettings(sessionId)
-      .then((s) => {
-        if (cancelled) return;
-        sessionSettingsRef.current = s;
-        // Пока PUT в полёте — не затираем черновики (ответ PUT применит свежий набор).
-        if (pendingRef.current === 0) applyDrafts(s);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Эндпоинт недоступен (бэкенд ещё не поднялся / сеть) — показываем глобальные
-        // значения как черновик; редактирование остаётся доступным, PUT вернёт ошибку инлайном.
-        sessionSettingsRef.current = null;
-        if (pendingRef.current === 0) applyDrafts(settingsRef.current);
-      });
-    fetchSessionCompression(sessionId)
-      .then((s) => {
-        if (cancelled) return;
-        compStateRef.current = s;
-        applyCompDrafts(s);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Эндпоинт недоступен или сессия ещё не заведена на бэкенде — показываем дефолты.
-        compStateRef.current = null;
-        applyCompDrafts(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+    reloadSessionSettings(sessionId);
   }, [sessionId]);
 
   useEffect(
@@ -735,31 +883,56 @@ export default function LlmSettings({
             </div>
           ) : null}
 
-          <Group label="модель">
-            <div className="llm-model-picker" role="radiogroup" aria-label="Модель генерации">
-              {MODEL_CATALOG.map((x) => (
+          <Group label="провайдер">
+            <div className="llm-provider-picker" role="radiogroup" aria-label="Провайдер LLM">
+              {providerOptions.map((p) => (
                 <button
-                  key={x.model}
+                  key={p.id}
                   type="button"
                   role="radio"
-                  aria-checked={model === x.model}
-                  className={`llm-model-option${model === x.model ? ' is-active' : ''}`}
+                  aria-checked={currentProvider === p.id}
+                  className={`llm-model-option${currentProvider === p.id ? ' is-active' : ''}`}
                   disabled={!editable || busy}
-                  title={`${x.model}: окно контекста ${x.contextLimit} токенов`}
-                  onClick={() => commitModel(x.model)}
+                  title={
+                    p.models.length === 0
+                      ? `${p.label}: провайдер недоступен`
+                      : `${p.label}: ${providerModelsLabel(p.models.length)} в каталоге`
+                  }
+                  onClick={() => commitProvider(p.id)}
                 >
-                  <span className="llm-model-name">{x.model}</span>
-                  <span className="llm-model-ctx">{contextSizeLabel(x.contextLimit)}</span>
+                  <span className="llm-model-name">{p.label}</span>
+                  <span className="llm-model-ctx">{providerModelsLabel(p.models.length)}</span>
                 </button>
               ))}
             </div>
-            <div
-              className="llm-provider-row"
-              title="Провайдер задаётся на сервере (переменные окружения) и не редактируется"
-            >
-              <span className="llm-field-label">провайдер</span>
-              <span className="llm-provider-chip">{settings?.provider ?? '…'}</span>
-            </div>
+          </Group>
+
+          <Group label="модель">
+            {ollamaUnavailable ? (
+              <div className="llm-hint">Ollama недоступна — проверьте docker-контейнер</div>
+            ) : (
+              <div className="llm-model-picker" role="radiogroup" aria-label="Модель генерации">
+                {modelOptions.map((x) => (
+                  <button
+                    key={x.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={model === x.id}
+                    className={`llm-model-option${model === x.id ? ' is-active' : ''}`}
+                    disabled={!editable || busy}
+                    title={
+                      x.description != null
+                        ? `${x.id}: ${x.description}`
+                        : `${x.id}: окно контекста ${x.contextLimit} токенов`
+                    }
+                    onClick={() => commitModel(x.id)}
+                  >
+                    <span className="llm-model-name">{x.id}</span>
+                    <span className="llm-model-ctx">{contextSizeLabel(x.contextLimit)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </Group>
 
           <Group label="генерация">
@@ -833,6 +1006,28 @@ export default function LlmSettings({
             </div>
             {isGlmModel ? (
               <div className="llm-hint">Для glm-* шлюз оставляет рассуждения принудительно</div>
+            ) : null}
+            {/* Переключатель инструментов — всегда виден (без привязки к провайдеру/модели,
+                в отличие от thinking-свитча): false — инструменты не передаются вовсе. */}
+            <div className="llm-reasoning-row">
+              <span className="llm-field-label">Использовать инструменты</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={tools}
+                aria-label="Использовать инструменты"
+                className={`llm-switch${tools ? ' is-on' : ''}`}
+                disabled={!editable || busy}
+                title="Передавать модели инструменты (калькулятор, дата и время, память задачи, MCP-серверы)"
+                onClick={() => commitTools(!tools)}
+              >
+                <span className="llm-switch-knob" />
+              </button>
+            </div>
+            {!tools ? (
+              <div className="llm-hint">
+                Выключено — модель отвечает только текстом, инструменты не передаются
+              </div>
             ) : null}
           </Group>
 

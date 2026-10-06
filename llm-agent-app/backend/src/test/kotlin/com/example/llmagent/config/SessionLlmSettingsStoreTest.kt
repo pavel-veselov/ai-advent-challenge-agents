@@ -40,6 +40,7 @@ class SessionLlmSettingsStoreTest {
                 priceInputPer1M = "0.25",
                 priceOutputPer1M = "0.75",
                 reasoningEnabled = "false",
+                toolsEnabled = "false",
             )
         )
         first.save(
@@ -64,6 +65,7 @@ class SessionLlmSettingsStoreTest {
                 priceInputPer1M = "0.25",
                 priceOutputPer1M = "0.75",
                 reasoningEnabled = "false",
+                toolsEnabled = "false",
             ),
             second.get("s1"),
         )
@@ -78,9 +80,9 @@ class SessionLlmSettingsStoreTest {
     fun `save overwrites previous row`() {
         val store = store(tmpDir.resolve("overwrite.db"))
         store.save(StoredSessionLlmSettings("s", model = "qwen3.8-27b"))
-        store.save(StoredSessionLlmSettings("s", maxTokens = "77", reasoningEnabled = "true"))
+        store.save(StoredSessionLlmSettings("s", maxTokens = "77", reasoningEnabled = "true", toolsEnabled = "false"))
         assertEquals(
-            StoredSessionLlmSettings("s", maxTokens = "77", reasoningEnabled = "true"),
+            StoredSessionLlmSettings("s", maxTokens = "77", reasoningEnabled = "true", toolsEnabled = "false"),
             store.get("s"),
         )
     }
@@ -124,9 +126,10 @@ class SessionLlmSettingsStoreTest {
         assertEquals("false", row.reasoningEnabled)
 
         // новые колонки добавлены — можно сохранять (и читать) полный набор полей
-        migrated.save(StoredSessionLlmSettings("legacy", model = "glm-5.3-flash", temperature = "0.1"))
+        migrated.save(StoredSessionLlmSettings("legacy", model = "glm-5.3-flash", temperature = "0.1", toolsEnabled = "false"))
         assertEquals("glm-5.3-flash", migrated.get("legacy")!!.model)
         assertEquals("0.1", migrated.get("legacy")!!.temperature)
+        assertEquals("false", migrated.get("legacy")!!.toolsEnabled)
     }
 
     /** JdbcSessionLlmSettingsStore сам гарантирует схему (CREATE TABLE IF NOT EXISTS), как в проде. */

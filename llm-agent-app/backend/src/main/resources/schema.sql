@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS session_llm_settings (
     timeout_seconds     TEXT,
     price_input_per_1m  TEXT,
     price_output_per_1m TEXT,
-    reasoning_enabled   TEXT
+    reasoning_enabled   TEXT,
+    tools_enabled       TEXT
 );
 
 -- Стратегия контекста сессии (см. SessionContextStore, GET/PUT

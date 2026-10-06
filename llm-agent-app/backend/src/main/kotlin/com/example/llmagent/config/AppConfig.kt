@@ -8,7 +8,9 @@ import com.example.llmagent.agent.LlmCallLog
 import com.example.llmagent.agent.LlmCallLoggingClient
 import com.example.llmagent.agent.LlmClient
 import com.example.llmagent.agent.LongTermMemoryStore
+import com.example.llmagent.agent.OllamaLlmClient
 import com.example.llmagent.agent.ProfileStore
+import com.example.llmagent.agent.RoutingLlmClient
 import com.example.llmagent.agent.SessionBranchStore
 import com.example.llmagent.agent.SessionCompressionStore
 import com.example.llmagent.agent.SessionContextStore
@@ -31,11 +33,14 @@ import org.springframework.context.annotation.Configuration
 class AppConfig {
 
     /**
-     * Единственный транспорт к LLM — реальная интеграция с GPUStack (mock-режим удалён).
-     * provider/baseUrl/apiKey — статические (из env на старте); per-request параметры
-     * (model, temperature, top_p, top_k, max_tokens, timeout) клиент берёт из динамических
-     * настроек [LlmSettings] на каждый запрос.
-     * Приложение не стартует без LLM_BASE_URL и LLM_API_KEY — fail-fast на этапе конфигурации.
+     * Единственный транспорт к LLM — реальная интеграция, маршрутизируемая [RoutingLlmClient]
+     * между провайдерами: GPUStack (OpenAI-совместимый, Bearer-ключ) и локальная Ollama
+     * (без ключа). Провайдер выбирается в рантайме через настройки ([LlmSettings.provider],
+     * PUT /api/llm-settings); стартовое значение — env `LLM_PROVIDER` (gpustack/ollama —
+     * иное значение → fail-fast на этапе конфигурации).
+     * baseUrl/apiKey GPUStack остаются ОБЯЗАТЕЛЬНЫМИ: эмбеддинги KB всегда ходят в GPUStack.
+     * per-request параметры (model, temperature, top_p, top_k, max_tokens, timeout) клиент
+     * берёт из динамических настроек [LlmSettings] на каждый запрос.
      *
      * Клиент обёрнут в [LlmCallLoggingClient] с slf4j-листенером: КАЖДЫЙ вызов chat-модели
      * (пользовательский, агентские сжатие/факты) фиксируется парой записей
@@ -51,7 +56,16 @@ class AppConfig {
         require(props.apiKey.isNotBlank()) {
             "LLM_API_KEY не задан: реальная интеграция с GPUStack обязательна (env LLM_API_KEY)."
         }
-        return LlmCallLoggingClient(GpuStackLlmClient(props, om, settings), LlmCallLog.slf4jListener())
+        require(LlmProviders.isKnown(props.provider)) {
+            "LLM_PROVIDER='${props.provider}' не поддерживается. Доступные: ${LlmProviders.ALL.joinToString(", ")}."
+        }
+        return LlmCallLoggingClient(
+            RoutingLlmClient(
+                GpuStackLlmClient(props, om, settings),
+                OllamaLlmClient(props, om, settings),
+            ),
+            LlmCallLog.slf4jListener(),
+        )
     }
 
     @Bean

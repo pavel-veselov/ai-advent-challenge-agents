@@ -193,6 +193,78 @@ class DynamicLlmSettingsTest {
         assertEquals(true, s.reasoningEnabled())
     }
 
+    // --- toolsEnabled ---
+
+    @Test
+    fun `tools are enabled by default and exposed in settings map`() {
+        val s = settings()
+        assertEquals(true, s.toolsEnabled())
+        assertEquals(true, s.settings()["toolsEnabled"], "GET-карта должна отдавать toolsEnabled")
+    }
+
+    @Test
+    fun `tools default comes from properties`() {
+        val s = settings(props = LlmProperties(toolsEnabled = false))
+        assertEquals(false, s.toolsEnabled())
+        assertEquals(false, s.settings()["toolsEnabled"])
+    }
+
+    @Test
+    fun `update tools to false and true persists and survives restart`() {
+        val store = InMemoryStore()
+        val first = settings(store)
+        first.update(mapOf("toolsEnabled" to false))
+        assertEquals(false, first.toolsEnabled())
+        assertEquals("false", store.get("toolsEnabled"), "отключение должно персиститься как 'false'")
+
+        val second = DynamicLlmSettings(llm, store)
+        assertEquals(false, second.toolsEnabled(), "сохранённый 'false' применяется при старте")
+
+        second.update(mapOf("toolsEnabled" to true))
+        val third = DynamicLlmSettings(llm, store)
+        assertEquals(true, third.toolsEnabled(), "сохранённый 'true' применяется при старте")
+    }
+
+    @Test
+    fun `update tools absent leaves value unchanged`() {
+        val s = settings()
+        s.update(mapOf("temperature" to 0.3))
+        assertEquals(true, s.toolsEnabled(), "отсутствие toolsEnabled не меняет значение")
+    }
+
+    @Test
+    fun `clearing tools to null resets to configured default and survives restart`() {
+        val store = InMemoryStore()
+        val props = LlmProperties(toolsEnabled = false)
+        val first = settings(store, props)
+        first.update(mapOf("toolsEnabled" to true))
+        // «сброс в null» — вернуть к дефолту конфигурации (false, задан в props)
+        first.update(mapOf("toolsEnabled" to null))
+        assertEquals(false, first.toolsEnabled())
+        assertEquals(false, first.settings()["toolsEnabled"], "сброс должен вернуть дефолт в GET-карту")
+        assertEquals("null", store.get("toolsEnabled"), "сброс персистится маркером 'null'")
+
+        val second = DynamicLlmSettings(props, store)
+        assertEquals(false, second.toolsEnabled(), "сохранённый маркер 'null' применяет дефолт при старте")
+    }
+
+    @Test
+    fun `unparsable persisted tools falls back to default`() {
+        val store = InMemoryStore()
+        store.save("toolsEnabled", "not-a-bool")
+        val s = settings(store)
+        assertEquals(true, s.toolsEnabled(), "нераспознанное значение → дефолт (true)")
+    }
+
+    @Test
+    fun `non boolean tools value is rejected`() {
+        val s = settings()
+        assertThrows(LlmSettingsValidationException::class.java) {
+            s.update(mapOf("toolsEnabled" to "yes"))
+        }
+        assertEquals(true, s.toolsEnabled())
+    }
+
     // --- Каталог: включение/отключение моделей ---
 
     @Test

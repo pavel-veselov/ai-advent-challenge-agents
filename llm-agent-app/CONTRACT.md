@@ -12,13 +12,14 @@
 | `GET` | `/api/sessions` | — | `{ "sessions": [{ "sessionId": string, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lastActivity": string, "firstUserMessage": string\|null, "projectId": number }] }` — все сессии с агрегатами по токенам, стоимостью и первым user-сообщением (`projectId` — id проекта сессии; `-1` — сессия без строки в `chat_sessions`) |
 | `GET` | `/api/stats` | — | `{ "sessionCount": number, "messageCount": number, "promptTokens": number, "completionTokens": number, "costUsd": number, "lifetime": { "sessions": number, "promptTokens": number, "completionTokens": number, "totalTokens": number, "costUsd": number } }` — глобальная статистика по всем сессиям + кумулятивные счётчики «за всё время» (переживают удаление сессий) |
 | `GET` | `/api/llm-settings` | — | применённые настройки LLM — та же структура, что `settings` у `agent_started` (см. ниже) |
-| `PUT` | `/api/llm-settings` | частичное обновление: `{ "model"?: string, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "reasoningEnabled"?: boolean\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number }` | `200` — применённые настройки после обновления (та же структура, что `GET`); `400` — невалидное значение (см. раздел «Динамические настройки LLM») |
+| `PUT` | `/api/llm-settings` | частичное обновление: `{ "provider"?: string, "model"?: string, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "reasoningEnabled"?: boolean\|null, "toolsEnabled"?: boolean\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number }` | `200` — применённые настройки после обновления (та же структура, что `GET`); `400` — невалидное значение (см. раздел «Динамические настройки LLM») |
+| `GET` | `/api/llm/providers` | — | `200` — `{ "current": string, "providers": [{ "id": string, "label": string, "models": [{ "id": string, "contextLimit": number, "description": string }] }] }` — провайдеры LLM и их живые каталоги моделей; ВСЕГДА `200` (недоступная Ollama → пустой `models`); см. раздел «Провайдеры LLM (gpustack / ollama)» |
 | `GET` | `/api/models` | — | `{ "models": [{ "id": string, "description": string, "enabled": boolean }] }` — каталог моделей: ровно 3 чат-модели, порядок фиксирован (см. «Каталог моделей») |
 | `PUT` | `/api/models/{id}/enabled` | `{ "enabled": boolean }` | `200` — `{ "id": string, "enabled": boolean }`; `404` — неизвестный `id`; `400` — попытка отключить ТЕКУЩУЮ активную модель (`llm-settings.model`) или невалидное тело |
 | `GET` | `/api/sessions/{sessionId}/compression` | — | `200` — `{ "sessionId": string, "enabled": boolean, "keepLast": number, "summaryEvery": number }` — настройки сжатия истории сессии; `404` — неизвестная сессия (нет ни одного сообщения) |
 | `PUT` | `/api/sessions/{sessionId}/compression` | частичное обновление: `{ "enabled"?: boolean, "keepLast"?: number, "summaryEvery"?: number }` (отсутствующее поле не меняется) | `200` — полное состояние после обновления (та же структура, что `GET`); `400` — невалидное значение (`enabled` не boolean, `keepLast` вне 1..50, `summaryEvery` вне 2..100); `404` — неизвестная сессия |
-| `GET` | `/api/sessions/{sessionId}/llm-settings` | — | `200` — `{ "model": string, "contextLimit": number, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "timeoutSeconds": number, "priceInputPer1M": number, "priceOutputPer1M": number, "reasoningEnabled": boolean }` — эффективные настройки LLM сессии (те же поля, что у глобального `/api/llm-settings`, БЕЗ `provider`): per-field сохранённое значение сессии, иначе ТЕКУЩЕЕ глобальное; `404` — неизвестная сессия |
-| `PUT` | `/api/sessions/{sessionId}/llm-settings` | частичное обновление: `{ "model"?: string, "contextLimit"?: number, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number, "reasoningEnabled"?: boolean\|null }` — отсутствующее поле не меняется; `null` у любого поля — снять переопределение сессии (эффективно применяется ТЕКУЩЕЕ глобальное значение) | `200` — полное эффективное состояние после обновления (та же структура, что `GET`); `400` — невалидное значение (модель не из каталога/отключена; числовые поля — проверки как в глобальном PUT; `maxTokens` дополнительно ≤ контекстное окно эффективной модели); `404` — неизвестная сессия |
+| `GET` | `/api/sessions/{sessionId}/llm-settings` | — | `200` — `{ "model": string, "contextLimit": number, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "timeoutSeconds": number, "priceInputPer1M": number, "priceOutputPer1M": number, "reasoningEnabled": boolean, "toolsEnabled": boolean }` — эффективные настройки LLM сессии (те же поля, что у глобального `/api/llm-settings`, БЕЗ `provider`): per-field сохранённое значение сессии, иначе ТЕКУЩЕЕ глобальное; `404` — неизвестная сессия |
+| `PUT` | `/api/sessions/{sessionId}/llm-settings` | частичное обновление: `{ "model"?: string, "contextLimit"?: number, "temperature"?: number, "topP"?: number, "topK"?: number\|null, "maxTokens"?: number\|null, "timeoutSeconds"?: number, "priceInputPer1M"?: number, "priceOutputPer1M"?: number, "reasoningEnabled"?: boolean\|null, "toolsEnabled"?: boolean\|null }` — отсутствующее поле не меняется; `null` у любого поля — снять переопределение сессии (эффективно применяется ТЕКУЩЕЕ глобальное значение) | `200` — полное эффективное состояние после обновления (та же структура, что `GET`); `400` — невалидное значение (модель не из каталога/отключена; числовые поля — проверки как в глобальном PUT; `maxTokens` дополнительно ≤ контекстное окно эффективной модели); `404` — неизвестная сессия |
 | `GET` | `/api/sessions/{sessionId}/context-strategy` | — | `200` — `{ "sessionId": string, "strategy": "none"\|"sliding_window"\|"sticky_facts"\|"summary"\|"branching", "windowSize": number, "activeBranchId": number\|null }` — стратегия контекста сессии; строки нет → `strategy="none"`, `windowSize=12`, `activeBranchId=null`; `404` НЕ выбрасывается |
 | `PUT` | `/api/sessions/{sessionId}/context-strategy` | частичное обновление: `{ "strategy"?: string, "windowSize"?: number }` (отсутствующее поле не меняется) | `200` — полное состояние после обновления (та же структура, что `GET`); `400` — неизвестная стратегия или `windowSize` вне 1..50; `404` НЕ выбрасывается. Побочные эффекты: `summary` → `compression.enabled=true`; любая другая стратегия → `compression.enabled=false`; `branching` → плюс ленивое подключение веток (см. «Стратегии контекста») |
 | `GET` | `/api/sessions/{sessionId}/facts` | — | `200` — `{ "sessionId": string, "facts": { "ключ": "значение" } }` — «липкие факты» сессии (порядок — порядок вставки; пусто — фактов ещё нет) |
@@ -178,7 +179,7 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
 
 | type | payload | stepId (id узла графа) | Узел графа |
 |------|---------|------------------------|------------|
-| `agent_started` | `{ "userMessage": string, "settings": { "provider": string, "model": string, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "reasoningEnabled": boolean, "timeoutSeconds": number, "contextLimit": number, "priceInputPer1M": number, "priceOutputPer1M": number, "maxToolCallIterations": number, "tools": string[], "contextStrategy": string } }` | `user` | «Запрос пользователя» |
+| `agent_started` | `{ "userMessage": string, "settings": { "provider": string, "model": string, "temperature": number, "topP": number, "topK": number\|null, "maxTokens": number\|null, "reasoningEnabled": boolean, "toolsEnabled": boolean, "timeoutSeconds": number, "contextLimit": number, "priceInputPer1M": number, "priceOutputPer1M": number, "maxToolCallIterations": number, "tools": string[], "contextStrategy": string } }` | `user` | «Запрос пользователя» |
 | `llm_request_started` | `{ "iteration": number, "prompt": [{ "role": string, "content": string }], "estimatedRequestTokens": number, "requestBody"?: string (фактическое тело HTTP-запроса к LLM API, pretty JSON) }` | `llm-<iteration>` | «LLM (итерация N)» |
 | `llm_token` | `{ "delta": string }` | `llm-<iteration>` | — (токен, статус running) |
 | `llm_response_finished` | `{ "finishReason": "stop"\|"tool_calls"\|"length"\|"error", "estimatedRequestTokens": number\|null, "costUsd"?: number, "usage"?: { "inputTokens": number, "outputTokens": number }, "responseBody"?: string (тело ответа LLM API, собранное из стрима, pretty JSON) }` | `llm-<iteration>` | — (статус success/error) |
@@ -215,17 +216,19 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
 Поле `settings` у `agent_started` — применённые настройки LLM этого запуска (см. также
 «Per-session настройки LLM»: для сессии с собственными настройками ВСЕ редактируемые поля
 (`model`/`temperature`/`topP`/`topK`/`maxTokens`/`timeoutSeconds`/`priceInputPer1M`/
-`priceOutputPer1M`/`reasoningEnabled`/`contextLimit`) отражают эффективные значения сессии,
+`priceOutputPer1M`/`reasoningEnabled`/`toolsEnabled`/`contextLimit`) отражают эффективные значения сессии,
 иначе — глобальные): `provider` (gpustack),
 `model`, `temperature`, `topP` (nucleus sampling, уходит в API всегда), `topK` (top-k sampling; `null` — не задано,
 параметр в API не уходит), `maxTokens` (лимит выходных токенов; по умолчанию `10000`; при `null`
 в PUT — вернуть к значению по умолчанию, поэтому в выдаче всегда число, если дефолт задан),
 `timeoutSeconds`, `reasoningEnabled` (включено ли «рассуждение» модели; при `false` клиент шлёт
-`chat_template_kwargs.enable_thinking=false`, см. ниже), `contextLimit` (лимит контекста модели в токенах — сам
+`chat_template_kwargs.enable_thinking=false`, см. ниже), `toolsEnabled` (включены ли инструменты
+агентского цикла; при `false` — см. ниже), `contextLimit` (лимит контекста модели в токенах — сам
 лимит локально не проверяется: при переполнении ошибка апстрима пробрасывается дословно, см. ниже),
 `priceInputPer1M` / `priceOutputPer1M` (условная цена в USD за 1M входных/выходных токенов),
 `maxToolCallIterations` (лимит цикла tool-calling), `tools`
-(отсортированный список имён зарегистрированных инструментов, уходящих в параметр `tools` API),
+(отсортированный список имён зарегистрированных инструментов, уходящих в параметр `tools` API;
+при `toolsEnabled=false` — пустой список),
 `contextStrategy` (разрешённая для этого run стратегия контекста — одна из
 `none|sliding_window|sticky_facts|summary|branching`; правило разрешения см. «Стратегии контекста»).
 Секреты (`apiKey`) и внутренний `baseUrl` наружу не отдаются. Значения по умолчанию настраиваются env
@@ -265,11 +268,19 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
   принимается в PUT: смена `model` автоматически пересчитывает `contextLimit`. Если модель ещё
   не выбиралась через PUT и не входит в каталог (например дефолт `default-coding` из env), то
   `contextLimit` берётся из конфигурации (`LLM_CONTEXT_LIMIT`).
-- **`provider` неизменяем** — определяется на старте из окружения (`LLM_PROVIDER`) и привязан
-  к клиенту транспорта; изменения `provider` в теле PUT игнорируются, текущий провайдер сохраняется.
+- **`provider` переключается в рантайме** (`PUT { "provider": "gpustack" | "ollama" }`) — поле
+  обрабатывается ПЕРВЫМ, до остальных полей тела. При смене провайдера глобальная модель сбрасывается
+  на первую модель нового провайдера (`gpustack` → `qwen3.8-27b`, `ollama` → первая модель живого
+  каталога) и персистится (ключ `llm.model`); САМ провайдер в `app_settings` НЕ пишется — после
+  перезапуска backend стартовый провайдер снова берётся из env `LLM_PROVIDER`. Ошибки → `400`:
+  неизвестный провайдер — `Неизвестный провайдер: '<id>'. Доступные: gpustack, ollama`; недоступная
+  Ollama — `Ollama недоступна`; модель не из каталога нового провайдера — `Неизвестная модель: '<id>'. …`.
+  Повторный PUT того же провайдера — no-op (настройки не меняются). Подробности — в разделе
+  «Провайдеры LLM (gpustack / ollama)» ниже.
 - **Изменяемые поля** PUT: `model` (обязана быть в каталоге), `temperature` (>= 0),
   `topP`, `topK` (число или null; <= 0 трактуется как «не задано»), `maxTokens` (число > 0
   или null — сброс к дефолту 10000), `reasoningEnabled` (boolean; null — сброс к дефолту `true`),
+  `toolsEnabled` (boolean; null — сброс к дефолту `true`),
   `timeoutSeconds` (> 0), `priceInputPer1M` / `priceOutputPer1M` (>= 0).
   Некорректные значения → `400`. `maxToolCallIterations` и `tools` — статичны, в PUT игнорируются.
 - **`reasoningEnabled` и «рассуждение» модели**: поле включено по умолчанию (`true`), дефолт
@@ -281,9 +292,60 @@ LLM (`session_llm_settings`), стратегию контекста (`session_co
   (без учёта регистра) `chat_template_kwargs` НЕ отправляется ни при каком значении настройки.
   `reasoning_effort` для выключения не используется — у него нет состояния «выкл».
   При `true` (или отсутствии поля) `chat_template_kwargs` не шлется — vLLM оставляет thinking включённым.
+- **`toolsEnabled` и инструменты агента**: поле включено по умолчанию (`true`); env-ключа нет —
+  дефолт задаётся в коде (`LlmProperties.toolsEnabled`, зеркально «рассуждению»). При `false`
+  агентский цикл работает без инструментов:
+  - LLM-запросы уходят БЕЗ ключей `tools`/`tool_choice` (клиент опускает их для пустого списка —
+    апстримы вроде GPUStack отвечают `400` и на пустой `tools`, и на `tool_choice` без `tools`);
+  - системный промпт заменяется на вариант без упоминания инструментов
+    (`AgentImpl.SYSTEM_PROMPT_WITHOUT_TOOLS`);
+  - `agent_started` сообщает `tools: []`.
+  При `true` (или отсутствии поля) поведение ровно как раньше (список инструментов и обычный
+  системный промпт). Per-session значение управляется тем же полем через
+  `/api/sessions/{sessionId}/llm-settings`.
+- **Unknown-tool guard (страховка от выдуманных инструментов)**: если модель вызывает НЕсуществующий
+  инструмент, ей уходит tool-результат-ошибка с корректирующей подсказкой (событие
+  `tool_call_finished` со `status: "error"`):
+  `Инструмент "<имя>" не существует. Доступные инструменты: <список>. Не выдумывай инструменты. Ответь пользователю обычным текстом.`
+  Два ответа ПОДРЯД с вызовами несуществующих инструментов → эскалация: следующий LLM-запрос
+  уходит БЕЗ инструментов + системная заметка `Инструменты недоступны. Ответь пользователю обычным текстом.` —
+  её текстовый ответ завершает run как финальный (`agent_finished`). Счётчик сбрасывается ответом
+  без несуществующих вызовов; известные инструменты в том же ответе исполняются как обычно;
+  инструмент `task_state` (исполняется агентом) не считается неизвестным; цикл ограничен
+  `maxToolCallIterations` как раньше.
 - **Чтение на каждый запрос**: `AgentImpl` (лимит контекста, maxTokens, тарифы стоимости) и клиент
   к LLM (model, temperature, top_p/top_k, max_tokens, timeout) берут ТЕКУЩИЕ динамические значения
   на каждый запрос, т.е. изменения применяются к следующим запросам без рестарта.
+
+### Провайдеры LLM (gpustack / ollama, день 26)
+
+Транспорт к LLM выбирается в рантайме: `gpustack` (OpenAI-совместимый шлюз с Bearer-ключом, метка
+«GPUStack») и `ollama` (локальная Ollama без ключа; в UI помечена «свой лунапарк»). Стартовый
+провайдер — env `LLM_PROVIDER`, дальше — `PUT /api/llm-settings` без рестарта (см. «Динамические
+настройки LLM»).
+
+- **`GET /api/llm/providers`** — всегда HTTP 200: `{ "current": "gpustack"|"ollama", "providers": [...] }`.
+  У каждого провайдера: `id`, `label` (`GPUStack` / `свой лунапарк`) и `models` — ЖИВОЙ каталог:
+  - `gpustack`: статический каталог — все 3 модели (те же `contextLimit` и описания, что в
+    `GET /api/models`; поле `enabled` в этом ответе не участвует);
+  - `ollama`: обнаружение через живую Ollama — `GET {ollamaBaseUrl}/api/tags` (список моделей,
+    `details.parameter_size`, `details.quantization_level`) + `POST {ollamaBaseUrl}/api/show` для
+    каждой модели (контекстное окно из `model_info` — точный ключ `<model>.context_length` или любой
+    `*.context_length`, например архитектурный `qwen2.context_length`; не найдено → `8192`).
+    Описание модели: `Ollama · <parameter_size> · <quantization_level>`.
+  - Discovery кэшируется на 30 секунд (включая отрицательный результат — недоступность не порождает
+    шторм запросов); недоступная Ollama → `"models": []` при HTTP 200 (никогда не 500).
+- **Переключение** (`PUT { "provider": … }`): обрабатывается первым (см. «Динамические настройки LLM»);
+  валидация `model` в том же PUT идёт по каталогу НОВОГО провайдера; при смене модель сбрасывается
+  на первую модель нового провайдера.
+- **Роутинг**: `RoutingLlmClient` выбирает клиента по ТЕКУЩЕМУ провайдеру на КАЖДЫЙ запрос:
+  `GpuStackLlmClient` (Bearer-ключ; `chat_template_kwargs.enable_thinking` по `reasoningEnabled`) или
+  `OllamaLlmClient` (OpenAI-совместимый `{ollamaBaseUrl}/v1/chat/completions` БЕЗ Authorization;
+  temperature/top_p/top_k/max_tokens — обычные поля; `chat_template_kwargs` не шлётся). Смена
+  провайдера применяется к следующим запросам без рестарта.
+- **Per-session fallback**: сохранённая модель сессии применяется, только если она есть в каталоге
+  ТЕКУЩЕГО провайдера; иначе — текущая глобальная модель (см. «Per-session настройки LLM»).
+- **`agent_started.settings.provider`** несёт провайдера, актуальный на момент старта run.
 
 Поле `prompt` у `llm_request_started` — точный массив сообщений, отправленный в LLM на этой итерации
 (system + история сессии + наблюдения инструментов). Для assistant-сообщения с tool_calls в `content`
@@ -559,8 +621,8 @@ fork входят, сообщения других веток — нет. Ина
 
 Каждая сессия может иметь СОБСТВЕННЫЕ настройки LLM — ВСЕ редактируемые поля: `model`,
 `temperature`, `topP`, `topK`, `maxTokens`, `timeoutSeconds`, `priceInputPer1M`,
-`priceOutputPer1M`, `reasoningEnabled` (`contextLimit` выводится из эффективно выбранной
-модели по каталогу и отдельно не хранится — как в глобальном PUT). Управляются через
+`priceOutputPer1M`, `reasoningEnabled`, `toolsEnabled` (`contextLimit` выводится из эффективно
+выбранной модели по каталогу и отдельно не хранится — как в глобальном PUT). Управляются через
 `GET/PUT /api/sessions/{sessionId}/llm-settings` (см. таблицу API выше).
 Хранение — SQLite-таблица `session_llm_settings`, переживает перезапуск backend.
 Изменение настроек сессии A не влияет на сессию B (например температура).
@@ -568,8 +630,9 @@ fork входят, сообщения других веток — нет. Ина
 - **Эффективные значения** (ответ `GET`/`PUT`, поле `settings` у `agent_started`): per-field
   правило — сохранённое значение сессии, если есть, иначе ТЕКУЩЕЕ глобальное значение
   (`GET /api/llm-settings`). Форма ответа — те же имена полей, что у глобального
-  `/api/llm-settings`, БЕЗ `provider` (тот определён на уровне env и неизменяем; в `settings`
-  события `agent_started` он, как и раньше, присутствует). `topK`/`maxTokens` нормализуются:
+  `/api/llm-settings`, БЕЗ `provider` (тот глобален: старт из env `LLM_PROVIDER`, переключение —
+  PUT'ом `/api/llm-settings`, см. «Провайдеры LLM»; в `settings` события `agent_started` он,
+  как и раньше, присутствует). `topK`/`maxTokens` нормализуются:
   0/не задано → `null`.
 - **Fallback без персистентности**: строки настроек у сессии НЕТ → GET возвращает ТЕКУЩИЕ
   ГЛОБАЛЬНЫЕ значения (из `app_settings` / defaults, те же, что отдаёт `GET /api/llm-settings`)
@@ -578,22 +641,29 @@ fork входят, сообщения других веток — нет. Ина
   **`null` у любого поля = СНЯТЬ переопределение сессии** — эффективно применяется ТЕКУЩЕЕ
   глобальное значение (как если бы сессия никогда не переопределяла это поле: `maxTokens: null` →
   глобальный дефолт 10000, если глобально не переопределён; `reasoningEnabled: null` → глобальное
-  значение). Когда после PUT у сессии не осталось ни одного переопределения — строка удаляется.
+  значение; `toolsEnabled: null` → глобальное значение). Когда после PUT у сессии не осталось
+  ни одного переопределения — строка удаляется.
 - **`model`**: при значении в теле обязана быть в каталоге И включённой (сообщения те же, что в
   глобальном PUT: `Неизвестная модель: '<id>'. Доступные модели: …` и `Модель отключена в каталоге: <id>` —
   тот же каталог/флаг `app_models`); `null` снимает переопределение модели (применяется глобальная).
+  Каталог зависит от ТЕКУЩЕГО провайдера: при `ollama` валидация — по живому каталогу Ollama
+  (флаг `app_models` не применяется — у ollama-моделей отключений нет; `maxTokens` валидируется
+  против окна ollama-модели).
 - **Валидация остальных полей** — идентична глобальному PUT (→ 400):
   - `contextLimit` — целое > 0 (значение не хранится — лимит всегда выводится из модели по каталогу);
   - `temperature` >= 0 (`не может быть отрицательной`), `topP` — число,
     `topK` — число (<= 0 трактуется как «не задано»);
   - `maxTokens` — целое в 1..контекстное окно эффективно выбранной модели
     (`maxTokens не может превышать контекстное окно модели (<N> токенов): …`);
-  - `timeoutSeconds` > 0, `priceInputPer1M`/`priceOutputPer1M` >= 0, `reasoningEnabled` — boolean.
+  - `timeoutSeconds` > 0, `priceInputPer1M`/`priceOutputPer1M` >= 0, `reasoningEnabled` — boolean,
+    `toolsEnabled` — boolean.
 - **Чат-поток (resolved per-run)**: в начале каждого `POST /api/chat` агент разрешает эффективные
   настройки сессии по ВСЕМ полям (строка есть → свои значения; строки нет → глобальные) и применяет
   их ко ВСЕМ LLM-вызовам run (основной цикл и резюмирование): билдер запроса берёт отсюда
   `model`, `temperature`, `top_p`, `top_k`, `max_tokens`, `timeout` и гейт
   `chat_template_kwargs.enable_thinking` (`reasoningEnabled`, см. «Динамические настройки LLM»);
+  `toolsEnabled` сессии гейтит передачу списка инструментов и выбор системного промпта
+  (см. «Динамические настройки LLM»).
   поле `settings` события `agent_started` несёт тот же эффективный набор сессии.
   Две сессии могут одновременно работать с разными моделями, температурами и лимитами —
   выбор не глобальный.

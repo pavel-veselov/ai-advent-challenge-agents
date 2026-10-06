@@ -158,6 +158,11 @@ class AgentImpl(
         // для каждого run. У сессии без сохранённой строки — текущие ГЛОБАЛЬНЫЕ значения
         // (поведение как сегодня). Билдер запроса берёт параметры отсюда на каждый вызов.
         val runSettings = sessionLlmSettings.resolve(sessionId)
+        // Feature «инструменты вкл/выкл» (toolsEnabled): false — LLM не получает список
+        // инструментов, системный промпт без упоминания инструментов, agent_started
+        // сообщает tools=[]; тело запроса уходит БЕЗ keys tools/tool_choice (клиент
+        // опускает их для пустого списка).
+        val toolsEnabled = runSettings.toolsEnabled()
 
         // Разрешение эффективной стратегии контекста сессии для этого run. Правило
         // (см. SessionContextStore.resolve): сохранённая стратегия; при 'none' — fallback
@@ -171,7 +176,7 @@ class AgentImpl(
             ?: ContextStrategySettings(sessionId).windowSize
         send(AgentStarted(userMessage, runSettings.settings() + mapOf(
             "maxToolCallIterations" to agentProperties.maxToolCallIterations,
-            "tools" to visibleToolNames(),
+            "tools" to (if (toolsEnabled) visibleToolNames() else emptyList()),
             "contextStrategy" to contextStrategy,
         )))
 
@@ -287,7 +292,7 @@ class AgentImpl(
         }
 
         val messages = mutableListOf<LlmMessage>()
-        messages += LlmMessage("system", SYSTEM_PROMPT)
+        messages += LlmMessage("system", if (toolsEnabled) SYSTEM_PROMPT else SYSTEM_PROMPT_WITHOUT_TOOLS)
 
         // День-24: результат RAG-поиска нужен ВНЕ блока памяти — для детерминированного
         // отказа «не знаю» (после try/catch) и для списка источников в agent_finished.
@@ -542,6 +547,11 @@ class AgentImpl(
             }
         }
 
+        // Unknown-tool guard: счётчик ПОДРЯД идущих ответов модели с вызовами несуществующих
+        // инструментов. После UNKNOWN_TOOL_ESCALATION_THRESHOLD подряд — эскалация: следующий
+        // запрос уходит БЕЗ инструментов + системная заметка «инструменты недоступны».
+        var consecutiveUnknownToolResponses = 0
+
         try {
             while (true) {
                 iteration++
@@ -584,7 +594,19 @@ class AgentImpl(
                 var responseBody: String? = null
                 // Тело запроса приходит из колбэка синхронно при построении streamChat(),
                 // поэтому строка шага появляется ДО HTTP-вызова — в т.ч. при ошибке API.
-                val flux = llm.streamChat(messages, visibleToolDefinitions(), runSettings) { requestBody = it }
+                // Unknown-tool guard: после N ПОДРЯД ответов с несуществующими инструментами
+                // эскалируем — запрос уходит БЕЗ инструментов + системная заметка
+                // «инструменты недоступны» (дедуп: заметка не добавляется дважды подряд).
+                // toolsEnabled=false — инструменты не отправляются вообще: клиент строит
+                // тело запроса без ключей tools/tool_choice для пустого списка.
+                val escalate = consecutiveUnknownToolResponses >= UNKNOWN_TOOL_ESCALATION_THRESHOLD
+                val toolsForRequest = if (toolsEnabled && !escalate) visibleToolDefinitions() else emptyList()
+                if (escalate &&
+                    messages.lastOrNull()?.let { it.role == "system" && it.content == TOOLS_UNAVAILABLE_NOTE } != true
+                ) {
+                    messages.add(LlmMessage("system", TOOLS_UNAVAILABLE_NOTE))
+                }
+                val flux = llm.streamChat(messages, toolsForRequest, runSettings) { requestBody = it }
                 // «HH:mm:ss  Запрос в llm» — текст построен клиентом при сборке запроса;
                 // вычитываем очередь, чтобы запись ушла в SSE до llm_request_started.
                 drainLlmLogs()
@@ -671,7 +693,9 @@ class AgentImpl(
                                 ToolResult("Ошибка инструмента: ${e.message}", true)
                             }
                         } else if (tool == null) {
-                            ToolResult("Неизвестный инструмент: $name", true)
+                            // Unknown-tool guard: не голая ошибка, а корректирующая подсказка —
+                            // список доступных инструментов + требование ответить текстом.
+                            unknownToolResult(name)
                         } else {
                             try {
                                 tool.execute(args)
@@ -715,6 +739,14 @@ class AgentImpl(
                         }
                         messages.add(LlmMessage("tool", llmToolMessage, toolCallId = tc.id))
                     }
+
+                    // Unknown-tool guard: был ли в этом ответе вызов НЕсуществующего инструмента?
+                    // (task_state исполняется агентом и может отсутствовать в реестре — не считаем.)
+                    val hadUnknown = toolCalls.any { tc ->
+                        val n = tc.name ?: "unknown"
+                        n != TaskStateTool.TOOL_NAME && toolRegistry.get(n) == null
+                    }
+                    consecutiveUnknownToolResponses = if (hadUnknown) consecutiveUnknownToolResponses + 1 else 0
 
                     // AUTO-воркфлоу: модель завершила этап и инструментом task_state перешла
                     // на следующий — сохраняем повествование этапа как отдельное сообщение
@@ -963,6 +995,17 @@ class AgentImpl(
         val workflowEnabled = workflowSettings?.isEnabled() ?: false
         return toolRegistry.definitions().filter { it.name != TaskStateTool.TOOL_NAME || workflowEnabled }
     }
+
+    /**
+     * Результат для вызова несуществующего инструмента (unknown-tool guard): не голая ошибка,
+     * а корректирующая подсказка — список реально доступных инструментов + требование
+     * ответить пользователю обычным текстом и не выдумывать инструменты.
+     */
+    private fun unknownToolResult(name: String): ToolResult = ToolResult(
+        "Инструмент \"$name\" не существует. Доступные инструменты: ${visibleToolNames().joinToString(", ")}. " +
+            "Не выдумывай инструменты. Ответь пользователю обычным текстом.",
+        true,
+    )
 
     private fun handleTaskState(sessionId: String, args: Map<String, Any?>): ToolResult {
         val store = taskStateStore
@@ -1354,6 +1397,17 @@ class AgentImpl(
             "Ты — полезный ассистент. Отвечай кратко и по делу. " +
                 "Используй доступные инструменты, когда это нужно для точного ответа " +
                 "(арифметические вычисления, текущие дата и время)."
+
+        /** Системный промпт для режима без инструментов (toolsEnabled=false): без упоминания инструментов. */
+        const val SYSTEM_PROMPT_WITHOUT_TOOLS =
+            "Ты — полезный ассистент. Отвечай кратко и по делу."
+
+        /** Системная заметка при эскалации unknown-tool guard: инструменты убраны из запроса. */
+        const val TOOLS_UNAVAILABLE_NOTE =
+            "Инструменты недоступны. Ответь пользователю обычным текстом."
+
+        /** Сколько ПОДРЯД ответов с несуществующими инструментами → эскалация (следующий запрос без tools). */
+        private const val UNKNOWN_TOOL_ESCALATION_THRESHOLD = 2
 
         /**
          * Простой запрос на сжатие истории — обычное user-сообщение, замыкающее промпт
