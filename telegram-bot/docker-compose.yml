@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    image: papkin-helper-bot
+    container_name: papkin-helper-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LLM_OLLAMA_BASE_URL: http://host.docker.internal:11434
+    volumes:
+      - ./data:/app/data

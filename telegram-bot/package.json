@@ -1,0 +1,17 @@
+{
+  "name": "telegram-bot",
+  "version": "1.0.0",
+  "description": "Душевный Telegram-бот — чат-собеседник на LLM (GPUStack / Ollama)",
+  "type": "module",
+  "main": "src/bot.js",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env src/bot.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "grammy": "^1.30.0"
+  }
+}
