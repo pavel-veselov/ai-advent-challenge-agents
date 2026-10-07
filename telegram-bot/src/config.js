@@ -58,6 +58,18 @@ if (provider === "gpustack") {
 const ollamaBaseUrl =
   normalizeBaseUrl(readEnv("LLM_OLLAMA_BASE_URL")) || "http://localhost:11434";
 
+// --- База знаний / RAG: все настройки необязательные, у всех дефолты (fail-open) ---
+const kbSnapshotPath = readEnv("KB_SNAPSHOT_PATH") || "./data/rag-vacuum.json";
+const kbBaseId = Math.max(1, Math.floor(Number(readEnv("KB_BASE_ID")) || 16));
+const kbEmbeddingModel = readEnv("KB_EMBEDDING_MODEL") || "qwen3-vl-embedding-8b";
+const kbMinScore = Number(readEnv("KB_MIN_SCORE")) || 0.5;
+const kbCandidateK = Math.max(1, Math.floor(Number(readEnv("KB_CANDIDATE_K")) || 8));
+const kbTopK = Math.max(1, Math.floor(Number(readEnv("KB_TOP_K")) || 4));
+const kbBlockMaxChars = Math.max(
+  200,
+  Math.floor(Number(readEnv("KB_BLOCK_MAX_CHARS")) || 6000),
+);
+
 const config = Object.freeze({
   telegramBotToken,
   provider,
@@ -67,6 +79,13 @@ const config = Object.freeze({
   ollamaBaseUrl,
   temperature: TEMPERATURE,
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
+  kbSnapshotPath,
+  kbBaseId,
+  kbEmbeddingModel,
+  kbMinScore,
+  kbCandidateK,
+  kbTopK,
+  kbBlockMaxChars,
 });
 
 export default config;

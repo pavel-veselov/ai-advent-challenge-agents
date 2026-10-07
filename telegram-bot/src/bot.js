@@ -3,7 +3,9 @@
  * Провайдеры и модели — как в llm-agent-app:
  * - gpustack — фиксированный каталог, Bearer-ключ;
  * - ollama — живое обнаружение моделей, без ключа;
- * - при смене провайдера модель сбрасывается на первую модель нового провайдера.
+ * - при смене провайдера модель сбрасывается на первую модель нового провайдера;
+ * - RAG: вопросы по инструкции пылесоса (LEGEE D8 LuLu) — поиск по базе знаний,
+ *   вкл/выкл командой /kb (по умолчанию вкл, любые ошибки — fail-open в обычный чат).
  */
 import { Bot } from "grammy";
 
@@ -11,6 +13,7 @@ import config, { PROVIDERS, SYSTEM_PROMPT } from "./config.js";
 import { GPUSTACK_MODELS, listOllamaModels } from "./catalog.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { chatCompletion } from "./llm.js";
+import { kbInfo, retrieve } from "./rag.js";
 import { store } from "./store.js";
 
 /** Целевой размер сырого чанка (Telegram держит 4090 символов; HTML добавляет теги). */
@@ -81,6 +84,15 @@ async function sendChunk(api, chatId, rawChunk) {
   }
 }
 
+/**
+ * Отрезает хвостовой список источников, если модель напечатала его сама
+ * (страховка от дубля: бот добавит свой детерминированный блок «Источники:»).
+ * Срезаем только хвост: строка, начинающаяся с «Источники», до конца ответа.
+ */
+function stripTrailingSources(text) {
+  return text.replace(/\n*\s*Источники[^\n]*\n[\s\S]*$/, "").trimEnd();
+}
+
 const GREETING = [
   "Привет! Я душевный собеседник — поболтаем?",
   "",
@@ -89,6 +101,7 @@ const GREETING = [
   "/provider — показать или сменить провайдера LLM",
   "/model — показать или сменить модель LLM",
   "/reset — очистить историю этого чата",
+  "/kb — RAG по инструкции пылесоса (вкл/выкл)",
 ].join("\n");
 
 const COMMANDS = [
@@ -97,6 +110,7 @@ const COMMANDS = [
   { command: "provider", description: "Показать/сменить провайдера LLM" },
   { command: "model", description: "Показать/сменить модель LLM" },
   { command: "reset", description: "Очистить историю этого чата" },
+  { command: "kb", description: "RAG по инструкции пылесоса (вкл/выкл)" },
 ];
 
 /** Аргументы команды: всё, что идёт после первого слова. */
@@ -225,7 +239,35 @@ bot.command("reset", (ctx) => {
   ctx.reply("История этого чата очищена. Начнём заново.");
 });
 
-/** Обычный текст: user → LLM → assistant. История — последние 10 сообщений. */
+bot.command("kb", async (ctx) => {
+  const arg = commandArg(ctx.message.text).toLowerCase();
+
+  // /kb on|off — переключение; /kb без аргументов — статус.
+  if (arg !== "on" && arg !== "off") {
+    if (arg) {
+      await ctx.reply("Не понял аргумент. Используйте /kb on или /kb off.");
+      return;
+    }
+    const enabled = store.getRag(ctx.chat.id);
+    const info = kbInfo();
+    const status = enabled
+      ? info
+        ? `RAG: вкл. База «${info.name}» (id ${info.kbId}), чанков: ${info.chunkCount}.`
+        : "RAG: вкл. База не загружена (нет снапшота data/rag-vacuum.json)."
+      : "RAG: выкл.";
+    await ctx.reply(`${status}\nПереключить: /kb on или /kb off`);
+    return;
+  }
+
+  store.setRag(ctx.chat.id, arg === "on");
+  await ctx.reply(
+    arg === "on"
+      ? "RAG включён: вопросы по инструкции пылесоса будут отвечаться по базе знаний."
+      : "RAG выключен: обычный душевный чат.",
+  );
+});
+
+/** Обычный текст: user → (опционально RAG) → LLM → assistant. История — последние 10 сообщений. */
 bot.on("message:text", async (ctx) => {
   const chatId = ctx.chat.id;
 
@@ -233,9 +275,23 @@ bot.on("message:text", async (ctx) => {
 
   await ctx.api.sendChatAction(chatId, "typing");
 
+  // RAG: ищем фрагменты в инструкции пылесоса (fail-open — никогда не бросает).
+  let ragBlock = null;
+  let ragSources = null;
+  if (store.getRag(chatId)) {
+    const result = await retrieve(ctx.message.text);
+    if (result.block) {
+      ragBlock = result.block;
+      ragSources = result.sources;
+      // Поиск по базе занял время — обновляем индикатор «печатает».
+      await ctx.api.sendChatAction(chatId, "typing");
+    }
+  }
+
   try {
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
+      ...(ragBlock ? [{ role: "system", content: ragBlock }] : []),
       ...store.getHistory(chatId),
     ];
     const reply = await chatCompletion({
@@ -243,8 +299,14 @@ bot.on("message:text", async (ctx) => {
       model: store.getModel(),
       messages,
     });
+    // В историю — чистый ответ; блок источников нужен только для показа.
     store.appendMessage(chatId, { role: "assistant", content: reply });
-    for (const chunk of splitIntoChunks(reply)) {
+    const text = ragSources
+      ? `${stripTrailingSources(reply)}\n\nИсточники:\n${ragSources
+          .map((s) => `[${s.label}] ${s.source} — ${s.section}`)
+          .join("\n")}`
+      : reply;
+    for (const chunk of splitIntoChunks(text)) {
       await sendChunk(ctx.api, chatId, chunk);
     }
   } catch (error) {

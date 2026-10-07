@@ -32,7 +32,7 @@ export class Store {
   #filePath;
   #provider;
   #model;
-  /** Map<string, Array<{role, content}>> — по строковому chat_id. */
+  /** Map<string, {history: Array<{role, content}>, ragEnabled?: boolean}> — по строковому chat_id. */
   #chats = new Map();
 
   /**
@@ -62,7 +62,10 @@ export class Store {
       for (const [chatId, chat] of Object.entries(raw.chats)) {
         if (Array.isArray(chat?.history)) {
           const history = chat.history.filter(isValidMessage).slice(-HISTORY_LIMIT);
-          this.#chats.set(String(chatId), history);
+          const entry = { history };
+          // Флаг RAG — необязательное поле; у старых state.json его просто нет (дефолт — вкл).
+          if (typeof chat.ragEnabled === "boolean") entry.ragEnabled = chat.ragEnabled;
+          this.#chats.set(String(chatId), entry);
         }
       }
     }
@@ -88,37 +91,51 @@ export class Store {
 
   /** Копия истории чата (последние HISTORY_LIMIT сообщений). */
   getHistory(chatId) {
-    const history = this.#chats.get(String(chatId));
-    return history ? [...history] : [];
+    const chat = this.#chats.get(String(chatId));
+    return chat ? [...chat.history] : [];
   }
 
   /** Добавляет сообщение в конец истории чата и обрезает до последних HISTORY_LIMIT. */
   appendMessage(chatId, message) {
     const key = String(chatId);
-    const history = this.#chats.get(key) ?? [];
-    history.push({ role: message.role, content: message.content });
-    if (history.length > HISTORY_LIMIT) {
-      history.splice(0, history.length - HISTORY_LIMIT);
+    const chat = this.#chats.get(key) ?? { history: [] };
+    chat.history.push({ role: message.role, content: message.content });
+    if (chat.history.length > HISTORY_LIMIT) {
+      chat.history.splice(0, chat.history.length - HISTORY_LIMIT);
     }
-    this.#chats.set(key, history);
+    this.#chats.set(key, chat);
     this.#save();
   }
 
   /** Убирает последнее сообщение (откат user-сообщения при ошибке LLM). */
   popLastMessage(chatId) {
     const key = String(chatId);
-    const history = this.#chats.get(key);
-    if (!history || history.length === 0) return;
-    history.pop();
-    if (history.length === 0) this.#chats.delete(key);
+    const chat = this.#chats.get(key);
+    if (!chat || chat.history.length === 0) return;
+    chat.history.pop();
     this.#save();
   }
 
-  /** Полностью очищает историю чата (/reset). */
+  /** Полностью очищает историю чата (/reset); настройка RAG сохраняется. */
   clearHistory(chatId) {
     const key = String(chatId);
-    if (!this.#chats.has(key)) return;
-    this.#chats.delete(key);
+    const chat = this.#chats.get(key);
+    if (!chat) return;
+    chat.history = [];
+    this.#save();
+  }
+
+  /** Включён ли RAG для чата (по умолчанию — вкл). */
+  getRag(chatId) {
+    return this.#chats.get(String(chatId))?.ragEnabled ?? true;
+  }
+
+  /** Включает/выключает RAG для чата (персистится в state.json). */
+  setRag(chatId, enabled) {
+    const key = String(chatId);
+    const chat = this.#chats.get(key) ?? { history: [] };
+    chat.ragEnabled = Boolean(enabled);
+    this.#chats.set(key, chat);
     this.#save();
   }
 
@@ -126,8 +143,8 @@ export class Store {
     try {
       mkdirSync(dirname(this.#filePath), { recursive: true });
       const chats = {};
-      for (const [chatId, history] of this.#chats) {
-        chats[chatId] = { history };
+      for (const [chatId, chat] of this.#chats) {
+        chats[chatId] = chat;
       }
       const state = { provider: this.#provider, model: this.#model, chats };
       writeFileSync(this.#filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");

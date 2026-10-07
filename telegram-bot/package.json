@@ -6,12 +6,16 @@
   "main": "src/bot.js",
   "private": true,
   "scripts": {
-    "start": "node --env-file=.env src/bot.js"
+    "start": "node --env-file=.env src/bot.js",
+    "dump:kb": "node scripts/dump-kb.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
     "grammy": "^1.30.0"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^13.0.3"
   }
 }
