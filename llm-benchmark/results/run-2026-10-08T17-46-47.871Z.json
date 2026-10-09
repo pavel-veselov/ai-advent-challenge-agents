@@ -1,0 +1,347 @@
+{
+  "meta": {
+    "startedAt": "2026-10-08T17:44:12.978Z",
+    "finishedAt": "2026-10-08T17:46:47.867Z",
+    "durationMs": 154889,
+    "args": {
+      "limit": 3,
+      "tasks": 1,
+      "repeats": 1,
+      "stream": false,
+      "out": null
+    },
+    "judgeModel": "gpt-4o",
+    "nodeVersion": "v24.16.0",
+    "configCount": 3,
+    "taskCount": 1,
+    "repeats": 1,
+    "stream": false
+  },
+  "configs": [
+    {
+      "id": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "baseUrl": "https://gpustack.data.lmru.tech",
+      "apiKey": "[REDACTED]",
+      "container": null
+    },
+    {
+      "id": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "baseUrl": "https://gpustack.data.lmru.tech",
+      "apiKey": "[REDACTED]",
+      "container": null
+    },
+    {
+      "id": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "baseUrl": "http://localhost:11434",
+      "apiKey": null,
+      "container": "ollama"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "codegen-bfs",
+      "category": "codegen",
+      "prompt": "Напиши функцию на Python, которая обходит бинарное дерево в ширину (iteratively, без рекурсии) и возвращает список значений по уровням. Дерево задано узлами вида class Node: def __init__(self, value, left=None, right=None). Опиши, как работает алгоритм, и укажи сложность.",
+      "mustContain": [
+        "popleft"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T17:44:12.982Z",
+      "answer": "## Решение\n\n```python\nfrom collections import deque\n\n\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\n\ndef level_order(root):\n    \"\"\"Обход бинарного дерева в ширину. Возвращает список уровней.\"\"\"\n    if root is None:\n        return []\n\n    result = []\n    queue = deque([root])\n\n    while queue:\n        level_size = len(queue)   # столько узлов на текущем уровне\n        level = []\n\n        for _ in range(level_size):\n            node = queue.popleft()\n            level.append(node.value)\n\n            if node.left:\n                queue.append(node.left)\n            if node.right:\n                queue.append(node.right)\n\n        result.append(level)\n\n    return result\n```\n\nПример использования:\n\n```python\n#        1\n#       / \\\n#      2   3\n#     / \\   \\\n#    4   5   6\n\nroot = Node(1, Node(2, Node(4), Node(5)), Node(3, None, Node(6)))\nprint(level_order(root))  # [[1], [2, 3], [4, 5, 6]]\n```\n\n## Как работает алгоритм\n\n1. **Очередь (FIFO).** BFS по своей природе использует очередь: узлы обрабатываются в порядке добавления, поэтому уровень за уровнем. Берём `collections.deque`, а не обычный список — `popleft()` у deque работает за O(1), тогда как `list.pop(0)` за O(n).\n\n2. **Разбиение на уровни.** Ключевой приём — перед обработкой уровня фиксируем его размер `level_size = len(queue)`. В этот момент в очереди лежат **только узлы текущего уровня**. Внутренний цикл извлекает ровно столько узлов, попутно добавляя их детей — они сформируют следующий уровень.\n\n3. **Порядок внутри уровня.** Дети добавляются слева направо (`left`, затем `right`), поэтому и значения внутри уровня идут слева направо.\n\n4. **Крайний случай.** Пустое дерево (`root is None`) возвращает `[]`.\n\n## Сложность\n\n- **Время: O(n)** — каждый узел ровно один раз добавляется в очередь и один раз извлекается.\n- **Память: O(w)**, где `w` — максимальная ширина дерева (максимум узлов на одном уровне). В худшем случае (полное дерево) последний уровень содержит ~n/2 узлов, т.е. память O(n). В вырожденном случае (вырожденное в список дерево) — O(1) помимо результата.\n- Сам результат занимает O(n) — это неизбежно, так как он содержит все значения.\n\nЕсли нужен плоский список без группировки по уровням, достаточно заменить `result.append(level)` на `result.extend(level)` и убрать вложенный цикл — группировка по уровням как раз и обеспечивается фиксацией `level_size`.",
+      "usage": {
+        "promptTokens": 127,
+        "completionTokens": 1136,
+        "totalTokens": 1263
+      },
+      "timing": {
+        "firstTokenMs": null,
+        "totalMs": 5868.533399999999
+      },
+      "speed": {
+        "tokensPerSec": 193.574769464548
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: реализован итеративный BFS с использованием deque, приведено объяснение алгоритма и анализ сложности. Код читаем, содержит docstring и пример использования. Дополнительно пояснено, как получить плоский список."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": null
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T17:44:28.586Z",
+      "answer": "```python\nfrom collections import deque\n\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef level_order(root):\n    if root is None:\n        return []\n\n    result = []\n    queue = deque([root])          # FIFO-очередь\n\n    while queue:\n        level_size = len(queue)    # столько узлов на текущем уровне\n        level = []\n\n        for _ in range(level_size):\n            node = queue.popleft()\n            level.append(node.value)\n            if node.left:\n                queue.append(node.left)\n            if node.right:\n                queue.append(node.right)\n\n        result.append(level)\n\n    return result\n```\n\n**Как работает алгоритм**\n\n1. Обход в ширину (BFS) реализуется через очередь (FIFO) — для неё используется `collections.deque`, у которого `popleft()` работает за O(1).\n2. В очередь кладём корень. Ключевая идея: **в начале каждой итерации внешнего цикла в очереди лежат ровно все узлы одного уровня**.\n3. Фиксируем размер очереди `level_size` — это количество узлов текущего уровня. Важно сделать это до извлечения, так как при обработке узлов в очередь добавятся их дети (уже следующий уровень).\n4. Извлекаем ровно `level_size` узлов, собираем их значения, а их детей кладём в конец очереди.\n5. После внутреннего цикла уровень обработан — добавляем его список в результат. Когда очередь опустеет, дерево пройдено полностью.\n\nПример:\n\n```python\n#        1\n#       / \\\n#      2   3\n#     / \\    \\\n#    4   5    6\nroot = Node(1, Node(2, Node(4), Node(5)), Node(3, None, Node(6)))\nprint(level_order(root))  # [[1], [2, 3], [4, 5, 6]]\n```\n\n**Сложность**\n\n- **Время: O(n)** — каждый узел добавляется в очередь и извлекается из неё ровно один раз, операции с `deque` за O(1).\n- **Память: O(w)**, где w — максимальная ширина дерева (максимум узлов в очереди одновременно). В худшем случае (полное дерево, последний уровень содержит ~n/2 узлов) это O(n); для вырожденного дерева-«списка» — O(1).",
+      "usage": {
+        "promptTokens": 127,
+        "completionTokens": 1030,
+        "totalTokens": 1157
+      },
+      "timing": {
+        "firstTokenMs": null,
+        "totalMs": 4863.987200000001
+      },
+      "speed": {
+        "tokensPerSec": 211.7604256853307
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: реализован итеративный BFS с использованием deque, возвращаются значения по уровням, алгоритм и сложность объяснены верно, приведён наглядный пример."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": null
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T17:44:38.955Z",
+      "answer": "Для обхода бинарного дерева в ширину (BFS) можно использовать очередь. Алгоритм будет работать следующим образом:\n\n1. Создать очередь и добавить корневой узел в нее.\n2. Создать пустой список для хранения значений узлов по уровням.\n3. Пока очередь не пуста:\n   - Получить количество узлов на текущем уровне.\n   - Для каждого узла на текущем уровне:\n     - Добавить его значение в список значений по уровням.\n     - Добавить его левого и правого потомков в очередь, если они существуют.\n4. Вернуть список значений по уровням.\n\nСложность этого алгоритма составляет O(n), где n - количество узлов в дереве, так как каждый узел будет обработан ровно один раз.\n\nВот реализация функции на Python:\n\n```python\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef bfs(root):\n    if not root:\n        return []\n\n    queue = [root]\n    result = []\n\n    while queue:\n        level_size = len(queue)\n        current_level = []\n\n        for _ in range(level_size):\n            node = queue.pop(0)\n            current_level.append(node.value)\n\n            if node.left:\n                queue.append(node.left)\n            if node.right:\n                queue.append(node.right)\n\n        result.append(current_level)\n\n    return result\n\n# Пример использования:\n# Создание дерева:\n#       1\n#      / \\\n#     2   3\n#    / \\\n#   4   5\n\nroot = Node(1)\nroot.left = Node(2)\nroot.right = Node(3)\nroot.left.left = Node(4)\nroot.left.right = Node(5)\n\n# Обход дерева в ширину\nprint(bfs(root))  # Вывод: [[1], [2, 3], [4, 5]]\n```\n\nВ этом примере функция `bfs` принимает корневой узел дерева и возвращает список значений по уровням.",
+      "usage": {
+        "promptTokens": 148,
+        "completionTokens": 482,
+        "totalTokens": 630
+      },
+      "timing": {
+        "firstTokenMs": null,
+        "totalMs": 113442.3284
+      },
+      "speed": {
+        "tokensPerSec": 4.24885496267723
+      },
+      "judge": {
+        "correctness": 7,
+        "clarity": 9,
+        "completeness": 9,
+        "codeQuality": 6,
+        "overallScore": 7,
+        "judgeNotes": "Алгоритм описан верно, но реализация использует list.pop(0), что приводит к O(n^2) вместо O(n), и указанная сложность неверна. Рекомендуется использовать collections.deque."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 514,
+        "avgCpuPct": 669.4050194552531,
+        "peakCpuPct": 817.4,
+        "peakMemUsedBytes": 3578781499,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3552700000,
+        "peakPids": 50
+      },
+      "error": null
+    }
+  ],
+  "summary": {
+    "perConfig": [
+      {
+        "configId": "gpustack/glm-5.3-flash@t0.1",
+        "providerType": "gpustack",
+        "model": "glm-5.3-flash",
+        "temperature": 0.1,
+        "runs": 1,
+        "successfulRuns": 1,
+        "failedRuns": 0,
+        "avgOverallScore": 10,
+        "avgCorrectness": 10,
+        "avgClarity": 10,
+        "avgCompleteness": 10,
+        "avgCodeQuality": 10,
+        "avgTokensPerSec": 193.57,
+        "avgTTFTMs": null,
+        "avgTotalMs": 5868.5,
+        "avgCompletionTokens": 1136,
+        "avgPromptTokens": 127,
+        "efficiencyScore": 0.0088,
+        "scoreStdDev": null,
+        "totalMsStdDev": null,
+        "deterministicPassRate": 1,
+        "resources": {
+          "available": false,
+          "note": "remote (server-side), not measurable locally",
+          "netRoundTripMs": null
+        }
+      },
+      {
+        "configId": "gpustack/glm-5.3-flash@t1",
+        "providerType": "gpustack",
+        "model": "glm-5.3-flash",
+        "temperature": 1,
+        "runs": 1,
+        "successfulRuns": 1,
+        "failedRuns": 0,
+        "avgOverallScore": 10,
+        "avgCorrectness": 10,
+        "avgClarity": 10,
+        "avgCompleteness": 10,
+        "avgCodeQuality": 10,
+        "avgTokensPerSec": 211.76,
+        "avgTTFTMs": null,
+        "avgTotalMs": 4864,
+        "avgCompletionTokens": 1030,
+        "avgPromptTokens": 127,
+        "efficiencyScore": 0.0097,
+        "scoreStdDev": null,
+        "totalMsStdDev": null,
+        "deterministicPassRate": 1,
+        "resources": {
+          "available": false,
+          "note": "remote (server-side), not measurable locally",
+          "netRoundTripMs": null
+        }
+      },
+      {
+        "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+        "providerType": "ollama",
+        "model": "qwen2.5-coder:3b-instruct-q8_0",
+        "temperature": 0.1,
+        "runs": 1,
+        "successfulRuns": 1,
+        "failedRuns": 0,
+        "avgOverallScore": 7,
+        "avgCorrectness": 7,
+        "avgClarity": 9,
+        "avgCompleteness": 9,
+        "avgCodeQuality": 6,
+        "avgTokensPerSec": 4.25,
+        "avgTTFTMs": null,
+        "avgTotalMs": 113442.3,
+        "avgCompletionTokens": 482,
+        "avgPromptTokens": 148,
+        "efficiencyScore": 0.0145,
+        "scoreStdDev": null,
+        "totalMsStdDev": null,
+        "deterministicPassRate": 0,
+        "resources": {
+          "peakCpuPct": 817.4,
+          "avgCpuPct": 669.41,
+          "peakMemUsedBytes": 3578781499,
+          "peakMemUsedHuman": "3.3GiB",
+          "peakMemLimitBytes": 12401718067,
+          "totalNetIOBytes": 3552700000,
+          "sampleCount": 514
+        }
+      }
+    ],
+    "determinism": {
+      "gpustack/glm-5.3-flash": {
+        "temperatures": {
+          "1": {
+            "runs": 1,
+            "avgOverallScore": 10,
+            "scoreStdDevAcrossAll": null,
+            "meanRepeatScoreStdDev": null,
+            "totalMsStdDev": null
+          },
+          "0.1": {
+            "runs": 1,
+            "avgOverallScore": 10,
+            "scoreStdDevAcrossAll": null,
+            "meanRepeatScoreStdDev": null,
+            "totalMsStdDev": null
+          }
+        },
+        "consistencyDelta": null,
+        "note": "repeats=1: stddev is across different tasks (dataset variance, not determinism)"
+      },
+      "ollama/qwen2.5-coder:3b-instruct-q8_0": {
+        "temperatures": {
+          "0.1": {
+            "runs": 1,
+            "avgOverallScore": 7,
+            "scoreStdDevAcrossAll": null,
+            "meanRepeatScoreStdDev": null,
+            "totalMsStdDev": null
+          }
+        },
+        "consistencyDelta": null,
+        "note": "repeats=1: stddev is across different tasks (dataset variance, not determinism)"
+      }
+    },
+    "conciseness": {
+      "avgTokensPerTask": {
+        "codegen-bfs": {
+          "gpustack/glm-5.3-flash@t0.1": 1136,
+          "gpustack/glm-5.3-flash@t1": 1030,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 482
+        }
+      },
+      "avgTokensPerModel": {
+        "gpustack/glm-5.3-flash": 1083,
+        "ollama/qwen2.5-coder:3b-instruct-q8_0": 482
+      }
+    },
+    "verdict": "=== VERDICT ===\n1. Качество: 1) gpustack/glm-5.3-flash (avg score 10); 2) ollama/qwen2.5-coder:3b-instruct-q8_0 (avg score 7)\n2. Скорость: быстрее всех gpustack/glm-5.3-flash (202.67 tok/s avg).\n3. Эффективность (качество/токен): ollama/qwen2.5-coder:3b-instruct-q8_0 (eff 0.0145).\n[gpustack/glm-5.3-flash] качество: победитель ничья (t0.1=10, t1.0=10); данных по стабильности недостаточно.",
+    "table": "config                                     | score | tok/s  | ttftMs | totalMs  | avgTok | eff    | det% | cpuPk% | memPk \n-------------------------------------------+-------+--------+--------+----------+--------+--------+------+--------+-------\ngpustack/glm-5.3-flash@t0.1                | 10    | 193.57 | n/a    | 5868.5   | 1136   | 0.0088 | 100% | -      | -     \ngpustack/glm-5.3-flash@t1                  | 10    | 211.76 | n/a    | 4864     | 1030   | 0.0097 | 100% | -      | -     \nollama/qwen2.5-coder_3b-instruct-q8_0@t0.1 | 7     | 4.25   | n/a    | 113442.3 | 482    | 0.0145 | 0%   | 817.4  | 3.3GiB"
+  }
+}

@@ -1,0 +1,2173 @@
+{
+  "meta": {
+    "startedAt": "2026-10-08T18:14:00.205Z",
+    "finishedAt": "2026-10-08T18:46:47.819Z",
+    "durationMs": 1967614,
+    "args": {
+      "limit": null,
+      "tasks": null,
+      "repeats": 1,
+      "stream": true,
+      "out": "results\\bench-full.json"
+    },
+    "judgeModel": "gpt-4o",
+    "nodeVersion": "v24.16.0",
+    "configCount": 6,
+    "taskCount": 6,
+    "repeats": 1,
+    "stream": true,
+    "errorCount": 0,
+    "judgeErrorCount": 0
+  },
+  "configs": [
+    {
+      "id": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "baseUrl": "https://gpustack.data.lmru.tech",
+      "apiKey": "[REDACTED]",
+      "container": null
+    },
+    {
+      "id": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "baseUrl": "https://gpustack.data.lmru.tech",
+      "apiKey": "[REDACTED]",
+      "container": null
+    },
+    {
+      "id": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "baseUrl": "http://localhost:11434",
+      "apiKey": null,
+      "container": "ollama"
+    },
+    {
+      "id": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "baseUrl": "http://localhost:11434",
+      "apiKey": null,
+      "container": "ollama"
+    },
+    {
+      "id": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "baseUrl": "http://localhost:11434",
+      "apiKey": null,
+      "container": "ollama"
+    },
+    {
+      "id": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "baseUrl": "http://localhost:11434",
+      "apiKey": null,
+      "container": "ollama"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "codegen-bfs",
+      "category": "codegen",
+      "prompt": "Напиши функцию на Python, которая обходит бинарное дерево в ширину (iteratively, без рекурсии) и возвращает список значений по уровням. Дерево задано узлами вида class Node: def __init__(self, value, left=None, right=None). Опиши, как работает алгоритм, и укажи сложность.",
+      "mustContain": [
+        "popleft"
+      ]
+    },
+    {
+      "id": "bugfix-loop-sum",
+      "category": "bugfix",
+      "prompt": "В этом коде есть баг:\n\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i <= arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n// Ожидается: sumArray([1, 2, 3]) === 6, фактически возвращается NaN\n\nПокажи исправленный код и объясни причину бага.",
+      "mustContain": [
+        "NaN"
+      ]
+    },
+    {
+      "id": "explain-decorator",
+      "category": "explanation",
+      "prompt": "Объясни построчно, что делает этот Python-код (декоратор), и приведи пример использования:\n\ndef retry(times=3):\n    def decorator(func):\n        def wrapper(*args, **kwargs):\n            last_error = None\n            for attempt in range(times):\n                try:\n                    return func(*args, **kwargs)\n                except Exception as e:\n                    last_error = e\n            raise last_error\n        return wrapper\n    return decorator\n",
+      "mustContain": []
+    },
+    {
+      "id": "sql-top-orders",
+      "category": "sql",
+      "prompt": "Напиши SQL-запрос, выбирающий топ-3 пользователей по количеству заказов за последний месяц. Схема: users(id, name), orders(id, user_id, created_at). Кратко поясни запрос.",
+      "mustContain": [
+        "ORDER BY",
+        "LIMIT 3"
+      ]
+    },
+    {
+      "id": "refactor-callbacks",
+      "category": "refactor",
+      "prompt": "Отрефактори этот callback-код в async/await c обработкой ошибок, сохранив порядок вызовов:\n\ngetUser(id, (err, user) => {\n  if (err) return console.error(err);\n  getOrders(user, (err, orders) => {\n    if (err) return console.error(err);\n    getDetails(orders[0], (err, details) => {\n      if (err) return console.error(err);\n      console.log(details);\n    });\n  });\n});\n",
+      "mustContain": [
+        "async",
+        "await"
+      ]
+    },
+    {
+      "id": "tricky-hoisting",
+      "category": "tricky-output",
+      "prompt": "Что выведет этот код и почему? Объясни поведение step by step:\n\nconsole.log(typeof a);\nvar a = 5;\n\nfunction f() {\n  console.log(a);\n  var a = 10;\n  console.log(a);\n}\n\nf();\n",
+      "mustContain": [
+        "undefined"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:00.208Z",
+      "answer": "## Решение\n\nОбход в ширину (BFS) делается через очередь FIFO. Ключевой приём для группировки по уровням — перед обработкой уровня зафиксировать текущий размер очереди: это ровно число узлов на данном уровне.\n\n```python\nfrom collections import deque\n\n\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\n\ndef level_order(root):\n    if root is None:\n        return []\n\n    result = []\n    queue = deque([root])\n\n    while queue:\n        level_size = len(queue)   # сколько узлов на текущем уровне\n        level_values = []\n\n        for _ in range(level_size):\n            node = queue.popleft()          # O(1)\n            level_values.append(node.value)\n\n            if node.left:\n                queue.append(node.left)     # дети уйдут на следующий уровень\n            if node.right:\n                queue.append(node.right)\n\n        result.append(level_values)\n\n    return result\n```\n\nПример:\n\n```python\n#         1\n#        / \\\n#       2   3\n#      / \\   \\\n#     4   5   6\nroot = Node(1, Node(2, Node(4), Node(5)), Node(3, right=Node(6)))\n\nprint(level_order(root))  # [[1], [2, 3], [4, 5, 6]]\n```\n\n## Как работает алгоритм\n\n1. Кладём корень в очередь.\n2. Пока очередь не пуста:\n   - запоминаем `level_size = len(queue)` — это количество узлов текущего уровня;\n   - извлекаем из очереди ровно `level_size` узлов, собирая их значения;\n   - всех их детей добавляем в конец очереди — они образуют следующий уровень.\n3. Благодаря FIFO-порядку узлы обрабатываются «слоями»: сначала все узлы уровня `i`, потом все узлы уровня `i + 1`.\n\nВажно использовать `collections.deque`, а не список: `list.pop(0)` работает за O(n), тогда как `deque.popleft()` — за O(1).\n\n## Сложность\n\n- **Время: O(n)**, где n — число узлов. Каждый узел добавляется в очередь и извлекается из неё ровно один раз, все операции с очередью — O(1).\n- **Память: O(w)** вспомогательной памяти, где w — максимальная ширина дерева (размер очереди в худший момент). Для полного бинарного дерева w ≈ n/2, т.е. худший случай — O(n); для вырожденного дерева-«цепочки» — O(1). Плюс O(n) на сам результирующий список.",
+      "usage": {
+        "promptTokens": 127,
+        "completionTokens": 1310,
+        "totalTokens": 1437
+      },
+      "timing": {
+        "firstTokenMs": 2977.7023999999997,
+        "totalMs": 5112.4944
+      },
+      "speed": {
+        "tokensPerSec": 256.23
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: приведён рабочий код BFS с группировкой по уровням, дано понятное объяснение и верно указаны сложности. Качество кода высокое."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 2977.7023999999997
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:08.791Z",
+      "answer": "## Исправленный код\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n\nconsole.log(sumArray([1, 2, 3])); // 6\n```\n\n## Причина бага\n\nОшибка в условии цикла: `i <= arr.length` вместо `i < arr.length`.\n\nИндексы массива идут от `0` до `arr.length - 1`. При `i === arr.length` обращение `arr[i]` возвращает `undefined` (выход за границы массива в JS не бросает ошибку, а даёт `undefined`).\n\nДальше происходит следующее:\n\n```javascript\nsum += arr[3]; // 6 + undefined → NaN\n```\n\nЧисло плюс `undefined` даёт `NaN`, и результат портится уже на последней итерации.\n\n## Альтернативные варианты без индекса\n\nЕсли хочется избежать подобных ошибок вообще:\n\n```javascript\n// for...of\nfunction sumArray(arr) {\n  let sum = 0;\n  for (const value of arr) {\n    sum += value;\n  }\n  return sum;\n}\n\n// reduce\nconst sumArray = (arr) => arr.reduce((sum, value) => sum + value, 0);\n```\n\nОба варианта не оперируют индексами, поэтому класс ошибок «на единицу больше» (off-by-one) в них невозможен.",
+      "usage": {
+        "promptTokens": 140,
+        "completionTokens": 404,
+        "totalTokens": 544
+      },
+      "timing": {
+        "firstTokenMs": 726.4349999999995,
+        "totalMs": 1871.925299999999
+      },
+      "speed": {
+        "tokensPerSec": 215.82
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: исправленное условие цикла, точное объяснение причины NaN, а также предложены альтернативные безопасные реализации. Структура и ясность изложения отличные."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 726.4349999999995
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:12.376Z",
+      "answer": "## Построчный разбор\n\n```python\ndef retry(times=3):\n```\nВнешняя функция — **фабрика декораторов**. Принимает параметр `times` (количество попыток, по умолчанию 3). Такая конструкция нужна, потому что декоратор параметризован: `@retry(times=5)` сначала вызовет `retry(5)`, и только потом вернёт сам декоратор.\n\n```python\n    def decorator(func):\n```\nСобственно декоратор. Принимает декорируемую функцию `func`.\n\n```python\n        def wrapper(*args, **kwargs):\n```\nОбёртка, которая заменит собой оригинальную функцию. Принимает любые позиционные (`*args`) и именованные (`**kwargs`) аргументы и прозрачно передаёт их дальше.\n\n```python\n            last_error = None\n```\nПеременная для хранения последнего возникшего исключения.\n\n```python\n            for attempt in range(times):\n```\nЦикл до `times` попыток. (Переменная `attempt` нигде не используется — по конвенции её лучше назвать `_`.)\n\n```python\n                try:\n                    return func(*args, **kwargs)\n```\nВызов оригинальной функции. Если она выполнилась **успешно** — результат немедленно возвращается из `wrapper`, и цикл завершается досрочно.\n\n```python\n                except Exception as e:\n                    last_error = e\n```\nЕсли функция упала — исключение перехватывается (цикл не прерывается) и запоминается в `last_error`. Выполнение переходит к следующей итерации, т.е. к новой попытке.\n\n```python\n            raise last_error\n```\nЕсли цикл закончился (все `times` попыток провалились) — выбрасывается последнее сохранённое исключение. В Python 3 при `raise` объекта исключения сохраняется его исходный traceback.\n\n```python\n        return wrapper\n    return decorator\n```\nДекоратор возвращает обёртку (заменяя ей `func`), а фабрика — сам декоратор.\n\n## Пример использования\n\n```python\nimport random\n\n@retry(times=5)\ndef unstable_api_call():\n    \"\"\"Имитация ненадёжного запроса к API.\"\"\"\n    if random.random() < 0.7:\n        raise ConnectionError(\"Сеть недоступна\")\n    return {\"status\": \"ok\"}\n\nresult = unstable_api_call()\nprint(result)\n```\n\nПример, где все попытки проваливаются:\n\n```python\n@retry(times=3)\ndef always_fails():\n    print(\"Попытка вызова\")\n    raise ValueError(\"Что-то сломалось\")\n\nalways_fails()\n```\n\nВывод:\n\n```text\nПопытка вызова\nПопытка вызова\nПопытка вызова\nTraceback (most recent call last):\n  ...\nValueError: Что-то сломалось\n```\n\n## Нюансы\n\n- **Ловятся все `Exception`** — это слишком широко: так подавляются и ошибки логики (`TypeError` в ваших же аргументах). В реальном коде лучше ограничить: `except (ConnectionError, TimeoutError) as e:`.\n- **Нет паузы между попытками** — обычно добавляют `time.sleep(delay)` перед следующей итерацией.\n- **`times=0` сломает код**: `last_error` останется `None`, и `raise None` вызовет `TypeError`.\n- **Метаданные функции теряются** (имя, docstring) — стоит добавить `@functools.wraps(func)` над `wrapper`.\n\nУлучшенный вариант:\n\n```python\nimport functools\nimport time\n\ndef retry(times=3, delay=1):\n    def decorator(func):\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs):\n            last_error = None\n            for _ in range(times):\n                try:\n                    return func(*args, **kwargs)\n                except Exception as e:\n                    last_error = e\n                    time.sleep(delay)\n            raise last_error\n        return wrapper\n    return decorator\n```",
+      "usage": {
+        "promptTokens": 144,
+        "completionTokens": 1677,
+        "totalTokens": 1821
+      },
+      "timing": {
+        "firstTokenMs": 2969.7962000000007,
+        "totalMs": 6106.704400000002
+      },
+      "speed": {
+        "tokensPerSec": 274.62
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 9,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью раскрывает тему: построчный разбор корректен, примеры наглядны, добавлены полезные нюансы и улучшенный вариант. Технических ошибок нет."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 2969.7962000000007
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:21.918Z",
+      "answer": "```sql\nSELECT\n    u.id,\n    u.name,\n    COUNT(o.id) AS orders_count\nFROM users u\nJOIN orders o ON o.user_id = u.id\nWHERE o.created_at >= CURRENT_DATE - INTERVAL '1 month'\nGROUP BY u.id, u.name\nORDER BY orders_count DESC\nLIMIT 3;\n```\n\n**Пояснение:**\n\n- `JOIN orders o ON o.user_id = u.id` — соединяем пользователей с их заказами (INNER JOIN отсекает пользователей без заказов, что для топа и нужно).\n- `WHERE o.created_at >= CURRENT_DATE - INTERVAL '1 month'` — фильтруем заказы за последний месяц (скользящие 30 дней).\n- `GROUP BY u.id, u.name` — группируем заказы по пользователю; `COUNT(o.id)` считает их количество.\n- `ORDER BY orders_count DESC LIMIT 3` — сортируем по убыванию и берём топ-3.\n\n**Нюансы:**\n\n- Синтаксис интервала зависит от СУБД. Для MySQL: `WHERE o.created_at >= CURDATE() - INTERVAL 1 MONTH`.\n- Если нужен именно **прошлый календарный месяц** (а не последние 30 дней), в PostgreSQL:\n  ```sql\n  WHERE o.created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'\n    AND o.created_at <  date_trunc('month', CURRENT_DATE)\n  ```\n- Если возможны одинаковые количества заказов и нужно показать всех при дележе 3-го места — используйте `DENSE_RANK()` в CTE с фильтром `WHERE rn <= 3`.",
+      "usage": {
+        "promptTokens": 100,
+        "completionTokens": 740,
+        "totalTokens": 840
+      },
+      "timing": {
+        "firstTokenMs": 1939.4334000000017,
+        "totalMs": 3444.7621
+      },
+      "speed": {
+        "tokensPerSec": 214.82
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: запрос выбирает топ-3 пользователей по количеству заказов за последний месяц, пояснение ясное и структурированное. Модель также учла нюансы разных СУБД и альтернативные интерпретации периода, что повышает полноту."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 1939.4334000000017
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:28.275Z",
+      "answer": "## Вариант с `util.promisify` (Node.js)\n\n```javascript\nconst { promisify } = require('util');\n\nconst getUserP = promisify(getUser);\nconst getOrdersP = promisify(getOrders);\nconst getDetailsP = promisify(getDetails);\n\nasync function loadUserDetails(id) {\n  try {\n    const user = await getUserP(id);\n    const orders = await getOrdersP(user);\n    const details = await getDetailsP(orders[0]);\n    console.log(details);\n  } catch (err) {\n    console.error(err);\n  }\n}\n\nloadUserDetails(id);\n```\n\n## Если `util.promisify` недоступен — ручная обёртка\n\n```javascript\nconst toPromise = (fn) => (...args) =>\n  new Promise((resolve, reject) => {\n    fn(...args, (err, result) => (err ? reject(err) : resolve(result)));\n  });\n\nconst getUserP = toPromise(getUser);\nconst getOrdersP = toPromise(getOrders);\nconst getDetailsP = toPromise(getDetails);\n```\n\n## Что изменилось\n\n- **Порядок вызовов сохранён**: `getUser → getOrders → getDetails`, всё последовательно через `await`.\n- **Обработка ошибок**: три одинаковых `if (err) return console.error(err)` схлопнулись в один `try/catch` — поведение то же (логируем и выходим), но без дублирования.\n- **«Пирамида» устранена**: код читается сверху вниз как синхронный.\n\n## Нюансы\n\n- Не забудьте **вызвать** async-функцию — простое её объявление ничего не запустит.\n- Если функции уже предоставляют promise-версии (многие библиотеки дают и то, и другое) — используйте их напрямую, промисификация не нужна.\n- Обратите внимание: `orders[0]` упадёт с `TypeError`, если массив пуст. Это проблема и в исходном коде, но при желании можно добавить явную проверку:\n\n```javascript\nif (!orders.length) {\n  console.error(new Error('Нет заказов у пользователя'));\n  return;\n}\n```",
+      "usage": {
+        "promptTokens": 155,
+        "completionTokens": 1179,
+        "totalTokens": 1334
+      },
+      "timing": {
+        "firstTokenMs": 2666.386199999997,
+        "totalMs": 4261.1963
+      },
+      "speed": {
+        "tokensPerSec": 276.68
+      },
+      "judge": {
+        "correctness": 9,
+        "clarity": 9,
+        "completeness": 9,
+        "codeQuality": 9,
+        "overallScore": 9,
+        "judgeNotes": "Ответ корректно преобразует callback-цепочку в async/await, сохраняя порядок вызовов и обработку ошибок через try/catch. Предложены два подхода (promisify и ручная обёртка), объяснены изменения и добавлены полезные нюансы. Небольшие упущения: не показан импорт promisify в первом варианте и вызов функции во втором, но это не влияет на общее качество."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 2666.386199999997
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t0.1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 0.1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:36.652Z",
+      "answer": "## Вывод\n\n```\nundefined\nundefined\n10\n```\n\n## Пошаговый разбор\n\n**1. Фаза hoisting (поднятие объявлений)**\n\nДо выполнения любой строки интерпретатор JS «поднимает» объявления:\n\n- `var a` в глобальной области → объявление поднимается наверх и инициализируется значением `undefined` (присваивание `= 5` остаётся на месте);\n- объявление функции `f` поднимается целиком (вместе с телом).\n\nФактически код для движка выглядит так:\n\n```javascript\nvar a;          // undefined\nfunction f() {\n  var a;        // локальная a, undefined — тень глобальной\n  console.log(a); // undefined\n  a = 10;\n  console.log(a); // 10\n}\n\nconsole.log(typeof a); // \"undefined\"\na = 5;\nf();\n```\n\n**2. `console.log(typeof a)`**\n\nНа этот момент `a` уже объявлена (hoisting), но равна `undefined`. Оператор `typeof` возвращает строку `\"undefined\"`.\n\n> Нюанс: `typeof` — единственный оператор, который не бросает ошибку для необъявленной переменной. Но здесь переменная *объявлена*, просто ещё не инициализирована.\n\n**3. `var a = 5`**\n\nВыполняется присваивание — глобальная `a` теперь равна `5`.\n\n**4. Вызов `f()`**\n\nВнутри функции есть собственное `var a = 10`. Из-за hoisting локальная `a` создаётся в начале **функциональной области видимости** и затеняет (shadowing) глобальную:\n\n- Первый `console.log(a)` → локальная `a` ещё `undefined`, поэтому печатается `undefined`. Глобальная пятёрка «не видна» — объявление локальной `a` перекрыло её во всей функции.\n- `a = 10` → присваивается локальной переменной.\n- Второй `console.log(a)` → печатается `10`.\n\n## Ключевые моменты\n\n1. **`var` поднимается с инициализацией в `undefined`**, а `let`/`const` поднимаются, но остаются в *temporal dead zone* — обращение к ним до объявления бросает `ReferenceError`.\n2. **Область видимости `var` — функция**, а не блок. Объявление `var a` действует с первой строки функции `f`, поэтому глобальная `a = 5` внутри `f` недоступна.\n3. Если бы `var a = 10` внутри `f` не было, первый `console.log(a)` напечатал бы `5` — значение взялось бы из внешней области по цепочке scope chain.",
+      "usage": {
+        "promptTokens": 101,
+        "completionTokens": 1152,
+        "totalTokens": 1253
+      },
+      "timing": {
+        "firstTokenMs": 3822.5170999999973,
+        "totalMs": 6565.476699999999
+      },
+      "speed": {
+        "tokensPerSec": 175.46
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью верен: вывод undefined, undefined, 10 объяснён через hoisting, функциональную область видимости и затенение. Разбор структурирован, включает важные нюансы typeof и сравнение с let/const. Качество рассуждений и иллюстративного кода отличное."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 3822.5170999999973
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:45.095Z",
+      "answer": "## Код\n\n```python\nfrom collections import deque\n\n\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\n\ndef level_order(root):\n    \"\"\"Обход бинарного дерева в ширину. Возвращает список уровней,\n    каждый уровень — список значений узлов.\"\"\"\n    if root is None:\n        return []\n\n    result = []\n    queue = deque([root])\n\n    while queue:\n        level_size = len(queue)   # количество узлов на текущем уровне\n        level = []\n\n        for _ in range(level_size):\n            node = queue.popleft()\n            level.append(node.value)\n\n            if node.left:\n                queue.append(node.left)\n            if node.right:\n                queue.append(node.right)\n\n        result.append(level)\n\n    return result\n```\n\n## Как работает алгоритм\n\n1. **Очередь (FIFO).** Обход в ширину naturally реализуется через очередь: узлы обрабатываются в порядке добавления, поэтому уровень за уровнем. Используется `collections.deque`, потому что `popleft()` работает за O(1) (в отличие от `list.pop(0)`, который за O(n)).\n\n2. **Разделение на уровни.** Ключевой приём — перед обработкой уровня фиксируем его размер: `level_size = len(queue)`. В очереди в этот момент лежат ровно узлы текущего уровня. Обрабатываем ровно `level_size` узлов, а их дети (следующий уровень) добавляются в конец очереди — они автоматически попадут на следующую итерацию `while`.\n\n3. **Порядок внутри уровня.** Дети добавляются слева направо (`left`, затем `right`), поэтому и порядокений внутри уровня — слеваимер:\n\n```python\n#        1\n#       / \\\n#      2   3\n#     / \\    \\\n#    4   5    6\n\nroot = Node(1, Node(2, Node(4), Node(5)), Node(3, right=Node(6)))\nprint(level_order(root))  # [[1], [2, 3], [4, 5, 6]]\n```\n\n## Сложность\n\n- **Время: O(n)** — каждый узел добавляется в очередь и извлекается из неё ровно один раз, все операции с узлом — O(1).\n- **Память: O(w)** — очередь в худший момент содержит узлы одного уровня, где `w` — максимальная ширина дерева. Для вырожденного дерева (список) это O(1), для полного бинарного дерева последний уровень содержит до ⌈n/2⌉ узлов, т.е. в худшем случае O(n). Дополнительно O(n) занимает сам результат, но это выходные данные.",
+      "usage": {
+        "promptTokens": 127,
+        "completionTokens": 957,
+        "totalTokens": 1084
+      },
+      "timing": {
+        "firstTokenMs": 1720.7174999999988,
+        "totalMs": 4356.504799999995
+      },
+      "speed": {
+        "tokensPerSec": 219.67
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 8,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 9,
+        "judgeNotes": "Алгоритм реализован верно: используется deque, уровни разделяются через фиксацию размера очереди, сложность указана корректно. Небольшие опечатки в тексте объяснения немного снижают ясность, но не влияют на техническую правильность."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 1720.7174999999988
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:51.512Z",
+      "answer": "## Исправленный код\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {  // было: i <= arr.length\n    sum += arr[i];\n  }\n  return sum;\n}\n\nconsole.log(sumArray([1, 2, 3])); // 6\n```\n\n## Причина бага\n\nУсловие `i <= arr.length` выполняет одну **лишнюю итерацию** — когда `i === arr.length`.\n\nИндексы массива идут от `0` до `arr.length - 1`. На последней итерации:\n\n```javascript\narr[3] // undefined, так как длина массива = 3, последний индекс = 2\nsum += undefined; // 6 + undefined → NaN\n```\n\nВ JavaScript любое число в арифметической операции с `undefined` даёт `NaN`, и результат «заражается»: `NaN` распространяется на весь `sum`, поэтому функция возвращает `NaN`.\n\n## Альтернативные варианты без риска такой ошибки\n\n```javascript\n// for...of — нет ручного управления индексом\nfunction sumArray(arr) {\n  let sum = 0;\n  for (const value of arr) {\n    sum += value;\n  }\n  return sum;\n}\n\n// reduce — декларативно\nconst sumArray = (arr) => arr.reduce((sum, value) => sum + value, 0);\n```\n\n**Вывод:** классическая ошибка «off-by-one». При обходе массива по индексу всегда используйте строгое сравнение `i < arr.length`.",
+      "usage": {
+        "promptTokens": 140,
+        "completionTokens": 463,
+        "totalTokens": 603
+      },
+      "timing": {
+        "firstTokenMs": 1177.4580999999962,
+        "totalMs": 2656.2967999999964
+      },
+      "speed": {
+        "tokensPerSec": 174.3
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен: исправление off-by-one ошибки, ясное объяснение причины NaN и дополнительные альтернативные реализации. Всё структурировано и отвечает на вопрос."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 1177.4580999999962
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:14:55.362Z",
+      "answer": "## Построчный разбор\n\nЭто **декоратор с параметрами** (декоратор-фабрика) — он повторяет вызов функции при ошибках до `times` раз.\n\n```python\ndef retry(times=3):\n```\nВнешняя функция — «фабрика декораторов». Принимает параметр `times` (число попыток, по умолчанию 3). Нужна, чтобы декоратор можно было настраивать: `@retry(times=5)`.\n\n```python\n    def decorator(func):\n```\nСобственно декоратор: принимает декорируемую функцию `func`. Вызывается после `retry`, когда Python применяет декоратор к функции.\n\n```python\n        def wrapper(*args, **kwargs):\n```\nОбёртка, которая заменит собой оригинальную функцию. Принимает любые позиционные (`*args`) и именованные (`**kwargs`) аргументы и проксирует их дальше.\n\n```python\n            last_error = None\n```\nПеременная для хранения последнего исключения — понадобится, если все попытки провалятся.\n\n```python\n            for attempt in range(times):\n```\nЦикл до `times` попыток (при `times=3` — попытки 0, 1, 2).\n\n```python\n                try:\n                    return func(*args, **kwargs)\n```\nВызов оригинальной функции с переданными аргументами. Если она выполнилась успешно — результат **немедленно возвращается** из `wrapper`, дальнейшие попытки не нужны (выход из цикла через `return`).\n\n```python\n                except Exception as e:\n                    last_error = e\n```\nЛовим **любое** исключение класса `Exception` (то есть не перехватываются `KeyboardInterrupt`, `SystemExit` и `GeneratorExit` — они наследуются напрямую от `BaseException`). Исключение не пробрасывается дальше, а сохраняется в `last_error`, и цикл переходит к следующей попытке.\n\n```python\n            raise last_error\n```\nЕсли цикл закончился (все `times` попыток неудачны) — пробрасываем последнее сохранённое исключение. В Python 3 при `raise` объекта исключения сохраняется его исходный traceback.\n\n```python\n        return wrapper\n```\nДекоратор возвращает обёртку — именно она станет «новой» версией функции.\n\n```python\n    return decorator\n```\nФабрика возвращает сам декоратор.\n\n## Пример использования\n\n```python\nimport random\n\n@retry(times=5)\ndef unstable_api_call():\n    \"\"\"Имитация ненадёжного запроса к API.\"\"\"\n    if random.random() < 0.7:\n        raise ConnectionError(\"Сеть недоступна\")\n    return {\"status\": \"ok\"}\n\nresult = unstable_api_call()\nprint(result)\n```\n\nФункция будет вызываться до 5 раз, пока не вернёт результат. Если все 5 попыток упадут — получим `ConnectionError` с последней ошибкой.\n\nДемонстрация с подсчётом вызовов:\n\n```python\ncalls = 0\n\n@retry(times=3)\ndef flaky():\n    global calls\n    calls += 1\n    print(f\"Попытка №{calls}\")\n    if calls < 3:\n        raise ValueError(\"Временный сбой\")\n    return \"успех\"\n\nprint(flaky())\n```\n\nВывод:\n\n```text\nПопытка №1\nПопытка №2\nПопытка №3\nуспех\n```\n\nЭквивалентная запись без синтаксиса декоратора:\n\n```python\nflaky = retry(times=3)(flaky)\n```\n\n## Замечания по улучшению\n\n- `attempt` не используется — идиоматичнее писать `for _ in range(times):`.\n- Стоит добавить `@functools.wraps(func)` над `wrapper`, чтобы сохранить `__name__` и `__doc__` оригинальной функции.\n- Полезна пауза между попытками: `time.sleep(1)` перед следующей итерацией.\n- Ловить **все** `Exception` — грубо; лучше параметризовать: `def retry(times=3, exceptions=(Exception,))` и писать `except exceptions as e`.",
+      "usage": {
+        "promptTokens": 144,
+        "completionTokens": 1801,
+        "totalTokens": 1945
+      },
+      "timing": {
+        "firstTokenMs": 3878.2707999999984,
+        "totalMs": 8325.758200000004
+      },
+      "speed": {
+        "tokensPerSec": 216.32
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 9,
+        "overallScore": 9,
+        "judgeNotes": "Ответ полностью раскрывает тему: построчный разбор корректен, примеры наглядны, добавлены полезные замечания. Небольшие недочёты в коде (например, отсутствие functools.wraps) не влияют на общее качество."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 3878.2707999999984
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:15:06.693Z",
+      "answer": "```sql\nSELECT u.id,\n       u.name,\n       COUNT(o.id) AS orders_count\nFROM users u\nJOIN orders o ON o.user_id = u.id\nWHERE o.created_at >= CURRENT_DATE - INTERVAL '1 month'\nGROUP BY u.id, u.name\nORDER BY orders_count DESC\nLIMIT 3;\n```\n\n**Пояснение:**\n- `JOIN` — соединяем пользователей с их заказами;\n- `WHERE` — оставляем только заказы за последний месяц (скользящие 30 дней);\n- `GROUP BY` — агрегируем заказы по каждому пользователю;\n- `COUNT(o.id)` — считаем число заказов;\n- `ORDER BY ... DESC` + `LIMIT 3` — сортируем по убыванию и берём топ-3.\n\n**Нюансы:**\n- Запрос для PostgreSQL. В MySQL условие даты: `o.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)`.\n- Если «последний месяц» — предыдущий календарный месяц, в PostgreSQL условие будет: `o.created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month' AND o.created_at < date_trunc('month', CURRENT_DATE)`.\n- `INNER JOIN` исключит пользователей без заказов — для топа по количеству это обычно и нужно.",
+      "usage": {
+        "promptTokens": 100,
+        "completionTokens": 620,
+        "totalTokens": 720
+      },
+      "timing": {
+        "firstTokenMs": 1811.0659000000014,
+        "totalMs": 2750.7842999999993
+      },
+      "speed": {
+        "tokensPerSec": 225.39
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью корректен, содержит рабочий SQL-запрос, подробное пояснение и дополнительные нюансы для разных СУБД. Ясность и полнота на высоком уровне."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 1811.0659000000014
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:15:12.863Z",
+      "answer": "## Вариант 1: через `util.promisify` (Node.js)\n\n```javascript\nconst { promisify } = require('util');\n\nconst getUserP = promisify(getUser);\nconst getOrdersP = promisify(getOrders);\nconst getDetailsP = promisify(getDetails);\n\nasync function loadUserDetails(id) {\n  try {\n    const user = await getUserP(id);\n    const orders = await getOrdersP(user);\n    const details = await getDetailsP(orders[0]);\n    console.log(details);\n  } catch (err) {\n    console.error(err);\n  }\n}\n\nloadUserDetails(42);\n```\n\n## Вариант 2: свой промисификатор (если нет `util.promisify`)\n\n```javascript\nfunction toPromise(fn) {\n  return (...args) =>\n    new Promise((resolve, reject) => {\n      fn(...args, (err, result) => (err ? reject(err) : resolve(result)));\n    });\n}\n\nconst getUserP = toPromise(getUser);\nconst getOrdersP = toPromise(getOrders);\nconst getDetailsP = toPromise(getDetails);\n\nasync function loadUserDetails(id) {\n  try {\n    const user = await getUserP(id);\n    const orders = await getOrdersP(user);\n    const details = await getDetailsP(orders[0]);\n    console.log(details);\n  } catch (err) {\n    console.error(err);\n  }\n}\n```\n\n## Замечания\n\n- **Порядок вызовов сохранён**: `getUser → getOrders → getDetails`, каждый шаг ждёт завершения предыдущего.\n- **Один `try/catch` заменяет три проверки `if (err)`** — семантика та же: первая же ошибка прерывает цепочку и логируется.\n- Если нужно знать, **на каком шаге упало**, добавьте контекст:\n\n```javascript\nasync function loadUserDetails(id) {\n  try {\n    const user = await getUserP(id);\n  } catch (err) {\n    return console.error('Ошибка getUser:', err);\n  }\n  try {\n    const orders = await getOrdersP(user);\n  } catch (err) {\n    return console.error('Ошибка getOrders:', err);\n  }\n  try {\n    const details = await getDetailsP(orders[0]);\n  } catch (err) {\n    return console.error('Ошибка getDetails:', err);\n  }\n  console.log(details);\n}\n```\n\n- Стоит учесть краевой случай: если `orders` пуст, `orders[0]` будет `undefined`. При желании добавьте проверку `if (!orders.length) throw new Error('Нет заказов');` — она тоже попадёт в `catch`.",
+      "usage": {
+        "promptTokens": 155,
+        "completionTokens": 977,
+        "totalTokens": 1132
+      },
+      "timing": {
+        "firstTokenMs": 2665.5427000000054,
+        "totalMs": 4591.133900000001
+      },
+      "speed": {
+        "tokensPerSec": 212.8
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 9,
+        "completeness": 9,
+        "codeQuality": 8,
+        "overallScore": 8,
+        "judgeNotes": "Основные варианты корректны и сохраняют порядок вызовов, но дополнительный пример с раздельными try/catch содержит ошибку области видимости: переменные user, orders и details объявлены внутри блоков try и недоступны в последующих блоках. Это снижает общую оценку, хотя главный ответ верен."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 2665.5427000000054
+      },
+      "error": null
+    },
+    {
+      "configId": "gpustack/glm-5.3-flash@t1",
+      "providerType": "gpustack",
+      "model": "glm-5.3-flash",
+      "temperature": 1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:15:20.760Z",
+      "answer": "## Вывод\n\n```\nundefined\nundefined\n10\n```\n\n## Пошаговое объяснение\n\n### Шаг 1. Фаза hoisting (поднятия)\n\nДо выполнения кода интерпретатор JS «поднимает» объявления:\n\n- `var a` в глобальной области → поднимается как `a = undefined`\n- `function f` → поднимается целиком (объявление + тело)\n- `var a` **внутри** `f` → поднимается в начало **функции** как `a = undefined`\n\nФактически движок видит код так:\n\n```javascript\nvar a;          // undefined\nfunction f() {\n  var a;        // локальная a = undefined, \"затеняет\" глобальную\n  console.log(a);\n  a = 10;\n  console.log(a);\n}\n\nconsole.log(typeof a);\na = 5;\nf();\n```\n\n### Шаг 2. `console.log(typeof a)`\n\n`a` на этот момент объявлена (`var a` поднялось), но не инициализирована — значение `undefined`. Оператор `typeof` возвращает строку `\"undefined\"`.\n\n> Нюанс: `typeof` — единственный оператор, который не бросает `ReferenceError` на необъявленной переменной. Даже если `var a` убрать совсем, результат был бы тот же — `\"undefined\"`.\n\n### Шаг 3. `var a = 5`\n\nПрисваивание: глобальная `a` становится `5`. Но это уже не повлияет на `f`, потому что внутри функции объявлена **своя** `a`.\n\n### Шаг 4. Вызов `f()`\n\nКлючевой момент — **затенение (shadowing)**. Из-за hoisting локальная `var a` существует во всей области видимости функции, поэтому глобальная `a = 5` внутри `f` недоступна вообще.\n\n1. `console.log(a)` → локальная `a` объявлена, но ещё не присвоена → **`undefined`** (не `5`!)\n2. `a = 10` → присваивание локальной переменной\n3. `console.log(a)` → **`10`**\n\n## Итог\n\n| Момент | Что происходит |\n|---|---|\n| `typeof a` | `var a` поднялось → `\"undefined\"` |\n| Первый `console.log(a)` в `f` | локальное `a` затеняет глобальное, ещё `undefined` |\n| Второй `console.log(a)` | локальной `a` присвоено `10` |\n\nЕсли бы внутри `f` не было `var a`, оба вызова вывели бы `5` — шло бы обращение к глобальной переменной.",
+      "usage": {
+        "promptTokens": 101,
+        "completionTokens": 1121,
+        "totalTokens": 1222
+      },
+      "timing": {
+        "firstTokenMs": 2341.3858000000037,
+        "totalMs": 4913.620899999994
+      },
+      "speed": {
+        "tokensPerSec": 228.14
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Ответ полностью верен: корректно объяснены hoisting, затенение переменной и вывод undefined, undefined, 10. Пошаговое объяснение ясное и полное, включает важный нюанс про typeof. Качество рассуждений отличное."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": false,
+        "note": "remote (server-side), not measurable locally",
+        "netRoundTripMs": 2341.3858000000037
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:15:28.780Z",
+      "answer": "Для обхода бинарного дерева в ширину (BFS) можно использовать очередь (queue). Алгоритм будет работать следующим образом:\n\n1. Создать очередь и добавить корневой узел в нее.\n2. Создать пустой список для хранения значений узлов по уровням.\n3. Пока очередь не пуста:\n   - Получить количество узлов на текущем уровне.\n   - Для каждого узла на текущем уровне:\n     - Добавить его значение в список значений.\n     - Добавить его левого и правого потомков в очередь, если они существуют.\n4. Вернуть список значений.\n\nСложность этого алгоритма составляет O(n), где n - количество узлов в дереве, так как каждый узел будет обработан ровно один раз.\n\nВот реализация функции на Python:\n\n```python\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef bfs(root):\n    if not root:\n        return []\n\n    result = []\n    queue = [root]\n\n    while queue:\n        level_size = len(queue)\n        current_level_values = []\n\n        for _ in range(level_size):\n            node = queue.pop(0)\n            current_level_values.append(node.value)\n\n            if node.left:\n                queue.append(node.left)\n            if node.right:\n                queue.append(node.right)\n\n        result.append(current_level_values)\n\n    return result\n\n# Пример использования:\n# Создание дерева\n#       1\n#      / \\\n#     2   3\n#    / \\\n#   4   5\n\nroot = Node(1)\nroot.left = Node(2)\nroot.right = Node(3)\nroot.left.left = Node(4)\nroot.left.right = Node(5)\n\n# Обход дерева в ширину\nprint(bfs(root))  # Вывод: [[1], [2, 3], [4, 5]]\n```\n\nВ этом примере функция `bfs` принимает корневой узел дерева и возвращает список значений узлов по уровням.",
+      "usage": {
+        "promptTokens": 148,
+        "completionTokens": 484,
+        "totalTokens": 632
+      },
+      "timing": {
+        "firstTokenMs": 244.40699999999197,
+        "totalMs": 96568.4796
+      },
+      "speed": {
+        "tokensPerSec": 5.01
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 9,
+        "completeness": 8,
+        "codeQuality": 6,
+        "overallScore": 7,
+        "judgeNotes": "Алгоритм описан верно, но реализация использует list.pop(0), что приводит к фактической сложности O(n^2), а не заявленной O(n). Для корректной BFS следует использовать collections.deque. В остальном ответ структурирован и содержит пример."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:17:09.802Z",
+      "answer": "Ваш код содержит баг, связанную с индексацией массива. В цикле `for` вы используете `i <= arr.length`, что приводит к тому, что вы попытаетесь получить доступ к элементу массива с индексом `arr.length`, который выходит за пределы массива. Это вызывает ошибку `TypeError: Cannot read property '0' of undefined`, что приводит к `NaN` в результате.\n\nЧтобы исправить этот баг, нужно изменить условие цикла на `i < arr.length`. Вот исправленный код:\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n\n// Ожидается: sumArray([1, 2, 3]) === 6, фактически возвращается 6\n```\n\nТеперь цикл будет правильно проходить по всем элементам массива, и вы получите правильный результат `6`.",
+      "usage": {
+        "promptTokens": 158,
+        "completionTokens": 246,
+        "totalTokens": 404
+      },
+      "timing": {
+        "firstTokenMs": 238.30689999999595,
+        "totalMs": 52355.320999999996
+      },
+      "speed": {
+        "tokensPerSec": 4.7
+      },
+      "judge": {
+        "correctness": 9,
+        "clarity": 9,
+        "completeness": 9,
+        "codeQuality": 10,
+        "overallScore": 9,
+        "judgeNotes": "Ответ верно определяет причину бага (выход за границы массива) и предлагает правильное исправление условия цикла. Однако неточно описывает возникающую ошибку как TypeError, тогда как фактически результатом является NaN из-за сложения с undefined."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:18:04.274Z",
+      "answer": "Этот Python-код представляет собой декоратор, который позволяет повторять вызов функции несколько раз в случае возникновения исключения. Давайте разберем его построчно:\n\n1. **Функция `retry(times=3)`**:\n   - Эта функция принимает один аргумент `times` с дефолтным значением `3`. Это количество повторений, которое будет производиться при возникновении исключения.\n\n2. **Внутренняя функция `decorator(func)`**:\n   - Эта функция принимает функцию `func` в качестве аргумента и возвращает новую функцию `wrapper`.\n\n3. **Внутренняя функция `wrapper(*args, **kwargs)`**:\n   - Эта функция является оберткой вокруг оригинальной функции `func`.\n   - Она содержит переменную `last_error`, которая будет хранить последнее возникшее исключение.\n   - В цикле `for attempt in range(times)` происходит повторение вызова функции `func` до тех пор, пока не будет выполнено указанное количество повторений (`times`).\n\n4. **Внутренняя функция `wrapper(*args, **kwargs)`**:\n   - Внутри цикла `try` выполняется вызов оригинальной функции `func` с переданными аргументами `*args` и `**kwargs`.\n   - Если функция успешно завершается, возвращается её результат.\n   - Если возникает исключение, оно сохраняется в переменной `last_error`.\n\n5. **Внутренняя функция `wrapper(*args, **kwargs)`**:\n   - После завершения цикла, если все попытки вызова функции завершились с исключениями, функция `wrapper` вызывает исключение `last_error` и прекращает выполнение.\n\n**Пример использования**:\n\n```python\n@retry(times=5)\ndef divide(a, b):\n    return a / b\n\ntry:\n    result = divide(10, 0)\n    print(\"Результат:\", result)\nexcept Exception as e:\n    print(\"Ошибка:\", e)\n```\n\nВ этом примере:\n- Функция `divide` принимает два аргумента `a` и `b` и возвращает их деление.\n- Декоратор `@retry(times=5)` добавляет возможность повторять вызов `divide` до пяти попыток при возникновении исключения `ZeroDivisionError`.\n- При попытке разделить на ноль, функция `divide` будет вызываться пять раз, и после пяти попыток будет вызвано исключение `ZeroDivisionError`.\n- В блоке `try-except` обрабатывается исключение и выводится сообщение об ошибке.",
+      "usage": {
+        "promptTokens": 157,
+        "completionTokens": 616,
+        "totalTokens": 773
+      },
+      "timing": {
+        "firstTokenMs": 4542.2830999999715,
+        "totalMs": 125629.56719999999
+      },
+      "speed": {
+        "tokensPerSec": 4.9
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 7,
+        "completeness": 8,
+        "codeQuality": 8,
+        "overallScore": 8,
+        "judgeNotes": "Ответ в целом верен, но структура изложения повторяет описание wrapper несколько раз, а также не упомянуты некоторые детали (например, поведение при times=0). Пример использования корректен."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:20:13.413Z",
+      "answer": "Для выполнения этого запроса нам потребуется использовать функцию `DATE_TRUNC` для отсечения времени из даты создания заказов и функцию `COUNT` для подсчета количества заказов для каждого пользователя. Затем мы будем использовать `ORDER BY` для сортировки пользователей по количеству заказов в порядке убывания и `LIMIT` для получения топ-3 пользователей.\n\nВот SQL-запрос:\n\n```sql\nSELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nJOIN orders o ON u.id = o.user_id\nWHERE o.created_at >= DATE_TRUNC('month', CURRENT_DATE)\nGROUP BY u.id, u.name\nORDER BY order_count DESC\nLIMIT 3;\n```\n\n### Объяснение запроса:\n\n1. **JOIN**: Мы объединяем таблицы `users` и `orders` по столбцу `user_id`, чтобы получить информацию о пользователях и их заказах.\n\n2. **WHERE**: Условие `WHERE o.created_at >= DATE_TRUNC('month', CURRENT_DATE)` фильтрует заказы, созданные за последний месяц. `DATE_TRUNC('month', CURRENT_DATE)` возвращает начало текущего месяца.\n\n3. **GROUP BY**: Мы группируем результаты по `user_id` и `name`, чтобы подсчитать количество заказов для каждого пользователя.\n\n4. **COUNT**: Функция `COUNT(o.id)` подсчитывает количество заказов для каждого пользователя.\n\n5. **ORDER BY**: Результаты сортируются по количеству заказов в порядке убывания.\n\n6. **LIMIT**: Мы ограничиваем результаты на топ-3 пользователей.\n\nЭтот запрос вернет топ-3 пользователей по количеству заказов за последний месяц, с указанием их идентификаторов, имен и количества заказов.",
+      "usage": {
+        "promptTokens": 115,
+        "completionTokens": 425,
+        "totalTokens": 540
+      },
+      "timing": {
+        "firstTokenMs": 2411.250699999975,
+        "totalMs": 84289.5993
+      },
+      "speed": {
+        "tokensPerSec": 5.04
+      },
+      "judge": {
+        "correctness": 7,
+        "clarity": 9,
+        "completeness": 8,
+        "codeQuality": 9,
+        "overallScore": 8,
+        "judgeNotes": "Запрос корректен для интерпретации 'за последний месяц' как текущий календарный месяц, однако в SQL обычно под этим понимают последние 30 дней (INTERVAL '1 month'). Объяснение ясное и структурированное, но стоило уточнить или использовать более универсальное условие."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:21:43.550Z",
+      "answer": "Для отрефакторинга данного кода в `async/await` с обработкой ошибок, можно использовать конструкцию `try...catch` и `await`. Вот как это можно сделать:\n\n```javascript\nasync function getUser(id) {\n  try {\n    const response = await fetch(`https://api.example.com/users/${id}`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch user: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching user:', err);\n    throw err; // Перебрасываем ошибку дальше\n  }\n}\n\nasync function getOrders(user) {\n  try {\n    const response = await fetch(`https://api.example.com/users/${user.id}/orders`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch orders: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching orders:', err);\n    throw err; // Перебрасываем ошибку дальше\n  }\n}\n\nasync function getDetails(order) {\n  try {\n    const response = await fetch(`https://api.example.com/orders/${order.id}/details`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch details: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching details:', err);\n    throw err; // Перебрасываем ошибку дальше\n  }\n}\n\nasync function main() {\n  try {\n    const id = 123; // Пример ID пользователя\n    const user = await getUser(id);\n    const orders = await getOrders(user);\n    const details = await getDetails(orders[0]);\n    console.log(details);\n  } catch (err) {\n    console.error('Error in main function:', err);\n  }\n}\n\nmain();\n```\n\n### Объяснение:\n1. **Функции `getUser`, `getOrders`, `getDetails`:** Эти функции теперь асинхронные и используют `await` для выполнения HTTP-запросов. В случае ошибки они выбрасывают ошибку, что перебрасывается дальше.\n2. **Функция `main`:** Эта функция вызывает все три асинхронные функции в последовательности. Она также использует `try...catch` для обработки ошибок, которые могут возникнуть в любой из этих функций.\n3. **Обработка ошибок:** В случае возникновения ошибки в любом из вызовов функций, она будет被捕раиваться в блоке `catch` в функции `main`, и сообщение об ошибке будет выведено в консоль.\n\nЭтот подход позволяет сохранить порядок вызовов и обрабатывать ошибки в более читаемом и удобном стиле.",
+      "usage": {
+        "promptTokens": 164,
+        "completionTokens": 614,
+        "totalTokens": 778
+      },
+      "timing": {
+        "firstTokenMs": 4401.091500000039,
+        "totalMs": 122007.9668
+      },
+      "speed": {
+        "tokensPerSec": 5.03
+      },
+      "judge": {
+        "correctness": 2,
+        "clarity": 5,
+        "completeness": 3,
+        "codeQuality": 4,
+        "overallScore": 3,
+        "judgeNotes": "Модель не выполнила задачу: вместо рефакторинга исходного callback-кода она переписала функции с использованием fetch, что не соответствует исходному коду. Необходимо было обернуть существующие функции в промисы и использовать await в try/catch, сохранив порядок вызовов."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 0.1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:23:48.722Z",
+      "answer": "Код выведет следующее:\n\n```\nundefined\n10\n```\n\nПояснение шаг за шагом:\n\n1. `console.log(typeof a);`\n   - В этой строке мы пытаемся получить тип переменной `a`. Переменная `a` была объявлена, но не инициализирована, поэтому она имеет значение `undefined`.\n   - Вывод: `undefined`\n\n2. `var a = 5;`\n   - В этой строке мы объявляем переменную `a` и инициализируем её значением `5`.\n\n3. `function f() {`\n   - В этой строке мы объявляем функцию `f`.\n\n4. `console.log(a);`\n   - Внутри функции `f`, мы пытаемся получить значение переменной `a`. Переменная `a` была объявлена внутри функции, поэтому она имеет значение `5`.\n   - Вывод: `5`\n\n5. `var a = 10;`\n   - В этой строке мы переопределяем переменную `a` внутри функции `f` и инициализируем её значением `10`.\n\n6. `console.log(a);`\n   - Внутри функции `f`, мы пытаемся получить значение переменной `a` снова. Теперь переменная `a` имеет значение `10`.\n   - Вывод: `10`\n\n7. `f();`\n   - В этой строке мы вызываем функцию `f`.\n\nТаким образом, вывод программы соответствует ожидаемому результату: `undefined` (из первой строки), затем `5` (из второй строки внутри функции), и затем `10` (из третьей строки внутри функции).",
+      "usage": {
+        "promptTokens": 114,
+        "completionTokens": 386,
+        "totalTokens": 500
+      },
+      "timing": {
+        "firstTokenMs": 2284.8575999999885,
+        "totalMs": 77653.81330000004
+      },
+      "speed": {
+        "tokensPerSec": 4.97
+      },
+      "judge": {
+        "correctness": 2,
+        "clarity": 5,
+        "completeness": 4,
+        "codeQuality": 3,
+        "overallScore": 3,
+        "judgeNotes": "Модель неверно объясняет поведение внутри функции: из-за hoisting переменная a в f() локальная и в первом console.log(a) даёт undefined, а не 5. Итоговый вывод в ответе также противоречив: заявлено 'undefined 10', но пошагово указано 5."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2316,
+        "avgCpuPct": 776.93156303972,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:25:08.333Z",
+      "answer": "Чтобы обойти бинарное дерево в ширину без рекурсии, можно использовать метод \"уровень-order traversal\" (BF или BFS) с использованием очереди. Алгоритм будет таким:\n\n1. Если дерево пустое, вернуть пустой список.\n2. Сначала добавить корневой узел в очередь.\n3. Создать список для результата (который будет содержать значения вершин по уровням).\n4. Пока очередь не пуста:\n   - Освободить вершину из начала очереди.\n   - Добавить её значение в результирующий список.\n   - Если есть левый потомок, добавьте его в очередь.\n   - Если есть правый потомок, добавьте его в очередь.\n5. Вернуть результат.\n\nРеализация этого алгоритма на Python:\n\n```python\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef bfs_levels(root):\n    if not root:\n        return []\n\n    result = []\n    queue = [root]\n\n    while queue:\n        level_size = len(queue)\n        current_level = []\n\n        for _ in range(level_size):\n            current_node = queue.pop(0)\n            current_level.append(current_node.value)\n\n            if current_node.left:\n                queue.append(current_node.left)\n            if current_node.right:\n                queue.append(current_node.right)\n\n        result.append(current_level)\n\n    return result\n\n# Пример использования:\n#        1\n#       / \\\n#      2   3\n#     / \\\n#    4   5\nroot = Node(1, Node(2, Node(4), Node(5)), Node(3))\nprint(bfs_levels(root))\n```\n\nВывод этой функции на дереве, представленном выше, будет:\n\n```\n[[1], [2, 3], [4, 5]]\n```\n\n#### Сложность\nСложность этого алгоритма заключается в том, что мы проходим через каждую вершину в дереве ровно один раз. Уровень-order traversal в общем случае требует O(n) времени и O(n) дополнительной памяти для хранения вершин в очереди.",
+      "usage": {
+        "promptTokens": 148,
+        "completionTokens": 508,
+        "totalTokens": 656
+      },
+      "timing": {
+        "firstTokenMs": 4034.159400000004,
+        "totalMs": 95070.9229
+      },
+      "speed": {
+        "tokensPerSec": 5.34
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 9,
+        "completeness": 9,
+        "codeQuality": 7,
+        "overallScore": 8,
+        "judgeNotes": "Алгоритм и код корректно реализуют обход в ширину по уровням, но использование list.pop(0) вместо collections.deque делает фактическую сложность O(n^2), что противоречит заявленной O(n). В остальном ответ ясный и полный."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:26:50.903Z",
+      "answer": "Ваш код содержит баг из-за ошибки в цикле for. Исправленный код будет выглядеть следующим образом:\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n```\n\nПричина бага:\n- В исходном коде цикл выполняется до `i <= arr.length`, что приводит к попытке доступа к элементу массива с индексом `arr.length`. Массив в JavaScript не имеет элемента с индексом `arr.length`, так как индексы начинаются с `0` и заканчиваются на `arr.length - 1`.\n- Указание `i <= arr.length` приводит к попытке доступа к элементу массива с несуществующим индексом, что вызывает ошибку \"undefined\" и результат не определен.\n\nВыравнивание кода также может улучшить его читаемость и понимание:\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n\n  return sum;\n}\n```",
+      "usage": {
+        "promptTokens": 158,
+        "completionTokens": 299,
+        "totalTokens": 457
+      },
+      "timing": {
+        "firstTokenMs": 190.2262000000337,
+        "totalMs": 49083.95609999995
+      },
+      "speed": {
+        "tokensPerSec": 6.09
+      },
+      "judge": {
+        "correctness": 10,
+        "clarity": 10,
+        "completeness": 10,
+        "codeQuality": 10,
+        "overallScore": 10,
+        "judgeNotes": "Модель верно определила причину бага (выход за границы массива из-за условия i <= arr.length) и предложила корректное исправление. Объяснение ясное и полное, код соответствует ожиданиям."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:27:42.277Z",
+      "answer": "Код представляет собой декоратор, который позволяет перезапускать функцию несколько раз в случае, если она вызывает исключение. Использование декоратора должно содержать ввод `retry(times=3)`.\n\nПояснение построчно:\n\n1. `def retry(times=3):` - Декоратор принимает аргумент `times`, который определяет, сколько раз функция будет перезапущена при вызове, если она вызывает исключение. По умолчанию значение 3.\n\n2. `def decorator(func):` - Внутри декоратора определяется вложенный декоратор `decorator`, который принимает текущую функцию `func` как аргумент.\n\n3. `def wrapper(*args, **kwargs):` - Внутри вложенного декоратора определяется функция `wrapper`, которая будет использоваться в качестве обёртки вокруг оригинальной функции `func`.\n\n4. `last_error = None` - Ставится начальное значение `None` для хранения последнего исключения, вылетевшего из функции во время попытки вызова и перезапуска.\n\n5. `for attempt in range(times):` - Цикл отвечает за повторения попробывания выполнить функцию, в случае, если она вызывает исключение.\n\n6. `try:` - Цикл ведёт себя как блок `try`, который перехватывает исключения.\n\n7. `return func(*args, **kwargs)` - Если исключение не было выведено, функция возвращает в результат её выполнение и завершает работу.\n\n8. `except Exception as e:` - Если была выведена исключение, то это обрабатывается в блоке `except`. Исключение сохраняется в переменной `last_error`.\n\n9. `raise last_error` - После завершения всех попыток для функции, последнее исключение сохранённое в `last_error` было поднимается, продолжая вызов исключения. Это позволяет передать исключение вернувшееся из функции до остановки её выполнения.\n\nПример использования\n\n```python\n@retry(times=5)\ndef divide(a, b):\n    try:\n        return a / b\n    except ZeroDivisionError:\n        print(\"Ошибка деления на ноль\")\n\n# Пример использования декоратора\nprint(divide(10, 2))     # Успешное выполнение без ошибки\nprint(divide(10, 0))     # Передаётся исключение и попытка выполнить функцию еще раз\nprint(divide(10, 0))     # Еще пытается выполнить функцию\nprint(divide(10, 0))     # Еще пытается выполнить функцию\nprint(divide(10, 0))     # Еще пытается выполнить функцию\n```\n\nВ этом примере, функция `divide(a, b)` будет выполняться до восьмой (включительно) попытки. Затем, если вызов функции вызывает исключение `ZeroDivisionError`, оно будет перехвачено и функция будет повторно вызвана. Если функция не сможет выполниться в течение всех попыток, последнее исключение будет выброшено.",
+      "usage": {
+        "promptTokens": 157,
+        "completionTokens": 740,
+        "totalTokens": 897
+      },
+      "timing": {
+        "firstTokenMs": 4076.0396000000183,
+        "totalMs": 126383.80550000002
+      },
+      "speed": {
+        "tokensPerSec": 5.86
+      },
+      "judge": {
+        "correctness": 5,
+        "clarity": 6,
+        "completeness": 5,
+        "codeQuality": 4,
+        "overallScore": 5,
+        "judgeNotes": "Построчное объяснение в целом верно, но есть неточности в формулировках и логике. Пример использования некорректен: функция divide перехватывает ZeroDivisionError и не пробрасывает его, поэтому декоратор retry не срабатывает; также указано неверное число попыток."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:29:51.215Z",
+      "answer": "```sql\nSELECT \n    name, \n    COUNT(id) AS order_count\nFROM \n    users \nJOIN \n    orders ON users.id = orders.user_id\nWHERE \n    orders.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)\nGROUP BY \n    users.id, name\nORDER BY \n    order_count DESC\nLIMIT 3;\n```\n\n**Объяснение запроса:**\n1. **Выбор пользователей и их заказов**: Используется `JOIN` для объединения таблиц `users` и `orders` по полю `user_id`.\n2. **Фильтрация заказов за последний месяц**: Условие `WHERE` фильтрует заказы, созданные позже предыдущего месяца. `DATE_SUB(CURDATE(), INTERVAL 1 MONTH)` вычисляет дату начала последнего месяца.\n3. **Группировка данных**: Группируются заказы по идентификатору пользователя (`users.id`) и его имени (`name`).\n4. **Счет количества заказов**: К каждому пользователю счтается количество своих заказов с помощью `COUNT(id)`.\n5. **Сортировка и ограничение результата**: Запрос сортирует пользователей по количеству заказов в убывающем порядке и ограничивает результат на топ-3 пользователей с помощью `LIMIT 3`.",
+      "usage": {
+        "promptTokens": 115,
+        "completionTokens": 317,
+        "totalTokens": 432
+      },
+      "timing": {
+        "firstTokenMs": 2816.630300000077,
+        "totalMs": 54396.77840000007
+      },
+      "speed": {
+        "tokensPerSec": 5.83
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 8,
+        "completeness": 8,
+        "codeQuality": 6,
+        "overallScore": 7,
+        "judgeNotes": "Запрос в целом корректен, но COUNT(id) может быть неоднозначным, так как id есть в обеих таблицах; следует использовать COUNT(orders.id). Объяснение ясное, но содержит мелкую опечатку."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:30:50.288Z",
+      "answer": "Для рефакторинга кода на использование `async/await` с обработкой ошибок и сохранением порядка вызовов, можно следовать следующему примеру:\n\n```javascript\nasync function getUser(id) {\n  const result = await fetch(`https://api.example.com/users/${id}`);\n  if (!result.ok) {\n    throw new Error('Failed to fetch user');\n  }\n  return await result.json();\n}\n\nasync function getOrders(user) {\n  const result = await fetch(`https://api.example.com/orders?userId=${user.id}`);\n  if (!result.ok) {\n    throw new Error('Failed to fetch orders');\n  }\n  return await result.json();\n}\n\nasync function getDetails(order) {\n  const result = await fetch(`https://api.example.com/details?orderId=${order.id}`);\n  if (!result.ok) {\n    throw new Error('Failed to fetch order details');\n  }\n  return await result.json();\n}\n\nasync function main() {\n  try {\n    const id = 123; // Пример ID пользователя\n    const user = await getUser(id);\n    const orders = await getOrders(user);\n    const ordersArray = Array.isArray(orders) ? orders : [orders];\n    const details = (ordersArray.length > 0) ? await getDetails(ordersArray[0]) : null;\n    console.log(details);\n  } catch (error) {\n    console.error(error.message);\n  }\n}\n\nmain();\n```\n\nВ этом примере:\n1. `getUser`, `getOrders`, и `getDetails` функции представлены как асинхронные функции, которые выполняют соответствующие запросы с использованием `fetch`.\n2. Внутри `main` функции вызывается `getUser`, и результат его выполнения передается в `getOrders`. Затем `getOrders` передает результат во `getDetails`.\n3. Все функции throw ошибки, если запрос не удался.\n4. Об обработке ошибок используется блок `try-catch`, который выводит сообщение об ошибке в консоль.",
+      "usage": {
+        "promptTokens": 164,
+        "completionTokens": 439,
+        "totalTokens": 603
+      },
+      "timing": {
+        "firstTokenMs": 4406.7023000000045,
+        "totalMs": 75413.03520000004
+      },
+      "speed": {
+        "tokensPerSec": 5.82
+      },
+      "judge": {
+        "correctness": 2,
+        "clarity": 4,
+        "completeness": 2,
+        "codeQuality": 3,
+        "overallScore": 2,
+        "judgeNotes": "Модель не выполнила рефакторинг исходного callback-кода, а вместо этого переписала функции с использованием fetch, что не соответствует задаче. Необходимо было обернуть существующие функции getUser, getOrders, getDetails в промисы и использовать async/await, сохранив исходную логику и порядок вызовов."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b-instruct-q8_0",
+      "temperature": 1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:32:08.931Z",
+      "answer": "Итог работы кода: `undefined`\n\nПояснение шаги шагом:\n\n1. `console.log(typeof a);`\n   - Время выполнения: 0\n   - Сначала, переменная `a` создается как глобальная переменная, но она не имеет определенного значения (`undefined`).\n   - Вывод в консоль: `undefined`\n\n2. `var a = 5;`\n   - Время выполнения: 0\n   - Не включает в себя логическую операцию `console.log(a)`, поэтому код не попадает в этот блок.\n   - Переменная `a` получает значение `5`.\n\n3. `function f() { ... }`\n   - Время выполнения: 0\n   - Создается функция `f`, которая содержит два логических оператора `console.log(a)`.\n\n4. `f();`\n   - Время выполнения: 0\n   - Вызывается функция `f`.\n\n5. Внутри функции `f`:\n   - `console.log(a);`\n     - Время выполнения: 0\n     - Переменная `a` внутри функции сначала определяется как локальная переменная с значением `10`, поскольку `var a = 10` находится в области видимости внутри функции.\n     - Вывод в консоль: `10`\n   - `console.log(a);`\n     - Время выполнения: 1\n     - Переменная `a` внутри функции равна `10`, так как объявление локальной переменной сначала выполняется перед попыткой использовать переменную.\n     - Вывод в консоль: `10`\n\nВ итоге, функция `f` выполняет два логических оператора в порядке их определения. Вывод в консоль будет: `undefined` (результат первой операции) и `10` (результат второй операции).\n\n**Код:**\n\n```javascript\nconsole.log(typeof a);\nvar a = 5;\n\nfunction f() {\n  console.log(a);\n  var a = 10;\n  console.log(a);\n}\n\nf();\n```",
+      "usage": {
+        "promptTokens": 114,
+        "completionTokens": 493,
+        "totalTokens": 607
+      },
+      "timing": {
+        "firstTokenMs": 2421.2302999999374,
+        "totalMs": 83135.66650000005
+      },
+      "speed": {
+        "tokensPerSec": 5.93
+      },
+      "judge": {
+        "correctness": 2,
+        "clarity": 5,
+        "completeness": 3,
+        "codeQuality": 3,
+        "overallScore": 2,
+        "judgeNotes": "Модель неверно понимает hoisting внутри функции: из-за поднятия var a локальная переменная инициализируется undefined, а не 10, поэтому первый console.log(a) в f() выведет undefined, а не 10. Также ответ неполный — указан только один итоговый вывод вместо трёх."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 2028,
+        "avgCpuPct": 768.1024260355016,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:33:35.752Z",
+      "answer": "Для обхода бинарного дерева в ширину (BFS) можно использовать очередь. Алгоритм будет работать следующим образом:\n\n1. Создайте пустую очередь и добавьте корень дерева в нее.\n2. Создайте пустой список для хранения значений по уровням.\n3. Пока очередь не пуста:\n   - Извлеките элемент из очереди.\n   - Добавьте его значение в список значений по уровням.\n   - Если у текущего элемента есть левый потомок, добавьте его в очередь.\n   - Если у текущего элемента есть правый потомок, добавьте его в очередь.\n4. Верните список значений по уровням.\n\nТаким образом, алгоритм обходит все уровни дерева слева направо, и для каждого уровня все его узлы добавляются в очередь.\n\nСложность этого алгоритма составляет O(n), где n - количество узлов в дереве. Это потому, что каждый узел обрабатывается ровно один раз.\n\nВот реализация функции на Python:\n\n```python\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef bfs(root):\n    if not root:\n        return []\n\n    queue = [root]\n    result = []\n\n    while queue:\n        current = queue.pop(0)\n        result.append(current.value)\n\n        if current.left:\n            queue.append(current.left)\n        if current.right:\n            queue.append(current.right)\n\n    return result\n\n# Пример использования:\n# Создание дерева:\n#       1\n#      / \\\n#     2   3\n#    / \\\n#   4   5\n\nroot = Node(1)\nroot.left = Node(2)\nroot.right = Node(3)\nroot.left.left = Node(4)\nroot.left.right = Node(5)\n\n# Обход дерева в ширину\nprint(bfs(root))  # Вывод: [1, 2, 3, 4, 5]\n```\n\nВ этом примере функция `bfs` принимает корень дерева и возвращает список значений по уровням, обработанных в ширину.",
+      "usage": {
+        "promptTokens": 148,
+        "completionTokens": 502,
+        "totalTokens": 650
+      },
+      "timing": {
+        "firstTokenMs": 18126.133700000122,
+        "totalMs": 69930.2378
+      },
+      "speed": {
+        "tokensPerSec": 7.18
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 8,
+        "completeness": 7,
+        "codeQuality": 6,
+        "overallScore": 6,
+        "judgeNotes": "Алгоритм BFS описан и реализован, но используется list.pop(0), что приводит к O(n^2) вместо заявленного O(n). Следовало бы использовать collections.deque. В остальном ответ ясный и полный."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:34:51.117Z",
+      "answer": "Ваш код содержит баг, связаный с индексацией массива. В цикле `for` вы используете `i <= arr.length`, что приводит к попытке доступа к элементу массива с индексом `arr.length`, что вызывает ошибку `RangeError: Array index out of range`. Это происходит потому, что индексация в JavaScript начинается с нуля, и последний элемент массива имеет индекс `arr.length - 1`.\n\nЧтобы исправить этот баг, нужно изменить условие цикла на `i < arr.length`. Вот исправленный код:\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n\n// Ожидается: sumArray([1, 2, 3]) === 6, фактически возвращается 6\n```\n\n### Объяснение бага:\n- **Индексация массива**: В JavaScript индексы начинаются с нуля. Поэтому последний элемент массива имеет индекс `arr.length - 1`.\n- **Условие цикла**: В вашем коде `i <= arr.length` проверяет, что `i` не превышает `arr.length`, что приводит к попытке доступа к элементу с индексом `arr.length`, что вызывает ошибку.\n- **Исправление**: Изменение условия на `i < arr.length` решает проблему, так как теперь цикл будет работать до `arr.length - 1`, что соответствует правильной индексации массива.",
+      "usage": {
+        "promptTokens": 158,
+        "completionTokens": 390,
+        "totalTokens": 548
+      },
+      "timing": {
+        "firstTokenMs": 1619.5231000001077,
+        "totalMs": 42462.6912
+      },
+      "speed": {
+        "tokensPerSec": 9.18
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 7,
+        "completeness": 7,
+        "codeQuality": 8,
+        "overallScore": 7,
+        "judgeNotes": "Исправление кода верное, но объяснение причины бага неточно: в JavaScript обращение к arr[arr.length] не вызывает RangeError, а возвращает undefined, что при сложении даёт NaN. Следовало указать это."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:35:36.254Z",
+      "answer": "Этот Python-код определяет декоратор `retry`, который позволяет повторять вызов функции несколько раз при возникновении исключений. Давайте разберем его построчно:\n\n1. **Функция `retry(times=3)`**:\n   - Это вложенная функция, которая принимает один аргумент `times` с дефолтным значением `3`.\n   - Эта функция возвращает еще одну функцию, которая будет использоваться как декоратор.\n\n2. **Функция `decorator(func)`**:\n   - Это вложенная функция, которая принимает функцию `func` в качестве аргумента.\n   - Эта функция возвращает еще одну функцию, которая будет использоваться как обертка вокруг оригинальной функции.\n\n3. **Функция `wrapper(*args, **kwargs)`**:\n   - Это вложенная функция, которая является оберткой вокруг оригинальной функции.\n   - Она принимает произвольное количество позиционных и именованных аргументов.\n   - Внутри `wrapper` происходит цикл повторения, который повторяет вызов `func` `times` раз.\n   - Если вызов `func` успешен, то функция возвращает результат.\n   - Если вызов `func` завершается исключением, то исключение сохраняется в переменной `last_error`.\n   - После всех попыток, если исключение сохранено, то оно возбуждается с помощью `raise last_error`.\n\n4. **Пример использования**:\n   - Предположим, у нас есть функция `divide(a, b)` которая делит два числа.\n   - Мы хотим, чтобы эта функция повторяла попытки деления, если возникает деление на ноль.\n\n```python\n@retry(times=5)\ndef divide(a, b):\n    return a / b\n\ntry:\n    print(divide(10, 0))  # Это вызовет исключение\nexcept Exception as e:\n    print(f\"Произошла ошибка: {e}\")\n```\n\nВ этом примере:\n- Функция `divide` будет вызываться пять раз, если возникнет исключение при делении на ноль.\n- Если все пять попыток завершатся исключением, то последнее исключение будет возбуждено.\n- В результате, программа выведет сообщение об ошибке, а не прервется с ошибкой.",
+      "usage": {
+        "promptTokens": 157,
+        "completionTokens": 557,
+        "totalTokens": 714
+      },
+      "timing": {
+        "firstTokenMs": 2489.7704999998678,
+        "totalMs": 60476.11030000006
+      },
+      "speed": {
+        "tokensPerSec": 9.21
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 9,
+        "completeness": 8,
+        "codeQuality": 8,
+        "overallScore": 8,
+        "judgeNotes": "Ответ в целом верен и хорошо структурирован, но есть небольшие неточности: не упомянуто, что при успешном вызове цикл прерывается, а также не рассмотрен случай times=0. Пример использования корректен, но мог бы быть более показательным."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:36:41.520Z",
+      "answer": "Для выполнения этого запроса нам потребуется использовать функцию `DATE_TRUNC` для отсечения времени из даты создания заказов и функцию `COUNT` для подсчета количества заказов для каждого пользователя. Затем мы будем сортировать результаты по количеству заказов в порядке убывания и ограничивать вывод топ-3 пользователями.\n\n```sql\n-- Выбираем топ-3 пользователей по количеству заказов за последний месяц\nSELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nJOIN orders o ON u.id = o.user_id\nWHERE o.created_at >= DATE_TRUNC('month', CURRENT_DATE)\nGROUP BY u.id, u.name\nORDER BY order_count DESC\nLIMIT 3;\n```\n\n### Объяснение запроса:\n\n1. **JOIN**: Мы используем `JOIN` для объединения таблиц `users` и `orders` по столбцу `user_id`, который является общим для обоих таблиц.\n\n2. **WHERE**: Фильтруем заказы, выбирая только те, которые были созданы за последний месяц. Это делается с помощью `DATE_TRUNC('month', CURRENT_DATE)`, который возвращает начало текущего месяца.\n\n3. **GROUP BY**: Группируем результаты по `user_id` и `name`, чтобы подсчитать количество заказов для каждого пользователя.\n\n4. **COUNT(o.id)**: Подсчитываем количество заказов для каждого пользователя.\n\n5. **ORDER BY order_count DESC**: Сортируем результаты по количеству заказов в порядке убывания.\n\n6. **LIMIT 3**: Ограничиваем вывод топ-3 пользователей.\n\nЭтот запрос предоставит нам топ-3 пользователей, у которых было больше всего заказов за последний месяц.",
+      "usage": {
+        "promptTokens": 115,
+        "completionTokens": 408,
+        "totalTokens": 523
+      },
+      "timing": {
+        "firstTokenMs": 957.2120999998879,
+        "totalMs": 42680.30440000002
+      },
+      "speed": {
+        "tokensPerSec": 9.56
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 9,
+        "completeness": 10,
+        "codeQuality": 9,
+        "overallScore": 9,
+        "judgeNotes": "Запрос технически корректен, но интерпретация 'за последний месяц' как начало текущего месяца может быть неоднозначной. Объяснение ясное и полное, код чистый."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:37:28.878Z",
+      "answer": "Для отрефакторинга данного кода в `async/await` с обработкой ошибок, мы можем использовать `try...catch` блоки и `await` для асинхронных вызовов. Вот как это можно сделать:\n\n```javascript\nasync function getUser(id) {\n  try {\n    const response = await fetch(`https://api.example.com/users/${id}`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch user: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching user:', err);\n    throw err; // Перебросим ошибку дальше\n  }\n}\n\nasync function getOrders(user) {\n  try {\n    const response = await fetch(`https://api.example.com/users/${user.id}/orders`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch orders: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching orders:', err);\n    throw err; // Перебросим ошибку дальше\n  }\n}\n\nasync function getDetails(order) {\n  try {\n    const response = await fetch(`https://api.example.com/orders/${order.id}/details`);\n    if (!response.ok) {\n      throw new Error(`Failed to fetch details: ${response.statusText}`);\n    }\n    return await response.json();\n  } catch (err) {\n    console.error('Error fetching details:', err);\n    throw err; // Перебросим ошибку дальше\n  }\n}\n\nasync function main() {\n  try {\n    const id = 123; // Пример идентификатора пользователя\n    const user = await getUser(id);\n    const orders = await getOrders(user);\n    const details = await getDetails(orders[0]);\n    console.log(details);\n  } catch (err) {\n    console.error('Main error:', err);\n  }\n}\n\nmain();\n```\n\n### Объяснение:\n1. **Функции `getUser`, `getOrders`, и `getDetails`**: Каждая функция теперь асинхронная и использует `await` для выполнения асинхронных операций. Если возникает ошибка, она ловится в `try...catch` блоке, и ошибку перебрасывается дальше.\n\n2. **Функция `main`**: Это основная функция, которая вызывает другие функции в последовательности. Она также обрабатывает ошибки, если они возникают.\n\n3. **Обработка ошибок**: В случае ошибки в любом из вызовов функций, она будет логирована, и ошибка будет переброшена дальше, чтобы предотвратить дальнейшее выполнение кода.\n\nЭтот подход позволяет сохранить порядок вызовов и обрабатывать ошибки в более читаемом и понятном виде.",
+      "usage": {
+        "promptTokens": 164,
+        "completionTokens": 625,
+        "totalTokens": 789
+      },
+      "timing": {
+        "firstTokenMs": 1951.0733000000473,
+        "totalMs": 67595.24399999995
+      },
+      "speed": {
+        "tokensPerSec": 9.25
+      },
+      "judge": {
+        "correctness": 2,
+        "clarity": 5,
+        "completeness": 3,
+        "codeQuality": 4,
+        "overallScore": 3,
+        "judgeNotes": "Ответ не является рефакторингом исходного callback-кода: модель переписывает функции с нуля, используя fetch и вымышленные API, вместо того чтобы обернуть существующие callback-функции в промисы. Порядок вызовов сохранён, но обработка ошибок изменена (двойное логирование), а сигнатуры функций не соответствуют исходным."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t0.1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 0.1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:38:39.169Z",
+      "answer": "Код выведет следующее:\n\n```\nundefined\n10\n10\n```\n\nПояснение:\n\n1. `console.log(typeof a);` - В этом шаге переменная `a` еще не объявлена, поэтому `typeof a` возвращает `undefined`.\n\n2. `var a = 5;` - В этом шаге переменная `a` объявлена и инициализирована значением `5`.\n\n3. `function f() { ... }` - Это объявление функции `f`.\n\n4. `console.log(a);` - Внутри функции `f`, переменная `a` имеет значение `5`, поэтому `console.log(a)` выводит `5`.\n\n5. `var a = 10;` - Внутри функции `f`, переменная `a` переопределена на значение `10`.\n\n6. `console.log(a);` - Внутри функции `f`, переменная `a` имеет значение `10`, поэтому `console.log(a)` выводит `10`.\n\n7. `f();` - Вызов функции `f`.\n\nВ результате, код выводит `undefined`, `10`, `10` в порядке, указанном в коде.",
+      "usage": {
+        "promptTokens": 114,
+        "completionTokens": 267,
+        "totalTokens": 381
+      },
+      "timing": {
+        "firstTokenMs": 1119.0823999999557,
+        "totalMs": 27568.82979999995
+      },
+      "speed": {
+        "tokensPerSec": 9.68
+      },
+      "judge": {
+        "correctness": 1,
+        "clarity": 4,
+        "completeness": 3,
+        "codeQuality": 2,
+        "overallScore": 2,
+        "judgeNotes": "Модель не учла hoisting переменных внутри функции: var a поднимается в начало f, поэтому первый console.log(a) выводит undefined, а не 5. Внешний typeof a также возвращает 'undefined' из-за поднятия объявления var a. Ответ неверен."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1336,
+        "avgCpuPct": 724.3249850299399,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "codegen-bfs",
+      "category": "codegen",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:39:10.557Z",
+      "answer": "Для обхода бинарного дерева в ширину (BFS) с использованием итерации, мы можем использовать очередь, так как BFS требует перебора всех узлов на одном уровне перед переходить к следующему уровню. Вот алгоритм и соответствующий код в Python:\n\n1. Инициализируем очередь с корневым узлом дерева.\n2. Создаем пустой список для хранения значений, которые мы собираем.\n3. Пока очередь не пуста, извлекаем текущий узел из очереди и добавляем его значение в список.\n4. Если текущий узел имеет левый узел, добавляем его в очередь.\n5. Если текущий узел имеет правый узел, добавляем его в очередь.\n6. Переходим к следующему шагу.\n7. После окончания обхода, возвращаем список значений по уровням.\n\nВот код реализации алгоритма:\n\n```python\nclass Node:\n    def __init__(self, value, left=None, right=None):\n        self.value = value\n        self.left = left\n        self.right = right\n\ndef bfs_traversal(root):\n    if not root:\n        return []\n\n    queue = [root]  # Итерация начинается с корневого узла\n    result = []  # Пустой список для хранения результатов\n\n    while queue:\n        current = queue.pop(0)  # Извлекаем узел из начала очереди\n        result.append(current.value)  # Добавляем значение узла в результат\n\n        if current.left:\n            queue.append(current.left)  # Добавляем левый узел в очередь\n        if current.right:\n            queue.append(current.right)  # Добавляем правый узел в очередь\n\n    return result\n\n# Пример использования:\n# Строим дерево:\n#     1\n#    / \\\n#   2   3\n#  / \\\n# 4   5\n\n# Создаем узлы\nroot = Node(1)\nroot.left = Node(2)\nroot.right = Node(3)\nroot.left.left = Node(4)\nroot.left.right = Node(5)\n\n# Вызываем функцию BFS\nprint(bfs_traversal(root))  # Вывод: [1, 2, 3, 4, 5]\n```\n\n**Сложность**:\nТривиальная сложность на O(n), где n - количество узлов в дереве. В худшем случае мы должны обходить каждый узел однажды, что обеспечивает O(n) временная сложность. Однако если мы считаем в худшем случае O(h), где h - высоту дерева (в худшем случае, когда дерево лежит в виде линейного списка), то мы можем использовать итеративное решение, что может эффективнее.",
+      "usage": {
+        "promptTokens": 148,
+        "completionTokens": 657,
+        "totalTokens": 805
+      },
+      "timing": {
+        "firstTokenMs": 1539.2094000000507,
+        "totalMs": 81489.89859999996
+      },
+      "speed": {
+        "tokensPerSec": 8.06
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 7,
+        "completeness": 7,
+        "codeQuality": 6,
+        "overallScore": 6,
+        "judgeNotes": "Алгоритм BFS реализован верно, но используется list.pop(0), что даёт O(n^2) вместо O(n); сложность описана некорректно и содержит ошибочное упоминание O(h). Рекомендуется использовать collections.deque."
+      },
+      "deterministic": {
+        "deterministicPass": false,
+        "tokens": [
+          {
+            "token": "popleft",
+            "found": false
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "bugfix-loop-sum",
+      "category": "bugfix",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:40:35.300Z",
+      "answer": "Во-первых, возникла ошибка в цикле `for` при расчете суммы элементов массива. Классический цикл `for` следует использовать только для перебора массива от нулевого индекса до предпоследнего. В вашем коде происходит перебор элементов до индекса `arr.length`, что приводит к выходу за пределы массива и недопустимому доступу к данным элементам, приводящим к некорректной сумме.\n\nВот исправленный код:\n\n```javascript\nfunction sumArray(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum;\n}\n\n// Проверка\nconsole.log(sumArray([1, 2, 3])); // Вывод: 6\n```\n\n**Объяснение:** **Баг** в исходном коде объясняется тем, что в цикле использовалась неверная проверка условия `i <= arr.length`. Цикл должен перебирать элементы от `0` до `arr.length - 1`, что достигается с промежуточным выражением `i < arr.length`. При этом, если массив содержит единственный элемент, цикл правильно обработает это, вернув его значение, но при добавлении еще одного элемента условие `i <= arr.length` приводит к неверному расчету суммы, так как проверка допускает обращение к элементу с индексом равным длине массива, что сказывается на NaN.\n\nОднако, учитывая, что функция суммирует числовые значения, и NaN обычно возникает при делении на ноль или при попытке умножить на NaN (что не случается в данном случае), вам лучше использовать конструктор `Array` для суммирования элементов массива. Вот как это сделать:\n\n```javascript\nfunction sumArray(arr) {\n  return Array.prototype.reduce((acc, val) => acc + val, 0);\n}\n\n// Проверка\nconsole.log(sumArray([1, 2, 3])); // Вывод: 6\n```\n\nВ этом коде, мы используем метод `reduce`, который проходит по всем элементам массива и накапливает их сумм. Это более чистая и эффективная реализация суммирования и решает проблему с возможной ошибкой при добавлении единичного элемента в массив.",
+      "usage": {
+        "promptTokens": 158,
+        "completionTokens": 578,
+        "totalTokens": 736
+      },
+      "timing": {
+        "firstTokenMs": 134.46539999987,
+        "totalMs": 69746.68999999994
+      },
+      "speed": {
+        "tokensPerSec": 8.29
+      },
+      "judge": {
+        "correctness": 8,
+        "clarity": 7,
+        "completeness": 8,
+        "codeQuality": 8,
+        "overallScore": 8,
+        "judgeNotes": "Основной баг (выход за границы массива) исправлен верно, объяснение причины корректно. Однако дополнительные пояснения содержат неточности (например, упоминание 'конструктора Array' вместо метода reduce и неверное утверждение о причинах NaN), что немного снижает качество."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "NaN",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "explain-decorator",
+      "category": "explanation",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:41:49.554Z",
+      "answer": "Этот Python-код представляет собой декоратор, который добавляет повторные попытки к функции, в случае ее неуспешного выполнения. Давайте декомпозируем его построчно:\n\n```python\ndef retry(times=3):\n    # Эта функция возвращает декоратор.\n    def decorator(func):\n        # Этот декоратор добавляет повторные попытки к функции `func`.\n        def wrapper(*args, **kwargs):\n            # Переменная `last_error` будет хранить ошибку, которая произошла на последней попытке.\n            last_error = None\n            # Цикл выполняется от 0 до times - 1, что дает количество попыток (times).\n            for attempt in range(times):\n                try:\n                    # Попытка выполнить функцию с переданными аргументами и ключевыми словами.\n                    return func(*args, **kwargs)\n                except Exception as e:\n                    # Если функция не смогла выполниться, хранится последняя ошибка.\n                    last_error = e\n            # Если цикл закончился без успешного выполнения, то выдается последняя возникшая ошибка.\n            raise last_error\n        # Возвращает wrapper, который будет декорировать функцию `func`.\n        return wrapper\n    # Возвращает decorator, который будет декорировать функцию `retry`.\n    return decorator\n```\n\n### Пример использования декоратора\n\n```python\n@retry(times=3)\ndef risky_function(url):\n    import requests\n    try:\n        response = requests.get(url)\n        response.raise_for_status()\n        return response.json()\n    except (requests.exceptions.RequestException, ValueError) as e:\n        print(f\"Failed to request: {e}\")\n        return None\n\n# Пример использования\nresult = risky_function('https://api.example.com/data')\nprint(result)\n```\n\n### Объяснение примера использования\n\n1. **Декорация функции**: Мы используем декоратор `@retry(times=3)` к функции `risky_function`. Это означает, что любая вызов `risky_function` будет оборачиваться декоратором, добавляющим повторные попытки.\n\n2. **Создание запроса**: Функция `risky_function` использует `requests` для получения данных с удаленного сервера `url`.\n\n3. **Обработка ошибок**: Если запрос неуспешен (например, урл недоступен или данные не в формате JSON), функция вызывает `response.raise_for_status()` и перехватывает ошибку. Если ошибки нет или произойдет ошибка на уровне `requests` или обработки JSON, хранится ошибка и функция вызывается снова.\n\n4. **Повторные попытки**: Если функция не удачная на третьей попытке, она генерирует ошибку, которая содержит последние ошибки, которые были получены.\n\n### Плюсы декоратора `retry`\n\n- **Упрощение кода**: Декоратор позволяет деструктивно изменять поведение функции, добавляя повторные попытки без изменения ее интерфейса.\n- **Обработка ошибок**: Автоматическое повторение выполнения с указанием количества попыток позволяет обрабатывать временные проблемы, такие как сетевые недоступности.\n- **Улучшение надежности**: Добавляет поддержку ресурсосберегающих паттернов при выполнении сложных или дорогих операций.\n\n### Отсутствие минусов\n\nТак как декоратор добавляет к функции повторные попытки выполнения, он может не оправдан в некоторых случаях, если ошибки не являются непредсказуемыми или их решение может быть индивидуальным. Но в большинстве приложений где операция может быть непредсказуемой или временностью, такой декоратор пригоден.",
+      "usage": {
+        "promptTokens": 157,
+        "completionTokens": 877,
+        "totalTokens": 1034
+      },
+      "timing": {
+        "firstTokenMs": 2223.9550000000745,
+        "totalMs": 107892.28310000012
+      },
+      "speed": {
+        "tokensPerSec": 8.13
+      },
+      "judge": {
+        "correctness": 6,
+        "clarity": 7,
+        "completeness": 6,
+        "codeQuality": 5,
+        "overallScore": 6,
+        "judgeNotes": "Объяснение декоратора в целом верное, но пример использования некорректен: функция risky_function перехватывает исключения и возвращает None, поэтому декоратор retry не выполняет повторные попытки. Также есть неточность в описании возвращаемого значения decorator."
+      },
+      "deterministic": {
+        "deterministicPass": null,
+        "tokens": []
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "sql-top-orders",
+      "category": "sql",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:43:43.018Z",
+      "answer": "Конечно! Вот полный SQL-запрос с комментарием поясняющий его работу:\n\n```sql\n-- Выбираем топ-3 пользователей по количеству заказов за последний месяц\nSELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nJOIN orders o ON u.id = o.user_id\nWHERE o.created_at >= DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH)\nGROUP BY u.id, u.name\nORDER BY order_count DESC\nLIMIT 3;\n```\n\n### Описание запроса:\n\n1. **SELECT**: Выбираем идентификатор пользователя (`u.id`), имя пользователя (`u.name`) и количество заказов за последний месяц (`COUNT(o.id)`).\n\n2. **FROM** and **JOIN**: Запрос начинается с таблицы `users` и соединяет её с таблицей `orders` через общие паблики (`u.id` = `o.user_id`).\n\n3. **WHERE**: Фильтруем заказы, выбирая только те, которые были созданы за последний месяц. Это делается с помощью `DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH)`, который вычисляет дату, 30 дней назад от текущей даты.\n\n4. **GROUP BY**: Группируем результаты по идентификатору пользователя и его имени, чтобы подсчитать количество заказов для каждого пользователя.\n\n5. **ORDER BY**: Сортируем результаты по количеству заказов в порядке убывания (`DESC`), чтобы получить топ-3 пользователей.\n\n6. **LIMIT 3**: Ограничиваем результаты, выводим только первые три записи, что соответствует топ-3 пользователям.\n\nЭтот запрос будет возвращать топ-3 пользователей по количеству заказов за последний месяц, сгруппированных по их идентификаторам и именам.",
+      "usage": {
+        "promptTokens": 115,
+        "completionTokens": 433,
+        "totalTokens": 548
+      },
+      "timing": {
+        "firstTokenMs": 1811.1210000000428,
+        "totalMs": 54511.376600000076
+      },
+      "speed": {
+        "tokensPerSec": 7.94
+      },
+      "judge": {
+        "correctness": 9,
+        "clarity": 8,
+        "completeness": 9,
+        "codeQuality": 8,
+        "overallScore": 9,
+        "judgeNotes": "Запрос корректен и решает задачу: выбирает топ-3 пользователей по количеству заказов за последний месяц с использованием JOIN, GROUP BY, ORDER BY и LIMIT. Пояснение подробное, но содержит небольшую опечатку ('паблики' вместо 'поля') и использует MySQL-специфичный синтаксис DATE_SUB, что допустимо, но не универсально."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "ORDER BY",
+            "found": true
+          },
+          {
+            "token": "LIMIT 3",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "refactor-callbacks",
+      "category": "refactor",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:44:39.643Z",
+      "answer": "Конечно! Отрефакторю этот callback-код в `async/await` вместе с обработкой ошибок, а так же сохраню порядок вызовов. Вот как это выглядит:\n\n```javascript\nasync function getUser(id) {\n  try {\n    const response = await fetch(`/api/users/${id}`);\n    if (!response.ok) {\n      throw new Error('Failed to fetch user');\n    }\n    const user = await response.json();\n    return user;\n  } catch (error) {\n    console.error('Error in getUser:', error);\n    throw error;\n  }\n}\n\nasync function getOrders(user) {\n  try {\n    const response = await fetch(`/api/orders/user/${user.id}`);\n    if (!response.ok) {\n      throw new Error('Failed to fetch orders');\n    }\n    const orders = await response.json();\n    return orders;\n  } catch (error) {\n    console.error('Error in getOrders:', error);\n    throw error;\n  }\n}\n\nasync function getDetails(order) {\n  try {\n    const response = await fetch(`/api/details/order/${order.id}`);\n    if (!response.ok) {\n      throw new Error('Failed to fetch details');\n    }\n    const details = await response.json();\n    return details;\n  } catch (error) {\n    console.error('Error in getDetails:', error);\n    throw error;\n  }\n}\n\nasync function main(id) {\n  try {\n    const user = await getUser(id);\n    const orders = await getOrders(user);\n    const details = await getDetails(orders[0]);\n    console.log(details);\n  } catch (error) {\n    console.error('Error in main:', error);\n  }\n}\n\n// Вызов функции с конкретным идентификатором пользователя\nmain(5); // Например, измените на нужный идентификатор\n```\n\n### Объяснение:\n- В `getUser`, `getOrders`, и `getDetails` используються async/await, чтобы делать асинхронные вызовы.\n- Используется `fetch` для выполнения HTTP-запросов.\n- Если ответ сервера не успешен (например, код 404), выкидывается ошибка.\n- В `main` объединяются все вызовы функций в одну цепочку await, что позволяет последовательно и безопасно обрабатывать все асинхронные операции.\n- Общая обработка ошибок вверху и в каждой функции позволяет отслеживать и логировать ошибки, инициированные в каждой из них.",
+      "usage": {
+        "promptTokens": 164,
+        "completionTokens": 551,
+        "totalTokens": 715
+      },
+      "timing": {
+        "firstTokenMs": 3194.1938999998383,
+        "totalMs": 68167.23089999985
+      },
+      "speed": {
+        "tokensPerSec": 8.08
+      },
+      "judge": {
+        "correctness": 3,
+        "clarity": 7,
+        "completeness": 5,
+        "codeQuality": 5,
+        "overallScore": 4,
+        "judgeNotes": "Модель не отрефакторила исходный callback-код, а заменила его на собственные async-функции с fetch, изменив сигнатуры и поведение. Порядок вызовов сохранён, но обработка ошибок и структура не соответствуют задаче."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "async",
+            "found": true
+          },
+          {
+            "token": "await",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    },
+    {
+      "configId": "ollama/qwen2.5-coder_3b@t1",
+      "providerType": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "temperature": 1,
+      "taskId": "tricky-hoisting",
+      "category": "tricky-output",
+      "repeat": 1,
+      "startedAt": "2026-10-08T18:45:50.808Z",
+      "answer": "Чтобы объяснить, как этот код работает, let's break it down step by step:\n\n1. **Initial Declaration**: The variable `a` is declared but not initialized. This means it exists as an uninitialized variable in the global scope of the function.\n\n2. **First Console Log**: The first `console.log(typeof a);` outputs `undefined` because `a` has not been assigned a value yet.\n\n3. **Function Definition**: The function `f` is defined. Inside this function, there is a block of code that starts with `var a = 10;`. This variable `a` shadows the global variable `a`.\n\n4. **First Log Inside Function**: Inside the function, the first `console.log(a);` outputs `10` because it accesses the `a` variable that was just reassigned in the function body.\n\n5. **Second Log Inside Function**: The second `console.log(a);` also outputs `10` because it accesses the same `a` variable that was reassigned.\n\n6. **End of Function**: Once the function `f` execution is complete, the scope of the function ends, and the local variable `a` is no longer in scope. The global variable `a` remains unchanged.\n\nHere's the code with comments for each step:\n\n```javascript\nconsole.log(typeof a); // Outputs 'undefined' because a is declared but not initialized\nvar a = 5;          // The variable a is declared but not initatilized in the global scope\n\nfunction f() {         // Function definition\n  console.log(a);     // Outputs '10' because the local variable 'a' is accessed\n  var a = 10;       // The local variable 'a' is redefined in the function scope\n  console.log(a);     // Outputs '10' because the local variable 'a' is accessed\n}\n\nf();                // Calling the function\n```\n\nIn summary, the output of `console.log(typeof a);` is `undefined` because `a` is declared but not initialized. The variable `a` inside the function `f` shadows the global `a`, and the `console.log` statements inside `f` correctly output `10`.",
+      "usage": {
+        "promptTokens": 114,
+        "completionTokens": 464,
+        "totalTokens": 578
+      },
+      "timing": {
+        "firstTokenMs": 153.33730000001378,
+        "totalMs": 53874.315900000045
+      },
+      "speed": {
+        "tokensPerSec": 8.61
+      },
+      "judge": {
+        "correctness": 3,
+        "clarity": 6,
+        "completeness": 5,
+        "codeQuality": 4,
+        "overallScore": 4,
+        "judgeNotes": "Ответ содержит критическую ошибку: из-за hoisting локальная переменная a внутри функции инициализируется undefined, поэтому первый console.log(a) выведет undefined, а не 10. Модель неверно объясняет порядок выполнения и не упоминает поднятие переменных."
+      },
+      "deterministic": {
+        "deterministicPass": true,
+        "tokens": [
+          {
+            "token": "undefined",
+            "found": true
+          }
+        ]
+      },
+      "resources": {
+        "available": true,
+        "note": "docker stats streaming (native ~1s refresh), container=ollama",
+        "sampleCount": 1826,
+        "avgCpuPct": 769.1635377875109,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000
+      },
+      "error": null
+    }
+  ],
+  "summary": {
+    "perConfig": [
+      {
+        "configId": "gpustack/glm-5.3-flash@t0.1",
+        "providerType": "gpustack",
+        "model": "glm-5.3-flash",
+        "temperature": 0.1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 9.83,
+        "avgCorrectness": 9.83,
+        "avgClarity": 9.83,
+        "avgCompleteness": 9.83,
+        "avgCodeQuality": 9.67,
+        "avgTokensPerSec": 235.61,
+        "avgTTFT": 2517,
+        "avgTotalMs": 4560.4,
+        "avgCompletionTokens": 1077,
+        "avgPromptTokens": 127.8,
+        "efficiencyScore": 0.0091,
+        "scoreStdDev": 0.41,
+        "totalMsStdDev": 1748,
+        "deterministicPassRate": 1,
+        "avgCpuPct": null,
+        "peakCpuPct": null,
+        "peakMemUsedBytes": null,
+        "peakMemUsedHuman": null,
+        "peakMemLimitBytes": null,
+        "totalNetIOBytes": null,
+        "resourcesAvailable": false,
+        "resourcesNote": "remote (server-side), not measurable locally"
+      },
+      {
+        "configId": "gpustack/glm-5.3-flash@t1",
+        "providerType": "gpustack",
+        "model": "glm-5.3-flash",
+        "temperature": 1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 9.33,
+        "avgCorrectness": 9.67,
+        "avgClarity": 9.5,
+        "avgCompleteness": 9.83,
+        "avgCodeQuality": 9.5,
+        "avgTokensPerSec": 212.77,
+        "avgTTFT": 2265.7,
+        "avgTotalMs": 4599,
+        "avgCompletionTokens": 989.8,
+        "avgPromptTokens": 127.8,
+        "efficiencyScore": 0.0094,
+        "scoreStdDev": 0.82,
+        "totalMsStdDev": 2060.9,
+        "deterministicPassRate": 1,
+        "avgCpuPct": null,
+        "peakCpuPct": null,
+        "peakMemUsedBytes": null,
+        "peakMemUsedHuman": null,
+        "peakMemLimitBytes": null,
+        "totalNetIOBytes": null,
+        "resourcesAvailable": false,
+        "resourcesNote": "remote (server-side), not measurable locally"
+      },
+      {
+        "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1",
+        "providerType": "ollama",
+        "model": "qwen2.5-coder:3b-instruct-q8_0",
+        "temperature": 0.1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 6.33,
+        "avgCorrectness": 5.67,
+        "avgClarity": 7.33,
+        "avgCompleteness": 6.67,
+        "avgCodeQuality": 6.67,
+        "avgTokensPerSec": 4.94,
+        "avgTTFT": 2353.7,
+        "avgTotalMs": 93084.1,
+        "avgCompletionTokens": 461.8,
+        "avgPromptTokens": 142.7,
+        "efficiencyScore": 0.0137,
+        "scoreStdDev": 2.66,
+        "totalMsStdDev": 27864.7,
+        "deterministicPassRate": 0.8,
+        "avgCpuPct": 776.93,
+        "peakCpuPct": 818.91,
+        "peakMemUsedBytes": 3891240370,
+        "peakMemUsedHuman": "3.6GiB",
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3554600000,
+        "resourcesAvailable": true,
+        "resourcesNote": "docker stats streaming (native ~1s refresh), container=ollama"
+      },
+      {
+        "configId": "ollama/qwen2.5-coder_3b-instruct-q8_0@t1",
+        "providerType": "ollama",
+        "model": "qwen2.5-coder:3b-instruct-q8_0",
+        "temperature": 1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 5.67,
+        "avgCorrectness": 5.5,
+        "avgClarity": 7,
+        "avgCompleteness": 6.17,
+        "avgCodeQuality": 5.5,
+        "avgTokensPerSec": 5.81,
+        "avgTTFT": 2990.8,
+        "avgTotalMs": 80580.7,
+        "avgCompletionTokens": 466,
+        "avgPromptTokens": 142.7,
+        "efficiencyScore": 0.0122,
+        "scoreStdDev": 3.27,
+        "totalMsStdDev": 28350.5,
+        "deterministicPassRate": 0.6,
+        "avgCpuPct": 768.1,
+        "peakCpuPct": 821.06,
+        "peakMemUsedBytes": 4007204487,
+        "peakMemUsedHuman": "3.7GiB",
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3555400000,
+        "resourcesAvailable": true,
+        "resourcesNote": "docker stats streaming (native ~1s refresh), container=ollama"
+      },
+      {
+        "configId": "ollama/qwen2.5-coder_3b@t0.1",
+        "providerType": "ollama",
+        "model": "qwen2.5-coder:3b",
+        "temperature": 0.1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 5.83,
+        "avgCorrectness": 5.17,
+        "avgClarity": 7,
+        "avgCompleteness": 6.33,
+        "avgCodeQuality": 6.17,
+        "avgTokensPerSec": 9.01,
+        "avgTTFT": 4377.1,
+        "avgTotalMs": 51785.6,
+        "avgCompletionTokens": 458.2,
+        "avgPromptTokens": 142.7,
+        "efficiencyScore": 0.0127,
+        "scoreStdDev": 2.79,
+        "totalMsStdDev": 16798.6,
+        "deterministicPassRate": 0.6,
+        "avgCpuPct": 724.32,
+        "peakCpuPct": 819.27,
+        "peakMemUsedBytes": 6327560569,
+        "peakMemUsedHuman": "5.9GiB",
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3556200000,
+        "resourcesAvailable": true,
+        "resourcesNote": "docker stats streaming (native ~1s refresh), container=ollama"
+      },
+      {
+        "configId": "ollama/qwen2.5-coder_3b@t1",
+        "providerType": "ollama",
+        "model": "qwen2.5-coder:3b",
+        "temperature": 1,
+        "runs": 6,
+        "successfulRuns": 6,
+        "failedRuns": 0,
+        "avgOverallScore": 6.17,
+        "avgCorrectness": 5.83,
+        "avgClarity": 7,
+        "avgCompleteness": 6.67,
+        "avgCodeQuality": 6,
+        "avgTokensPerSec": 8.19,
+        "avgTTFT": 1509.4,
+        "avgTotalMs": 72613.6,
+        "avgCompletionTokens": 593.3,
+        "avgPromptTokens": 142.7,
+        "efficiencyScore": 0.0104,
+        "scoreStdDev": 2.04,
+        "totalMsStdDev": 20150.5,
+        "deterministicPassRate": 0.8,
+        "avgCpuPct": 769.16,
+        "peakCpuPct": 842.97,
+        "peakMemUsedBytes": 6379100176,
+        "peakMemUsedHuman": "5.9GiB",
+        "peakMemLimitBytes": 12401718067,
+        "totalNetIOBytes": 3567300000,
+        "resourcesAvailable": true,
+        "resourcesNote": "docker stats streaming (native ~1s refresh), container=ollama"
+      }
+    ],
+    "conciseness": {
+      "avgTokensPerTask": {
+        "codegen-bfs": {
+          "gpustack/glm-5.3-flash@t0.1": 1310,
+          "gpustack/glm-5.3-flash@t1": 957,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 484,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 508,
+          "ollama/qwen2.5-coder_3b@t0.1": 502,
+          "ollama/qwen2.5-coder_3b@t1": 657
+        },
+        "bugfix-loop-sum": {
+          "gpustack/glm-5.3-flash@t0.1": 404,
+          "gpustack/glm-5.3-flash@t1": 463,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 246,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 299,
+          "ollama/qwen2.5-coder_3b@t0.1": 390,
+          "ollama/qwen2.5-coder_3b@t1": 578
+        },
+        "explain-decorator": {
+          "gpustack/glm-5.3-flash@t0.1": 1677,
+          "gpustack/glm-5.3-flash@t1": 1801,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 616,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 740,
+          "ollama/qwen2.5-coder_3b@t0.1": 557,
+          "ollama/qwen2.5-coder_3b@t1": 877
+        },
+        "sql-top-orders": {
+          "gpustack/glm-5.3-flash@t0.1": 740,
+          "gpustack/glm-5.3-flash@t1": 620,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 425,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 317,
+          "ollama/qwen2.5-coder_3b@t0.1": 408,
+          "ollama/qwen2.5-coder_3b@t1": 433
+        },
+        "refactor-callbacks": {
+          "gpustack/glm-5.3-flash@t0.1": 1179,
+          "gpustack/glm-5.3-flash@t1": 977,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 614,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 439,
+          "ollama/qwen2.5-coder_3b@t0.1": 625,
+          "ollama/qwen2.5-coder_3b@t1": 551
+        },
+        "tricky-hoisting": {
+          "gpustack/glm-5.3-flash@t0.1": 1152,
+          "gpustack/glm-5.3-flash@t1": 1121,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1": 386,
+          "ollama/qwen2.5-coder_3b-instruct-q8_0@t1": 493,
+          "ollama/qwen2.5-coder_3b@t0.1": 267,
+          "ollama/qwen2.5-coder_3b@t1": 464
+        }
+      },
+      "avgTokensPerModel": {
+        "gpustack/glm-5.3-flash": 1033.4,
+        "ollama/qwen2.5-coder:3b-instruct-q8_0": 463.9,
+        "ollama/qwen2.5-coder:3b": 525.8
+      }
+    },
+    "verdict": "=== VERDICT ===\n1. Качество: 1) gpustack/glm-5.3-flash (9.58); 2) ollama/qwen2.5-coder:3b-instruct-q8_0 (6); 3) ollama/qwen2.5-coder:3b (6)\n2. Скорость: быстрее всех gpustack/glm-5.3-flash (224.19 tok/s avg).\n3. Эффективность (качество/токен): ollama/qwen2.5-coder:3b-instruct-q8_0 (eff 0.013).\n4. Ресурсы (среди локальных): меньше всех CPU грузит ollama/qwen2.5-coder_3b-instruct-q8_0@t0.1 (peak 818.91%, mem peak 3.6GiB).\n[gpustack/glm-5.3-flash] температура: по качеству t0.1 (t0.1=9.83, t1.0=9.33); данных по стабильности недостаточно (нужен --repeats > 1).\n[ollama/qwen2.5-coder:3b-instruct-q8_0] температура: по качеству t0.1 (t0.1=6.33, t1.0=5.67); данных по стабильности недостаточно (нужен --repeats > 1).\n[ollama/qwen2.5-coder:3b] температура: по качеству t1.0 (t0.1=5.83, t1.0=6.17); данных по стабильности недостаточно (нужен --repeats > 1).",
+    "table": "config                                     | score | tok/s  | ttftMs | totalMs | avgTok | eff    | det% | avgCpu% | cpuPk% | memPk \n-------------------------------------------+-------+--------+--------+---------+--------+--------+------+---------+--------+-------\ngpustack/glm-5.3-flash@t0.1                | 9.83  | 235.61 | 2517   | 4560.4  | 1077   | 0.0091 | 100% | -       | -      | -     \ngpustack/glm-5.3-flash@t1                  | 9.33  | 212.77 | 2265.7 | 4599    | 989.8  | 0.0094 | 100% | -       | -      | -     \nollama/qwen2.5-coder_3b-instruct-q8_0@t0.1 | 6.33  | 4.94   | 2353.7 | 93084.1 | 461.8  | 0.0137 | 80%  | 776.93  | 818.91 | 3.6GiB\nollama/qwen2.5-coder_3b-instruct-q8_0@t1   | 5.67  | 5.81   | 2990.8 | 80580.7 | 466    | 0.0122 | 60%  | 768.1   | 821.06 | 3.7GiB\nollama/qwen2.5-coder_3b@t0.1               | 5.83  | 9.01   | 4377.1 | 51785.6 | 458.2  | 0.0127 | 60%  | 724.32  | 819.27 | 5.9GiB\nollama/qwen2.5-coder_3b@t1                 | 6.17  | 8.19   | 1509.4 | 72613.6 | 593.3  | 0.0104 | 80%  | 769.16  | 842.97 | 5.9GiB"
+  }
+}

@@ -24,13 +24,19 @@ function headersFor(provider) {
 
 /**
  * Нестриминговый вызов чата. Возвращает текст ответа (choices[0].message.content).
+ * temperature/maxTokens — опциональные оверрайды: temperature null/undefined →
+ * дефолт из конфига; maxTokens null/undefined → поле max_tokens не отправляется.
  * Ошибки — всегда с читаемой причиной: сеть, статус + фрагмент тела, отсутствие content.
  */
-export async function chatCompletion({ provider, model, messages }) {
+export async function chatCompletion({ provider, model, messages, temperature, maxTokens }) {
   const base = baseUrlFor(provider);
   const url = `${base}/v1/chat/completions`;
 
-  const body = JSON.stringify({ model, messages, temperature: config.temperature });
+  const requestBody = { model, messages, temperature: temperature ?? config.temperature };
+  if (maxTokens != null) {
+    requestBody.max_tokens = maxTokens;
+  }
+  const body = JSON.stringify(requestBody);
 
   let response;
   try {

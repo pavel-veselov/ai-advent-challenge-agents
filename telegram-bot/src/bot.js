@@ -5,11 +5,13 @@
  * - ollama — живое обнаружение моделей, без ключа;
  * - при смене провайдера модель сбрасывается на первую модель нового провайдера;
  * - RAG: вопросы по инструкции пылесоса (LEGEE D8 LuLu) — поиск по базе знаний,
- *   вкл/выкл командой /kb (по умолчанию вкл, любые ошибки — fail-open в обычный чат).
+ *   вкл/выкл командой /kb (по умолчанию вкл, любые ошибки — fail-open в обычный чат);
+ * - системный промпт и параметры генерации (temperature, max tokens, контекст) —
+ *   глобальные настройки, команды /prompt и /params, персистятся в state.json.
  */
 import { Bot } from "grammy";
 
-import config, { PROVIDERS, SYSTEM_PROMPT } from "./config.js";
+import config, { PROVIDERS } from "./config.js";
 import { GPUSTACK_MODELS, listOllamaModels } from "./catalog.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { chatCompletion } from "./llm.js";
@@ -102,6 +104,8 @@ const GREETING = [
   "/model — показать или сменить модель LLM",
   "/reset — очистить историю этого чата",
   "/kb — RAG по инструкции пылесоса (вкл/выкл)",
+  "/prompt — системный промпт (показать/сменить/сбросить)",
+  "/params — параметры генерации (temperature, maxtokens, context)",
 ].join("\n");
 
 const COMMANDS = [
@@ -111,6 +115,8 @@ const COMMANDS = [
   { command: "model", description: "Показать/сменить модель LLM" },
   { command: "reset", description: "Очистить историю этого чата" },
   { command: "kb", description: "RAG по инструкции пылесоса (вкл/выкл)" },
+  { command: "prompt", description: "Показать/сменить системный промпт" },
+  { command: "params", description: "Параметры генерации (temperature и др.)" },
 ];
 
 /** Аргументы команды: всё, что идёт после первого слова. */
@@ -130,10 +136,32 @@ function firstModelOf(provider, models) {
   return models[0] ?? null;
 }
 
+/**
+ * При старте сверяет сохранённую ollama-модель с живым каталогом:
+ * её нет в списке → переключение на первую доступную; Ollama недоступна или
+ * список пуст → только предупреждение, бот стартует с сохранённой моделью.
+ */
+async function validateOllamaModelAtStartup() {
+  if (store.getProvider() !== "ollama") return;
+  try {
+    const models = await listOllamaModels();
+    const current = store.getModel();
+    if (models.length > 0 && !models.includes(current)) {
+      const fallback = firstModelOf("ollama", models);
+      store.setModel(fallback);
+      console.log(`Модель "${current}" удалена из Ollama, переключено на "${fallback}"`);
+    }
+  } catch (error) {
+    console.warn(`Не удалось проверить модель Ollama при старте: ${error.message}`);
+  }
+}
+
 function formatModelList(provider, models) {
   const lines = models.map((id, index) => `${index + 1}. ${id}`);
+  const current = store.getModel();
+  const missing = models.includes(current) ? "" : " (нет в каталоге)";
   return [
-    `Текущая модель: ${store.getModel()}`,
+    `Текущая модель: ${current}${missing}`,
     `Модели провайдера ${provider}:`,
     ...lines,
     "",
@@ -267,6 +295,120 @@ bot.command("kb", async (ctx) => {
   );
 });
 
+bot.command("prompt", (ctx) => {
+  const arg = commandArg(ctx.message.text);
+
+  if (!arg) {
+    ctx.reply(
+      [
+        "Текущий системный промпт:",
+        `«${store.getSystemPrompt()}»`,
+        "",
+        "Сменить: /prompt <текст> (до 2000 символов)",
+        "Сбросить на дефолт: /prompt reset",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (arg.toLowerCase() === "reset") {
+    store.setSystemPrompt(null);
+    ctx.reply("Системный промпт сброшен на дефолтный.");
+    return;
+  }
+
+  if (arg.length > 2000) {
+    ctx.reply(`Слишком длинный промпт: ${arg.length} символов. Максимум — 2000.`);
+    return;
+  }
+
+  store.setSystemPrompt(arg);
+  ctx.reply("Системный промпт обновлён.");
+});
+
+/** Читаемое значение temperature: «0.7 (дефолт)» или само число. */
+function temperatureLabel(value) {
+  return value === null ? "0.7 (дефолт)" : String(value);
+}
+
+bot.command("params", (ctx) => {
+  const parts = commandArg(ctx.message.text).split(/\s+/).filter(Boolean);
+  const sub = (parts[0] ?? "").toLowerCase();
+
+  if (!sub) {
+    const maxTokens = store.getMaxTokens();
+    ctx.reply(
+      [
+        "Параметры генерации:",
+        `temperature: ${temperatureLabel(store.getTemperature())}`,
+        `max tokens: ${maxTokens === null ? "выкл (дефолт)" : String(maxTokens)}`,
+        `контекст: ${store.getContextLimit() ?? "10 (дефолт)"} сообщений`,
+        "",
+        "Сменить: /params temperature <0..2>, /params maxtokens <100..8192|off>, /params context <1..50>",
+        "Сбросить на дефолты: /params reset",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (sub === "reset") {
+    store.setTemperature(null);
+    store.setMaxTokens(null);
+    store.setContextLimit(null);
+    ctx.reply("Параметры сброшены: temperature 0.7, max tokens выкл, контекст 10.");
+    return;
+  }
+
+  if (sub === "temperature") {
+    const value = Number(parts[1]);
+    if (!parts[1] || !Number.isFinite(value) || value < 0 || value > 2) {
+      ctx.reply("Температура должна быть числом от 0 до 2. Например: /params temperature 0.7");
+      return;
+    }
+    store.setTemperature(value);
+    ctx.reply(`Температура: ${value}. Сбросить на дефолт: /params reset`);
+    return;
+  }
+
+  if (sub === "maxtokens") {
+    const raw = (parts[1] ?? "").toLowerCase();
+    if (raw === "off") {
+      store.setMaxTokens(null);
+      ctx.reply("max_tokens отключён: ограничение не отправляется в запросе.");
+      return;
+    }
+    const value = Number(raw);
+    if (!raw || !Number.isInteger(value) || value < 100 || value > 8192) {
+      ctx.reply("max tokens должен быть целым числом от 100 до 8192 или off. Например: /params maxtokens 1024");
+      return;
+    }
+    store.setMaxTokens(value);
+    ctx.reply(`max_tokens: ${value}. Отключить: /params maxtokens off`);
+    return;
+  }
+
+  if (sub === "context") {
+    const value = Number(parts[1]);
+    if (!parts[1] || !Number.isInteger(value) || value < 1 || value > 50) {
+      ctx.reply("Контекст должен быть целым числом от 1 до 50 — сколько последних сообщений уходит в LLM. Например: /params context 10");
+      return;
+    }
+    store.setContextLimit(value);
+    ctx.reply(`Контекст: последние ${value} сообщений. Сбросить: /params reset`);
+    return;
+  }
+
+  ctx.reply(
+    [
+      "Не понял. Доступно:",
+      "/params temperature <0..2>",
+      "/params maxtokens <100..8192|off>",
+      "/params context <1..50>",
+      "/params reset",
+    ].join("\n"),
+  );
+});
+
 /** Обычный текст: user → (опционально RAG) → LLM → assistant. История — последние 10 сообщений. */
 bot.on("message:text", async (ctx) => {
   const chatId = ctx.chat.id;
@@ -290,7 +432,7 @@ bot.on("message:text", async (ctx) => {
 
   try {
     const messages = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: store.getSystemPrompt() },
       ...(ragBlock ? [{ role: "system", content: ragBlock }] : []),
       ...store.getHistory(chatId),
     ];
@@ -298,6 +440,8 @@ bot.on("message:text", async (ctx) => {
       provider: store.getProvider(),
       model: store.getModel(),
       messages,
+      temperature: store.getTemperature(),
+      maxTokens: store.getMaxTokens(),
     });
     // В историю — чистый ответ; блок источников нужен только для показа.
     store.appendMessage(chatId, { role: "assistant", content: reply });
@@ -322,6 +466,7 @@ bot.catch((error) => {
 });
 
 async function main() {
+  await validateOllamaModelAtStartup();
   await bot.api.setMyCommands(COMMANDS);
   console.log(`Провайдер: ${store.getProvider()}; модель: ${store.getModel()}`);
   bot.start({

@@ -4,8 +4,14 @@
  * (бот стартует командой `node --env-file=.env src/bot.js`).
  */
 
-/** Стартовый системный промпт бота. */
-export const SYSTEM_PROMPT = "Ты душевный собеседник.";
+/** Системный промпт по умолчанию (восстанавливается через /prompt reset). */
+export const DEFAULT_SYSTEM_PROMPT = "Ты душевный собеседник.";
+
+/** Дефолтная температура генерации (восстанавливается через /params reset). */
+export const DEFAULT_TEMPERATURE = 0.7;
+
+/** Дефолтный размер истории чата, уходящей в LLM (восстанавливается через /params reset). */
+export const DEFAULT_CONTEXT_LIMIT = 10;
 
 /** Допустимые провайдеры LLM. */
 export const PROVIDERS = Object.freeze(["gpustack", "ollama"]);
@@ -13,8 +19,8 @@ export const PROVIDERS = Object.freeze(["gpustack", "ollama"]);
 /** Таймаут одного запроса к LLM, мс. */
 const REQUEST_TIMEOUT_MS = 120_000;
 
-/** Температура генерации. */
-const TEMPERATURE = 0.7;
+/** Температура генерации (дефолт; пользовательская — через /params temperature). */
+const TEMPERATURE = DEFAULT_TEMPERATURE;
 
 /** Обрезает строку и хвостовые слэши (адреса приходят без /v1). */
 function normalizeBaseUrl(raw) {

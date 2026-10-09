@@ -1,6 +1,8 @@
 /**
  * Хранилище состояния бота в data/state.json:
  * - провайдер и модель — глобальные (одно выделение на бота, как выбор в llm-agent-app);
+ * - системный промпт и параметры генерации (temperature, max tokens, размер
+ *   контекста) — тоже глобальные, null означает «дефолт» (настраиваются /prompt и /params);
  * - история — на каждый чат, хранятся только ПОСЛЕДНИЕ HISTORY_LIMIT сообщений.
  * Файл перезаписывается после каждого изменения; битый файл не роняет бота —
  * начинаем с чистого состояния (провайдер/модель из env).
@@ -9,10 +11,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import config from "./config.js";
+import config, { DEFAULT_CONTEXT_LIMIT, DEFAULT_SYSTEM_PROMPT } from "./config.js";
 
-/** Сколько последних сообщений чата держим в контексте. */
-export const HISTORY_LIMIT = 10;
+/** Сколько последних сообщений чата держим в контексте (дефолт /params context). */
+export const HISTORY_LIMIT = DEFAULT_CONTEXT_LIMIT;
 
 /** data/state.json рядом с проектом (независимо от cwd). */
 const STATE_FILE = fileURLToPath(new URL("../data/state.json", import.meta.url));
@@ -32,6 +34,14 @@ export class Store {
   #filePath;
   #provider;
   #model;
+  /** null = пользователь не менял, действует дефолт (DEFAULT_SYSTEM_PROMPT). */
+  #systemPrompt = null;
+  /** null = дефолтная температура из config. */
+  #temperature = null;
+  /** null = max_tokens не отправляется в запросе. */
+  #maxTokens = null;
+  /** null = HISTORY_LIMIT сообщений контекста. */
+  #contextLimit = null;
   /** Map<string, {history: Array<{role, content}>, ragEnabled?: boolean}> — по строковому chat_id. */
   #chats = new Map();
 
@@ -58,10 +68,25 @@ export class Store {
     }
     if (typeof raw?.provider === "string" && raw.provider) this.#provider = raw.provider;
     if (typeof raw?.model === "string" && raw.model) this.#model = raw.model;
+    // Глобальные настройки: null = «не трогали». У старых state.json этих полей нет —
+    // миграция ленивая (дефолты применяются на лету), история чатов не переписывается.
+    if (typeof raw?.systemPrompt === "string" && raw.systemPrompt.trim()) {
+      this.#systemPrompt = raw.systemPrompt;
+    }
+    if (typeof raw?.temperature === "number" && Number.isFinite(raw.temperature)) {
+      this.#temperature = raw.temperature;
+    }
+    if (typeof raw?.maxTokens === "number" && Number.isFinite(raw.maxTokens)) {
+      this.#maxTokens = raw.maxTokens;
+    }
+    if (typeof raw?.contextLimit === "number" && Number.isFinite(raw.contextLimit)) {
+      this.#contextLimit = raw.contextLimit;
+    }
+    const contextLimit = this.#contextLimit ?? HISTORY_LIMIT;
     if (raw?.chats && typeof raw.chats === "object") {
       for (const [chatId, chat] of Object.entries(raw.chats)) {
         if (Array.isArray(chat?.history)) {
-          const history = chat.history.filter(isValidMessage).slice(-HISTORY_LIMIT);
+          const history = chat.history.filter(isValidMessage).slice(-contextLimit);
           const entry = { history };
           // Флаг RAG — необязательное поле; у старых state.json его просто нет (дефолт — вкл).
           if (typeof chat.ragEnabled === "boolean") entry.ragEnabled = chat.ragEnabled;
@@ -89,19 +114,64 @@ export class Store {
     this.#save();
   }
 
-  /** Копия истории чата (последние HISTORY_LIMIT сообщений). */
-  getHistory(chatId) {
-    const chat = this.#chats.get(String(chatId));
-    return chat ? [...chat.history] : [];
+  /** Текущий системный промпт (дефолт, если пользователь не задавал свой). */
+  getSystemPrompt() {
+    return this.#systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   }
 
-  /** Добавляет сообщение в конец истории чата и обрезает до последних HISTORY_LIMIT. */
+  /** Задаёт системный промпт; null/пустой — вернуть дефолтный. */
+  setSystemPrompt(prompt) {
+    this.#systemPrompt = typeof prompt === "string" && prompt.trim() ? prompt : null;
+    this.#save();
+  }
+
+  /** Температура генерации (null — дефолт из конфига). */
+  getTemperature() {
+    return this.#temperature;
+  }
+
+  setTemperature(value) {
+    this.#temperature = typeof value === "number" && Number.isFinite(value) ? value : null;
+    this.#save();
+  }
+
+  /** Лимит токенов ответа (null — не отправлять max_tokens). */
+  getMaxTokens() {
+    return this.#maxTokens;
+  }
+
+  setMaxTokens(value) {
+    this.#maxTokens =
+      typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+    this.#save();
+  }
+
+  /** Сколько последних сообщений истории уходит в LLM (null — HISTORY_LIMIT). */
+  getContextLimit() {
+    return this.#contextLimit;
+  }
+
+  setContextLimit(value) {
+    this.#contextLimit =
+      typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+    this.#save();
+  }
+
+  /** Копия истории чата (последние contextLimit ?? HISTORY_LIMIT сообщений). */
+  getHistory(chatId) {
+    const chat = this.#chats.get(String(chatId));
+    if (!chat) return [];
+    return chat.history.slice(-(this.#contextLimit ?? HISTORY_LIMIT));
+  }
+
+  /** Добавляет сообщение в конец истории чата и обрезает до contextLimit ?? HISTORY_LIMIT. */
   appendMessage(chatId, message) {
     const key = String(chatId);
     const chat = this.#chats.get(key) ?? { history: [] };
     chat.history.push({ role: message.role, content: message.content });
-    if (chat.history.length > HISTORY_LIMIT) {
-      chat.history.splice(0, chat.history.length - HISTORY_LIMIT);
+    const limit = this.#contextLimit ?? HISTORY_LIMIT;
+    if (chat.history.length > limit) {
+      chat.history.splice(0, chat.history.length - limit);
     }
     this.#chats.set(key, chat);
     this.#save();
@@ -146,7 +216,15 @@ export class Store {
       for (const [chatId, chat] of this.#chats) {
         chats[chatId] = chat;
       }
-      const state = { provider: this.#provider, model: this.#model, chats };
+      const state = {
+        provider: this.#provider,
+        model: this.#model,
+        systemPrompt: this.#systemPrompt,
+        temperature: this.#temperature,
+        maxTokens: this.#maxTokens,
+        contextLimit: this.#contextLimit,
+        chats,
+      };
       writeFileSync(this.#filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
     } catch (error) {
       // Персистентность не критична для работы чата — бот продолжает работать в памяти.

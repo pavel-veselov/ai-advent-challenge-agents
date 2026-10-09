@@ -1,0 +1,15 @@
+{
+  "name": "llm-benchmark",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency LLM benchmark: quality (LLM-as-judge), speed (TTFT/tokens-per-sec), resources (docker stats) across 6 model configs",
+  "scripts": {
+    "bench": "node src/index.js",
+    "smoke": "node src/index.js --limit 3 --tasks 1",
+    "ui": "node src/ui-report.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
