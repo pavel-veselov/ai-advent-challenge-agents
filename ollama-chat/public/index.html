@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Ollama Chat</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1>Ollama Chat</h1>
+    </div>
+    <div class="topbar-meta">
+      <span id="queue-badge" class="badge hidden">в очереди: 0</span>
+      <span id="model-chip" class="chip" title="Модель">…</span>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite">
+    <div id="empty-state" class="empty-state">
+      <div class="empty-glyph" aria-hidden="true">‹/›</div>
+      <h2>Чем помочь?</h2>
+      <p class="hint">История хранится до обновления страницы</p>
+      <div class="chips">
+        <button type="button" class="chip-btn" data-prompt="Напиши функцию debounce на JavaScript">Напиши debounce на JS</button>
+        <button type="button" class="chip-btn" data-prompt="Объясни, как работает event loop в JavaScript">Объясни event loop в JS</button>
+        <button type="button" class="chip-btn" data-prompt="Напиши SQL-запрос: топ-10 клиентов по сумме заказов">Топ-10 клиентов по заказам (SQL)</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-box">
+      <textarea id="input" rows="1" maxlength="8000"
+        placeholder="Спроси что-нибудь… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+      <button type="button" id="stop-btn" class="btn stop hidden" title="Остановить генерацию">■</button>
+      <button type="button" id="send-btn" class="btn send" title="Отправить">➤</button>
+    </div>
+    <p class="composer-note">Модель отвечает локально через Ollama · история не сохраняется</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

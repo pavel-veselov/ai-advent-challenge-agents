@@ -1,0 +1,10 @@
+services:
+  ollama-chat:
+    build: .
+    container_name: ollama-chat
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      OLLAMA_URL: http://127.0.0.1:11434
+      MODEL: qwen2.5-coder:3b
