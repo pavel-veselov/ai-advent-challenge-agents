@@ -43,7 +43,8 @@ const BINARY_EXT = new Set([
 ]);
 
 const log = (step, msg = "") => console.log(`[ai-review] ${step}${msg ? ": " + msg : ""}`);
-const die = (msg) => { console.error(`[ai-review] FATAL: ${msg}`); process.exit(1); };
+class FatalError extends Error {}
+const die = (msg) => { throw new FatalError(msg); };
 
 // ---------- GitHub ----------
 function ghHeaders() {
@@ -287,6 +288,7 @@ function formatComment(review, { files, chunks, secs }) {
 }
 
 // ---------- main ----------
+async function main() {
 const t0 = Date.now();
 const isCI = Boolean(CFG.token && CFG.prNumber && CFG.repo);
 
@@ -296,11 +298,13 @@ let diffText;
 let fileInfos = [];
 if (isCI) {
   log("CI", `${CFG.repo} PR#${CFG.prNumber} — получаю изменённые файлы…`);
-  const prFiles = await fetchPrFiles();
+  let prFiles;
+  try { prFiles = await fetchPrFiles(); } catch (err) { die(`GitHub API: ${err.message}`); }
   diffText = buildDiff(prFiles);
   fileInfos = prFiles.map((f) => ({ name: f.filename, patch: f.patch || "" }));
 } else {
-  const diffArg = process.argv[process.argv.indexOf("--diff") + 1];
+  const diffIdx = process.argv.indexOf("--diff");
+  const diffArg = diffIdx >= 0 ? process.argv[diffIdx + 1] : undefined;
   diffText = await loadLocalDiff(diffArg);
   // имена файлов и их патчи из unified diff (для RAG-запросов)
   const blocks = diffText.split(/^diff --git /m).slice(1);
@@ -328,3 +332,13 @@ if (isCI) {
   console.log("\n" + body + "\n");
   log("готово", `локальный прогон за ${stats.secs} с`);
 }
+}
+
+main().catch((err) => {
+  if (err instanceof FatalError) {
+    console.error(`[ai-review] FATAL: ${err.message}`);
+  } else {
+    console.error("[ai-review] FATAL:", err && err.stack ? err.stack : err);
+  }
+  process.exitCode = 1;
+});
