@@ -339,6 +339,9 @@ main().catch((err) => {
     console.error(`[ai-review] FATAL: ${err.message}`);
   } else {
     console.error("[ai-review] FATAL:", err && err.stack ? err.stack : err);
+    // undici прячет настоящую причину сетевого сбоя в err.cause (DNS, TLS, refuse) — показываем
+    const cause = err && err.cause;
+    if (cause) console.error(`[ai-review] причина: ${cause.code || cause.name}: ${cause.message || cause}`);
   }
   process.exitCode = 1;
 });
