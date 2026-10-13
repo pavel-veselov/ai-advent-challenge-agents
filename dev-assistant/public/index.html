@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Dev Assistant</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1>Dev Assistant</h1>
+    </div>
+    <div class="topbar-meta">
+      <span id="branch-chip" class="chip" title="Текущая ветка">…</span>
+      <span id="model-chip" class="chip" title="Модель LLM">…</span>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite">
+    <div id="empty-state" class="empty-state">
+      <div class="empty-glyph" aria-hidden="true">‹›</div>
+      <h2>Спроси о проекте</h2>
+      <p class="hint">RAG по README и docs · MCP даёт git-контекст · отвечает GPUStack</p>
+      <div class="chips">
+        <button type="button" class="chip-btn" data-prompt="Какая структура проекта?">Какая структура проекта?</button>
+        <button type="button" class="chip-btn" data-prompt="Как устроен RAG и reranking в проекте?">Как устроен RAG и reranking?</button>
+        <button type="button" class="chip-btn" data-prompt="Что описывает CONTRACT.md?">Что описывает CONTRACT.md?</button>
+        <button type="button" class="chip-btn" data-prompt="Какие инструменты у MCP-серверов в проекте?">Инструменты MCP-серверов</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-box">
+      <textarea id="input" rows="1" maxlength="4000"
+        placeholder="Спроси о проекте… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+      <button type="button" id="stop-btn" class="btn stop hidden" title="Остановить генерацию">■</button>
+      <button type="button" id="send-btn" class="btn send" title="Отправить">➤</button>
+    </div>
+    <p class="composer-note">GPUStack · MCP (git) · RAG по README + docs</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

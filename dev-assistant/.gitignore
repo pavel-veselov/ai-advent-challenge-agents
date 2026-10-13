@@ -1,0 +1,5 @@
+.env
+.rag-cache.json
+node_modules
+out.log
+err.log
