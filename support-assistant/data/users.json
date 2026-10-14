@@ -1,0 +1,37 @@
+{
+  "users": [
+    {
+      "id": "U-1001",
+      "name": "Иван Петров",
+      "email": "ivan@example.com",
+      "plan": "Pro",
+      "status": "active",
+      "createdAt": "2025-03-12"
+    },
+    {
+      "id": "U-1002",
+      "name": "Мария Смирнова",
+      "email": "maria@example.com",
+      "plan": "Free",
+      "status": "blocked",
+      "blockedReason": "3 неудачных попытки входа, аккаунт заблокирован системой безопасности 2026-10-12",
+      "createdAt": "2025-11-02"
+    },
+    {
+      "id": "U-1003",
+      "name": "Ольга Кузнецова",
+      "email": "olga@example.com",
+      "plan": "Team",
+      "status": "active",
+      "createdAt": "2024-08-20"
+    },
+    {
+      "id": "U-1004",
+      "name": "Павел Веселов",
+      "email": "pavel@example.com",
+      "plan": "Pro",
+      "status": "active",
+      "createdAt": "2026-01-15"
+    }
+  ]
+}

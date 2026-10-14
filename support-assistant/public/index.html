@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AI-ассистент поддержки</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1>AI-ассистент поддержки</h1>
+    </div>
+    <div class="topbar-meta">
+      <span id="crm-chip" class="chip" title="CRM-инструменты (MCP)">…</span>
+      <span id="model-chip" class="chip" title="Модель LLM">…</span>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite">
+    <div id="empty-state" class="empty-state">
+      <div class="empty-glyph" aria-hidden="true">?</div>
+      <h2>Спросите о своей проблеме</h2>
+      <p class="hint">База знаний (RAG по FAQ) · данные пользователя и тикетов через MCP-CRM · отвечает GPUStack</p>
+      <div class="chips">
+        <button type="button" class="chip-btn" data-prompt="Почему не работает авторизация?">Почему не работает авторизация?</button>
+        <button type="button" class="chip-btn" data-prompt="Как сбросить пароль?">Как сбросить пароль?</button>
+        <button type="button" class="chip-btn" data-prompt="Я оплатил подписку, но статус не обновился">Оплата прошла, статус подписки не обновился</button>
+        <button type="button" class="chip-btn" data-prompt="Как изменить тарифный план?">Как изменить тарифный план?</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div style="max-width:820px;margin:0 auto 8px;">
+      <input type="email" id="email" autocomplete="email" spellcheck="false"
+        placeholder="Ваш email (для подтягивания тикетов)"
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text);font:inherit;font-size:13px;padding:8px 12px;">
+    </div>
+    <div class="composer-box">
+      <textarea id="input" rows="1" maxlength="4000"
+        placeholder="Опишите вашу проблему… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+      <button type="button" id="stop-btn" class="btn stop hidden" title="Остановить генерацию">■</button>
+      <button type="button" id="send-btn" class="btn send" title="Отправить">➤</button>
+    </div>
+    <p class="composer-note">GPUStack · MCP (CRM) · RAG по FAQ</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
