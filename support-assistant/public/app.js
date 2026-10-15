@@ -3,11 +3,12 @@
 const chatEl = document.getElementById("chat");
 const emptyStateEl = document.getElementById("empty-state");
 const inputEl = document.getElementById("input");
-const emailEl = document.getElementById("email");
+const profileEl = document.getElementById("profile");
 const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
-const crmChip = document.getElementById("crm-chip");
-const modelChip = document.getElementById("model-chip");
+
+// Ровно 3 профиля: первые 3 пользователя из /api/crm/users; фолбэк на случай недоступности CRM.
+const FALLBACK_PROFILES = ["ivan@example.com", "maria@example.com", "olga@example.com"];
 
 let inFlight = null; // AbortController of the active request
 
@@ -191,50 +192,6 @@ function renderAssistant(part, content, streaming) {
   if (stick) scrollToBottom();
 }
 
-function renderSources(part, sources) {
-  const stick = isAtBottom();
-  const meta = part.meta;
-  meta.innerHTML = "";
-  meta.classList.add("has-meta");
-  const head = document.createElement("span");
-  head.className = "meta-label";
-  head.textContent = "База знаний:";
-  meta.append(head);
-  const tags = document.createElement("span");
-  tags.className = "sources";
-  sources.slice(0, 6).forEach((s) => {
-    const rel = typeof s === "string" ? s : s.rel;
-    const t = document.createElement("span");
-    t.className = "source-tag";
-    t.textContent = rel;
-    if (s && typeof s === "object") t.title = `score: ${s.score}`;
-    tags.append(t);
-  });
-  meta.append(tags);
-  if (stick) scrollToBottom();
-}
-
-function renderTools(part, tools) {
-  const stick = isAtBottom();
-  part.meta.classList.add("has-meta");
-  const box = document.createElement("div");
-  box.className = "tools";
-  tools.forEach((t) => {
-    const row = document.createElement("div");
-    row.className = "tool-row";
-    const name = document.createElement("span");
-    name.className = "tool-name";
-    name.textContent = t.tool;
-    const res = document.createElement("span");
-    res.className = "tool-result";
-    res.textContent = t.result;
-    row.append(name, res);
-    box.append(row);
-  });
-  part.meta.append(box);
-  if (stick) scrollToBottom();
-}
-
 function renderError(part, message) {
   part.wrap.classList.add("error");
   part.body.innerHTML = escapeHtml(message);
@@ -281,11 +238,10 @@ async function sendMessage() {
   let answer = "";
 
   try {
-    const email = emailEl ? emailEl.value.trim() : "";
     const res = await fetch("/api/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question: text, ...(email ? { email } : {}) }),
+      body: JSON.stringify({ question: text, email: profileEl.value }),
       signal: controller.signal,
     });
 
@@ -300,12 +256,6 @@ async function sendMessage() {
 
     await readStream(res, (obj) => {
       switch (obj.type) {
-        case "sources":
-          renderSources(part, obj.sources || [], obj.snippets || []);
-          break;
-        case "tools":
-          renderTools(part, obj.tools || []);
-          break;
         case "delta":
           answer += obj.text;
           renderAssistant(part, answer, true);
@@ -313,6 +263,7 @@ async function sendMessage() {
         case "done":
           answer = obj.text;
           renderAssistant(part, answer, false);
+          loadHistory(); // история на сервере уже обновлена — перерисовываем чат
           break;
         case "aborted":
           if (answer) renderAssistant(part, answer, false);
@@ -361,6 +312,11 @@ inputEl.addEventListener("keydown", (e) => {
 sendBtn.addEventListener("click", sendMessage);
 stopBtn.addEventListener("click", () => inFlight?.abort());
 
+profileEl.addEventListener("change", () => {
+  inFlight?.abort(); // активный ответ чужого профиля прекращаем
+  loadHistory();
+});
+
 chatEl.addEventListener("click", async (e) => {
   const btn = e.target.closest(".copy-btn");
   if (!btn) return;
@@ -383,13 +339,50 @@ document.querySelectorAll(".chip-btn").forEach((btn) => {
   });
 });
 
-async function init() {
+async function loadProfiles() {
+  let emails = FALLBACK_PROFILES;
   try {
-    const r = await fetch("/api/status");
+    const r = await fetch("/api/crm/users");
     const d = await r.json();
-    if (Array.isArray(d.crmTools) && d.crmTools.length) crmChip.textContent = `CRM: ${d.crmTools.join(" · ")}`;
-    if (d.model) modelChip.textContent = d.model;
-  } catch { /* chips stay "…" */ }
+    const list = (d.users || []).slice(0, 3).map((u) => u.email);
+    if (list.length === 3) emails = list;
+  } catch { /* оставляем fallback */ }
+  profileEl.replaceChildren();
+  for (const email of emails) {
+    const o = document.createElement("option");
+    o.value = email;
+    o.textContent = email;
+    profileEl.appendChild(o);
+  }
+}
+
+async function loadHistory() {
+  const email = profileEl.value;
+  if (!email) return;
+  try {
+    const r = await fetch(`/api/history?email=${encodeURIComponent(email)}`);
+    const d = await r.json();
+    const msgs = Array.isArray(d.messages) ? d.messages : [];
+    chatEl.querySelectorAll(".msg").forEach((m) => m.remove());
+    if (msgs.length) {
+      hideEmptyState();
+      for (const m of msgs) {
+        if (m.role === "user") addUserBubble(m.text);
+        else {
+          const part = addAssistantBubble();
+          renderAssistant(part, m.text || "", false);
+        }
+      }
+    } else {
+      emptyStateEl?.classList.remove("hidden");
+    }
+    scrollToBottom();
+  } catch { /* при ошибке оставляем текущий чат как есть */ }
+}
+
+async function init() {
+  await loadProfiles();
+  await loadHistory();
   autoGrow();
   inputEl.focus();
 }

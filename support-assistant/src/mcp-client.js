@@ -70,7 +70,7 @@ export class McpClient {
   async callTool(name, args) {
     const r = await this.request("tools/call", { name, arguments: args || {} });
     const text = (r.content || []).find((c) => c.type === "text")?.text || "";
-    return { text, isError: Boolean(r.isError) };
+    return { text, isError: Boolean(r.isError), data: r.structuredContent ?? null };
   }
 
   close() {

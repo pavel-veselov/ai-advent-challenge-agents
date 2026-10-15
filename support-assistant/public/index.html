@@ -7,6 +7,20 @@
   <title>AI-ассистент поддержки</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
+  <style>
+    #profile {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--text-dim);
+      font: inherit;
+      font-size: 12px;
+      padding: 4px 10px;
+      max-width: 240px;
+    }
+
+    #profile:focus { outline: none; border-color: var(--accent); }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -15,16 +29,15 @@
       <h1>AI-ассистент поддержки</h1>
     </div>
     <div class="topbar-meta">
-      <span id="crm-chip" class="chip" title="CRM-инструменты (MCP)">…</span>
-      <span id="model-chip" class="chip" title="Модель LLM">…</span>
+      <select id="profile" title="Профиль пользователя" aria-label="Профиль пользователя"></select>
     </div>
   </header>
 
   <main id="chat" aria-live="polite">
     <div id="empty-state" class="empty-state">
       <div class="empty-glyph" aria-hidden="true">?</div>
-      <h2>Спросите о своей проблеме</h2>
-      <p class="hint">База знаний (RAG по FAQ) · данные пользователя и тикетов через MCP-CRM · отвечает GPUStack</p>
+      <h2>Чем можем помочь?</h2>
+      <p class="hint">Опишите проблему — поможем или создадим тикет в поддержку</p>
       <div class="chips">
         <button type="button" class="chip-btn" data-prompt="Почему не работает авторизация?">Почему не работает авторизация?</button>
         <button type="button" class="chip-btn" data-prompt="Как сбросить пароль?">Как сбросить пароль?</button>
@@ -35,18 +48,12 @@
   </main>
 
   <footer class="composer">
-    <div style="max-width:820px;margin:0 auto 8px;">
-      <input type="email" id="email" autocomplete="email" spellcheck="false"
-        placeholder="Ваш email (для подтягивания тикетов)"
-        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text);font:inherit;font-size:13px;padding:8px 12px;">
-    </div>
     <div class="composer-box">
       <textarea id="input" rows="1" maxlength="4000"
         placeholder="Опишите вашу проблему… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
       <button type="button" id="stop-btn" class="btn stop hidden" title="Остановить генерацию">■</button>
       <button type="button" id="send-btn" class="btn send" title="Отправить">➤</button>
     </div>
-    <p class="composer-note">GPUStack · MCP (CRM) · RAG по FAQ</p>
   </footer>
 
   <script src="/app.js"></script>

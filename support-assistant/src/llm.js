@@ -51,3 +51,60 @@ export async function chatComplete(messages, { onDelta, signal } = {}) {
   }
   return full;
 }
+
+// Один не-стриминговый вызов, который может вернуть tool_calls.
+async function chatOnce(messages, tools, signal) {
+  const res = await fetch(`${config.baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      tools,
+      tool_choice: "auto",
+      stream: false,
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`GPUStack ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message || {};
+}
+
+// Цикл вызова инструментов (glm-5.3-flash поддерживает OpenAI-style tools,
+// проверено запросом с tool_choice:"auto" — ответ содержит tool_calls).
+// Итерации с инструментами идут не-стримингово; финальный ответ стримится.
+export async function chatWithTools({ messages, tools, executeTool, onDelta, signal, maxIterations = 4 } = {}) {
+  const convo = messages.map((m) => ({ ...m }));
+  for (let i = 1; i <= maxIterations; i++) {
+    if (i === maxIterations) {
+      // Последняя итерация — стримим финальный ответ без инструментов.
+      return chatComplete(convo, { onDelta, signal });
+    }
+    const msg = await chatOnce(convo, tools, signal);
+    const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+    if (!calls.length) {
+      const text = typeof msg.content === "string" ? msg.content : "";
+      if (text) onDelta?.(text);
+      return text;
+    }
+    convo.push({ role: "assistant", content: msg.content || "", tool_calls: calls });
+    for (const c of calls) {
+      let out;
+      try {
+        const fnArgs = c.function?.arguments ? JSON.parse(c.function.arguments) : {};
+        out = await executeTool(c.function?.name || "", fnArgs);
+      } catch (e) {
+        out = `Ошибка инструмента: ${e.message}`;
+      }
+      convo.push({ role: "tool", tool_call_id: c.id, content: String(out) });
+    }
+  }
+  return "";
+}

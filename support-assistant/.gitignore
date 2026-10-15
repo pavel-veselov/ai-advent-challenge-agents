@@ -2,3 +2,4 @@
 .rag-cache.json
 out.log
 err.log
+data/history.json

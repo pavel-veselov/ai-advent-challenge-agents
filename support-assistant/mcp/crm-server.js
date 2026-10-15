@@ -55,6 +55,15 @@ const TOOLS = [
     },
   },
   {
+    name: "list_users",
+    description: "Все пользователи CRM (JSON-массив: id, имя, email, тариф, статус, причина блокировки, дата регистрации)",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_ticket",
     description: "Тикет по ID: тема, статус, приоритет, история заметок",
     inputSchema: {
@@ -65,13 +74,13 @@ const TOOLS = [
   },
   {
     name: "search_tickets",
-    description: "Поиск тикетов: по userId/email и/или статусу (open/resolved); без фильтров — все открытые",
+    description: "Поиск тикетов: по userId/email и/или статусу (open/resolved/all; all — все тикеты, включая resolved)",
     inputSchema: {
       type: "object",
       properties: {
         userId: { type: "string", description: "ID пользователя" },
         email: { type: "string", description: "Email пользователя (альтернатива userId)" },
-        status: { type: "string", description: "open | resolved" },
+        status: { type: "string", description: "open | resolved | all (all — все тикеты)" },
       },
       additionalProperties: false,
     },
@@ -102,6 +111,19 @@ async function callTool(name, args) {
         : users.find((x) => x.id === args.id);
       return { text: fmtUser(u) };
     }
+    if (name === "list_users") {
+      const { users } = await load("users.json");
+      const list = users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        plan: u.plan,
+        status: u.status,
+        ...(u.blockedReason ? { blockedReason: u.blockedReason } : {}),
+        registeredAt: u.createdAt,
+      }));
+      return { text: JSON.stringify(list, null, 2), data: list };
+    }
     if (name === "get_ticket") {
       const { tickets } = await load("tickets.json");
       return { text: fmtTicket(tickets.find((t) => t.id === args.id)) };
@@ -115,9 +137,10 @@ async function callTool(name, args) {
         const u = users.find((x) => x.email.toLowerCase() === String(args.email).toLowerCase());
         list = u ? list.filter((t) => t.userId === u.id) : [];
       }
-      if (args.status) list = list.filter((t) => t.status === args.status);
-      if (!list.length) return { text: "Тикетов по фильтру не найдено." };
-      return { text: list.map((t) => fmtTicket(t, false)).join("\n\n") };
+      // "all" — все тикеты (включая resolved); без status — прежнее поведение.
+      if (args.status && args.status !== "all") list = list.filter((t) => t.status === args.status);
+      if (!list.length) return { text: "Тикетов по фильтру не найдено.", data: [] };
+      return { text: list.map((t) => fmtTicket(t, false)).join("\n\n"), data: list };
     }
     if (name === "create_ticket") {
       const file = path.join(DATA_DIR, "tickets.json");
@@ -137,7 +160,7 @@ async function callTool(name, args) {
       tickets.push(ticket);
       const { writeFile } = await import("node:fs/promises");
       await writeFile(file, JSON.stringify({ tickets }, null, 2) + "\n", "utf8");
-      return { text: `Тикет создан: ${ticket.id}\n${fmtTicket(ticket, false)}` };
+      return { text: `Тикет создан: ${ticket.id}\n${fmtTicket(ticket, false)}`, data: ticket };
     }
     return { text: `неизвестный инструмент: ${name}`, isError: true };
   } catch (e) {
@@ -185,13 +208,11 @@ rl.on("line", (line) => {
   }
   if (method === "tools/call") {
     const { name, arguments: args } = params || {};
-    callTool(name, args).then((r) =>
-      respond({
-        jsonrpc: "2.0",
-        id,
-        result: { content: [{ type: "text", text: r.text }], isError: Boolean(r.isError) },
-      })
-    );
+    callTool(name, args).then((r) => {
+      const result = { content: [{ type: "text", text: r.text }], isError: Boolean(r.isError) };
+      if (r.data !== undefined && r.data !== null) result.structuredContent = r.data;
+      respond({ jsonrpc: "2.0", id, result });
+    });
     return;
   }
   respond({ jsonrpc: "2.0", id, error: { code: -32601, message: `Метод не найден: ${method}` } });

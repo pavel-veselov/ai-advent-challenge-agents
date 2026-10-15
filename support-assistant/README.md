@@ -31,21 +31,32 @@ node --env-file=.env server.js
                               src/llm.js → GPUStack /v1/chat/completions
 ```
 
-Стрим `/api/ask` (тело `{question, email?}`, NDJSON):
-`{type:"sources",sources:[{rel,score}]}` → `{type:"tools",tools:[{tool,result}]}` → `{type:"delta",text}*` → `{type:"done",text}`; при обрыве клиента — `{type:"aborted"}`, при ошибке — `{type:"error",message}`.
+Стрим `/api/ask` (тело `{question, email}`, NDJSON) — наружу только ответ:
+`{type:"delta",text}*` → `{type:"done",text}`; при обрыве клиента — `{type:"aborted"}`, при ошибке — `{type:"error",message}`.
+RAG-источники и вызовы CRM-инструментов в стрим не выводятся — пользователь видит только ответ ассистента.
 
-`GET /api/status` → `{model, embedModel, crmTools:[...]}` · `GET /api/health` → `{ok:true}`.
+`GET /api/history?email=…` → `{messages:[{role,text}]}` (последние 10 сообщений профиля, старые→новые) · `GET /api/status` → `{model, embedModel, crmTools:[...]}` · `GET /api/health` → `{ok:true}`.
+
+CRM-админка: страница **/crm** (пользователи, тикеты с фильтрами по статусу/пользователю, создание тикета) · `GET /api/crm/users` · `GET /api/crm/tickets` · `POST /api/crm/tickets` (тело `{userId, subject, priority?}` → `{ok, ticket}`; ошибки — `{error}`).
 
 ## MCP-инструменты CRM (`mcp/crm-server.js`, данные в `data/`)
 
 | Инструмент | Аргументы | Что делает |
 |---|---|---|
 | `get_user` | `email` или `id` | Пользователь CRM: статус, тариф, причина блокировки |
+| `list_users` | — | Все пользователи CRM (JSON: статус, тариф, блокировки) |
 | `get_ticket` | `id` | Тикет по ID: тема, статус, приоритет, заметки |
-| `search_tickets` | `userId`/`email`, `status` | Поиск тикетов (без фильтров — все открытые) |
+| `search_tickets` | `userId`/`email`, `status?` | Поиск тикетов (`status`: open/resolved/all; без `status` — все тикеты) |
 | `create_ticket` | `userId`, `subject`, `priority?` | Создаёт тикет в `data/tickets.json` |
 
-Если email передан в запрос, сервер вызывает `get_user` и `search_tickets` и кладёт результат в контекст LLM; без email — в контексте будет просьба уточнить email/ID тикета. Если MCP недоступен, запрос не падает — в контекст идёт `CRM недоступна: …`.
+Email всегда приходит из селектора профиля в UI. Сервер резолвит пользователя по email и обращается к CRM только от его имени — изоляция на сервере: `search_tickets` всегда с `userId` этого пользователя, `get_ticket(id)` исполняется только если тикет принадлежит resolved-пользователю (чужой выглядит как «Тикет не найден среди ваших»), `create_ticket` всегда с `userId` resolved-пользователя (LLM не передаёт его). Если MCP недоступен, запрос не падает — в контекст идёт `CRM недоступна: …`.
+
+## Пользовательский UI и создание тикетов
+
+- В шапке чата — селектор профиля (ровно 3 email — первые 3 пользователя из `/api/crm/users`, первый по умолчанию). У каждого профиля своя история чата: последние 10 сообщений (user+assistant) в `data/history.json`, переключение профиля перерисовывает чат через `GET /api/history`.
+- glm-5.3-flash поддерживает OpenAI-style `tools` (проверено probe-запросом с `tool_choice:"auto"` — в ответе есть `tool_calls`). Сервер гоняет tool-calling цикл: LLM → `tool_calls` → исполнение через MCP-клиент → результаты как `role:"tool"` → повтор (максимум 4 итерации) → стрим финального ответа (дельты только для финального текста).
+- Не знает ответа — ассистент честно говорит и спрашивает, создать ли тикет; при согласии вызывает `create_ticket` и сообщает ID.
+- Служебные панели (RAG-источники, дампы CRM-инструментов, скоринги) из пользовательского чата убраны; RAG-поиск остался внутренним механизмом ответа.
 
 ## Переменные окружения (`.env`)
 
@@ -63,14 +74,15 @@ node --env-file=.env server.js
 
 ```
 support-assistant/
-  server.js              HTTP: статика + /api/ask + /api/status + /api/health
+  server.js              HTTP: статика + /api/ask + /api/history + /api/status + /api/health + /api/crm/*
   src/config.js          конфиг из env
-  src/llm.js             чат с GPUStack (SSE-стрим)
+  src/llm.js             чат с GPUStack (SSE-стрим) + tool-calling цикл
   src/rag.js             чанкинг FAQ, эмбеддинги, cosine, кэш индекса
   src/mcp-client.js      stdio-клиент MCP (JSON-RPC, spawn)
-  mcp/crm-server.js      stdio-сервер MCP: get_user / get_ticket / search_tickets / create_ticket
+  mcp/crm-server.js      stdio-сервер MCP: list_users / get_user / get_ticket / search_tickets / create_ticket
   data/users.json        пользователи CRM (заглушка)
   data/tickets.json      тикеты CRM (заглушка)
+  data/history.json      история чатов: {email: [{role,text}]}, последние 10 сообщений на профиль
   faq/*.md               база знаний: auth, account, billing, api
-  public/                тёмный UI (index.html, app.js, style.css)
+  public/                тёмный UI (index.html, app.js, style.css, crm.html, crm.js)
 ```
