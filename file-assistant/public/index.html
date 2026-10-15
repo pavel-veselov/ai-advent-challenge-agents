@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>File Assistant</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1>File Assistant</h1>
+    </div>
+    <div class="topbar-meta">
+      <span class="chip" id="ws-chip" title="Рабочая область">…</span>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite">
+    <div id="empty-state" class="empty-state">
+      <div class="empty-glyph" aria-hidden="true">&gt;_</div>
+      <h2>Опишите цель — я поработаю с файлами</h2>
+      <p class="hint">Читаю, ищу по файлам, анализирую и создаю/меняю файлы проекта</p>
+      <div class="chips">
+        <button type="button" class="chip-btn" data-prompt="найди все места, где используется функция chatWithTools">Найди все места, где используется chatWithTools</button>
+        <button type="button" class="chip-btn" data-prompt="сгенерируй файл file-assistant/CHANGELOG.md с кратким changelog этого ассистента">Сгенерируй CHANGELOG.md ассистента</button>
+        <button type="button" class="chip-btn" data-prompt="сделай краткий обзор структуры проекта и объясни, что где лежит">Обзор структуры проекта</button>
+        <button type="button" class="chip-btn" data-prompt="найди все TODO-комментарии в коде проекта">Найди TODO в коде</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-box">
+      <textarea id="input" rows="1" maxlength="4000"
+        placeholder="Опишите цель… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+      <button type="button" id="stop-btn" class="btn stop hidden" title="Остановить генерацию">■</button>
+      <button type="button" id="send-btn" class="btn send" title="Отправить">➤</button>
+    </div>
+    <div class="composer-note">Инструменты: list_files · read_file · search_files · write_file — пути только внутри рабочей области</div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
